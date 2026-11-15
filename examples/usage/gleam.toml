@@ -1,0 +1,16 @@
+name = "decisions_usage"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.18.0"
+licenses = ["Apache-2.0"]
+description = "Usage topics for decisions, written against only its public modules. The README quotes them."
+
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+json_blueprint = ">= 2.0.0 and < 3.0.0"
+decisions = { path = "../.." }
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

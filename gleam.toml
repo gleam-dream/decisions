@@ -1,0 +1,20 @@
+name = "decisions"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.18.0"
+licenses = ["Apache-2.0"]
+description = "Decision points for Gleam: a model recommends, a policy proceeds or asks a person, the final output is released once to a gated tool, and everything is kept as an append-only record."
+repository = { type = "github", user = "gleam-dream", repo = "decisions" }
+internal_modules = ["decisions/internal", "decisions/internal/*"]
+
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+json_blueprint = ">= 2.0.0 and < 3.0.0"
+# SHA-256 for sampling and for evidence revisions, on both targets.
+# json_blueprint already depends on it.
+gleam_crypto = ">= 1.5.0 and < 2.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

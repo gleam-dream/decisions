@@ -1,0 +1,3 @@
+Type mismatch
+fact.Key(Float)
+fact.Key(String)

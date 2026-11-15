@@ -1,0 +1,2099 @@
+//// A decision point: a place in a system where a recommender proposes an
+//// output, a policy either proceeds or asks a person, the person approves,
+//// rejects or corrects, and the final output is released exactly once to a
+//// gated tool. Everything that happened is kept as an append-only record
+//// of entries, which is the data the system learns from.
+////
+//// This module holds the declaration (`Point`), the gated tool (`Gated`
+//// and `Released`), and the desk with its verbs. A `Desk` binds a point to
+//// its gated tool, its current policy and a storage port. It is a plain
+//// value: build one where you need it, and call its verbs inside your own
+//// transaction. Nothing here keeps global state, starts a process or
+//// performs I/O; the port does that, in the transaction you pass.
+////
+//// ```gleam
+//// import decisions
+//// import decisions/memory
+//// import decisions/policy.{AnyoneHolding, Ask, Policy}
+//// import decisions/vocabulary.{Approve}
+////
+//// let point = decisions.point("billing.fee_refund", refund_codec())
+//// let desk =
+////   decisions.desk(
+////     point,
+////     drives: fn(_) { refund_fee() },
+////     under: fn(_) {
+////       Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+////     },
+////     over: memory.port(),
+////   )
+////
+//// // A request: the recommendation is recorded and waits for finance.
+//// let assert Ok(waiting) = memory.transaction(store, decisions.recommend(desk, _, proposal))
+////
+//// // Another request: Bia opens the card and approves. The refund is
+//// // released to the gated tool in her verdict's transaction.
+//// let assert Ok(released) =
+////   memory.transaction(store, fn(tx) {
+////     use card <- result.try(decisions.open(desk, tx, waiting.id, by: bia, latest: unchanged))
+////     decisions.decide(desk, tx, card, Approve)
+////   })
+//// ```
+////
+//// The verbs, grouped by who calls them:
+////
+//// - A recommender: `recommend`, `recommend_once`, `record_failure`.
+//// - A validator: `open`, `resume` (with a `Ticket`), `expand`, `note`,
+////   `decide`, `review`, `withdraw`, `record_refusal`.
+//// - The world and the system: `happened`, `inform`, `wake` (or `waker`),
+////   `report`, `assess`, `read`.
+////
+//// Every verb loads the occurrence first, which locks it, then reads the
+//// store's clock, so entries are stored in time order. A verb that returns
+//// `Error` has written nothing the caller must keep: roll the transaction
+//// back. The two exceptions to "nothing is kept" are recorded on purpose
+//// by `record_failure` and `record_refusal`, each in a transaction of its
+//// own.
+////
+//// Target-independent: builds for Erlang and JavaScript.
+
+import decisions/entry.{type Entry, type Event}
+import decisions/fact.{type Key, type Kind}
+import decisions/model.{type Failure}
+import decisions/occurrence.{type Attempt, type Decider, type Occurrence}
+import decisions/policy.{type Eligible, type Fault, type Policy, type Sample}
+import decisions/store.{type Port, type StoreError, Head}
+import decisions/vocabulary.{
+  type Assessment, type Effect, type Fact, type Facts, type Manifest,
+  type Parent, type Recommendation, type Ref, type Subject, type Trigger,
+  type Validator, type Verdict, type Verdicts, Approve, ApproveOrReject, Correct,
+  Person, Ref, Reject, Superseded,
+}
+import decisions/wire.{type Codec}
+import gleam/int
+import gleam/json
+import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/order
+import gleam/result
+import gleam/string
+import gleam/time/duration.{type Duration}
+import gleam/time/timestamp.{type Timestamp}
+
+// -- The declaration ----------------------------------------------------------
+
+/// A decision point's declaration: its name, its output type, the verdicts
+/// it allows, the facts a policy may read, and its timing. It holds no
+/// condition for proceeding without a person; that is the policy's.
+pub opaque type Point(output) {
+  Point(
+    name: String,
+    output: Codec(output),
+    verdicts: Verdicts,
+    facts: List(#(String, Kind, fn(output) -> Fact)),
+    signals: List(#(String, Kind)),
+    hold: Option(Duration),
+    validity: Option(Duration),
+    superseded_by: List(String),
+    reviewers: Option(String),
+    withdrawers: Option(String),
+    policy_hold: Option(Duration),
+  )
+}
+
+/// A point with this name and output codec. It allows approve and reject,
+/// declares no facts, has no hold and no validity, and nothing supersedes
+/// it. The name is stored on every occurrence: keep it stable.
+pub fn point(name: String, output: Codec(output)) -> Point(output) {
+  Point(
+    name:,
+    output:,
+    verdicts: ApproveOrReject,
+    facts: [],
+    signals: [],
+    hold: None,
+    validity: None,
+    superseded_by: [],
+    reviewers: None,
+    withdrawers: None,
+    policy_hold: None,
+  )
+}
+
+/// The verdicts a validator may give.
+pub fn allowing(point: Point(o), verdicts: Verdicts) -> Point(o) {
+  Point(..point, verdicts:)
+}
+
+/// Declare a fact of the output, such as an amount, that a policy may read.
+/// `from` computes it from the recommended output.
+pub fn fact(point: Point(o), key: Key(a), from: fn(o) -> a) -> Point(o) {
+  Point(..point, facts: [
+    #(fact.name(key), fact.kind(key), fn(output) {
+      fact.wrap(key, from(output))
+    }),
+    ..point.facts
+  ])
+}
+
+/// Declare a fact that arrives beside the output, such as a model's score
+/// in its signals or a consulted point's answer, that a policy may read.
+pub fn signal(point: Point(o), key: Key(a)) -> Point(o) {
+  Point(..point, signals: [#(fact.name(key), fact.kind(key)), ..point.signals])
+}
+
+/// A wait between every acceptance and its release, during which the
+/// decider, or a holder of the `withdrawn_by` set, may withdraw. The guard and the tool run when it ends, at the
+/// wake-up: a refusal then ends the occurrence `Refused`, and never
+/// reaches the validator who approved, who has already been answered.
+pub fn with_hold(point: Point(o), hold: Duration) -> Point(o) {
+  Point(..point, hold: Some(hold))
+}
+
+/// How long an occurrence may wait to be decided. After it, no verdict is
+/// accepted and the occurrence expires.
+pub fn valid_for(point: Point(o), validity: Duration) -> Point(o) {
+  Point(..point, validity: Some(validity))
+}
+
+/// A wait before releasing what the policy accepted on its own, and only
+/// that: an output a validator accepted is released at once (unless
+/// `with_hold` also applies). This is an undo window on autonomous
+/// decisions; pair it with `withdrawn_by` so someone can use it. When both
+/// are declared, a policy acceptance waits for this one.
+pub fn with_policy_hold(point: Point(o), hold: Duration) -> Point(o) {
+  Point(..point, policy_hold: Some(hold))
+}
+
+/// Who may withdraw a held occurrence besides its decider: holders of
+/// `set`, through `withdraw_as`. Without it only the decider may, which
+/// for an output the policy accepted from a model is nobody.
+pub fn withdrawn_by(point: Point(o), set: String) -> Point(o) {
+  Point(..point, withdrawers: Some(set))
+}
+
+/// Who may review a sampled occurrence after its release: holders of
+/// `set`. Without it anyone may, except the people `review` always
+/// excludes (whoever decided it, asked for it, or recommended it as their
+/// own act).
+pub fn reviewed_by(point: Point(o), set: String) -> Point(o) {
+  Point(..point, reviewers: Some(set))
+}
+
+/// A world event that expires an undecided occurrence about the same
+/// subject, reported with `happened`. A held occurrence is already
+/// accepted and is not superseded.
+pub fn superseded_by(point: Point(o), event: String) -> Point(o) {
+  Point(..point, superseded_by: [event, ..point.superseded_by])
+}
+
+/// The point's name.
+pub fn name(point: Point(o)) -> String {
+  point.name
+}
+
+/// The point's output codec.
+pub fn codec(point: Point(o)) -> Codec(o) {
+  point.output
+}
+
+/// The verdicts the point allows.
+pub fn verdicts(point: Point(o)) -> Verdicts {
+  point.verdicts
+}
+
+/// Every fact a policy for this point may read, with its type.
+pub fn declared(point: Point(o)) -> List(#(String, Kind)) {
+  list.append(
+    list.map(point.facts, fn(declared) { #(declared.0, declared.1) }),
+    point.signals,
+  )
+  |> list.reverse
+}
+
+/// The facts the point computes from an output.
+pub fn facts_of(point: Point(o), output: o) -> Facts {
+  list.reverse(point.facts)
+  |> list.map(fn(declared) { #(declared.0, declared.2(output)) })
+}
+
+/// Whether a policy may be published for this point: it reads only facts
+/// the point declares, each as its declared type. Call it before storing a
+/// policy version. The desk checks it again each time it reads a policy.
+pub fn publishable(
+  point: Point(o),
+  policy: Policy,
+) -> Result(Nil, List(Fault)) {
+  policy.check(policy, declared: declared(point))
+}
+
+// -- Tools --------------------------------------------------------------------
+
+/// Why a guard, a release check or an executor did not let a release
+/// happen.
+pub type Stop {
+  /// It refuses this release, for good. With a validator present the
+  /// verdict rolls back (`ToolRefused`); with nobody waiting the occurrence
+  /// ends `Refused`.
+  Refuse(reason: String)
+  /// It could not tell: its database connection dropped, a provider timed
+  /// out. Its savepoint rolls back, nothing is recorded as refused, and
+  /// the verb fails with `ToolUnsure`, so the caller or the runtime tries
+  /// again later (counted toward setting the job aside).
+  Unsure(reason: String)
+}
+
+/// A guard states facts about the world for a subject, such as "the
+/// service window is open". Its parameters are the transaction and the
+/// subject. A check that needs the output, such as an amount against a
+/// balance, belongs in the release check (`checking`), where its evidence
+/// is recorded; a threshold on the output belongs in the policy. A guard
+/// built inside `drives` can close over the output, and nothing stops it;
+/// do not. It returns the evidence it relied on, which the release
+/// records, or a `Stop`.
+pub type Guard(tx) =
+  fn(tx, Subject) -> Result(List(Ref), Stop)
+
+/// What the release check sees: the output about to be released, who it
+/// is about, the context it was recommended from, and the release's key.
+/// It is a plain value; no executor accepts it.
+pub type ToRelease(output) {
+  ToRelease(output: output, subject: Subject, context: Manifest, key: String)
+}
+
+/// A final output being released. Only the desk constructs one, for one
+/// release attempt, inside the savepoint, after the guard and the release
+/// check allowed it, and hands it to the gated tool's executor alone. If
+/// the executor refuses, the attempt rolls back and no release happened:
+/// an executor must not keep the value or pass it on, because it names a
+/// release only within the call it was handed to. A gated tool's executor
+/// accepts nothing else.
+pub opaque type Released(output) {
+  Released(
+    occurrence: String,
+    key: String,
+    subject: Subject,
+    parent: Option(Parent),
+    by: Decider,
+    output: output,
+    context: Manifest,
+  )
+}
+
+/// The released output.
+pub fn output(released: Released(o)) -> o {
+  released.output
+}
+
+/// A stable key for the outside effect: the idempotency key a provider is
+/// sent and the cause a command log cites. An uncertain outcome is settled
+/// by looking the effect up by this key.
+pub fn key(released: Released(o)) -> String {
+  released.key
+}
+
+/// Who the release is about.
+pub fn subject(released: Released(o)) -> Subject {
+  released.subject
+}
+
+/// The id of the occurrence that was released.
+pub fn occurrence_of(released: Released(o)) -> String {
+  released.occurrence
+}
+
+/// What the occurrence hangs from: the run to follow on, or the occurrence
+/// that consulted this one.
+pub fn parent(released: Released(o)) -> Option(Parent) {
+  released.parent
+}
+
+/// The context the occurrence was recommended from: its references, never
+/// the output. A release check (`checking`) or an executor that must know
+/// which revision of the subject the occurrence is about reads it here.
+pub fn context_of(released: Released(o)) -> Manifest {
+  released.context
+}
+
+/// Who accepted the output: a policy version or a validator. An executor
+/// that attributes its writes uses this.
+pub fn decider(released: Released(o)) -> Decider {
+  released.by
+}
+
+/// A gated tool: a guard, and an executor that accepts nothing but a
+/// released output. Its `name` is recorded on the release. The guard, the
+/// desk's release check and the executor run in that order inside one
+/// savepoint (`store.Port.atomically`), so an executor that writes and
+/// then returns `Error` leaves nothing behind, and the release records the
+/// evidence of both the guard and the check. `drives` picks the tool from
+/// the output; see `Guard` for what a guard should and should not read.
+pub type Gated(output, tx) {
+  Gated(
+    name: String,
+    guard: Guard(tx),
+    execute: fn(tx, Released(output)) -> Result(Nil, Stop),
+  )
+}
+
+// -- The desk -------------------------------------------------------------------
+
+/// A decision point bound to its gated tool, its current policy and a
+/// storage port. Build one per point wherever it is needed; it holds no
+/// state.
+pub opaque type Desk(output, tx) {
+  Desk(
+    point: Point(output),
+    tool: fn(output) -> Gated(output, tx),
+    policy: fn(tx) -> Result(Policy, String),
+    port: Port(tx),
+    consult: fn(tx, Consultation(output)) -> Result(Nil, String),
+    check: fn(tx, ToRelease(output)) -> Result(List(Ref), Stop),
+  )
+}
+
+/// What a policy's `Consult` hands to the consulted decision point.
+pub type Consultation(output) {
+  Consultation(
+    point: String,
+    occurrence: String,
+    subject: Subject,
+    context: Manifest,
+    recommendation: Recommendation(output),
+  )
+}
+
+/// A desk for `point`. `drives` picks the gated tool for a final output,
+/// so a point whose output has several variants can drive one tool per
+/// variant. The tool it returns closes over that output, and so can its
+/// guard; a guard should read only its parameters, the transaction and the
+/// subject, and leave checks on the output to `checking` (where their
+/// evidence is recorded) and thresholds to the policy. `under` reads the current policy in the caller's transaction,
+/// so publishing a version is a write. `over` is the storage port.
+pub fn desk(
+  point: Point(o),
+  drives tool: fn(o) -> Gated(o, tx),
+  under policy: fn(tx) -> Result(Policy, String),
+  over port: Port(tx),
+) -> Desk(o, tx) {
+  Desk(
+    point:,
+    tool:,
+    policy:,
+    port:,
+    consult: fn(_, consultation) {
+      Error("no decision point is wired to answer " <> consultation.point)
+    },
+    check: fn(_, _) { Ok([]) },
+  )
+}
+
+/// How this desk reaches the points its policy may consult. The handler
+/// recommends at the consulted point, whose gated tool calls `inform` on
+/// this occurrence, in this transaction or a later one.
+pub fn consulting(
+  desk: Desk(o, tx),
+  with consult: fn(tx, Consultation(o)) -> Result(Nil, String),
+) -> Desk(o, tx) {
+  Desk(..desk, consult:)
+}
+
+/// A check the release makes with the output in hand, such as "the amount
+/// is covered by the balance": it runs after the gated tool's guard and
+/// before its executor, inside the same savepoint, and returns the
+/// evidence it relied on, which the release records beside the guard's in
+/// `relied`, or a `Stop`. It sees a `ToRelease`, never a `Released`, so it
+/// cannot reach the executor. A threshold on the output alone belongs in
+/// the policy; this is for a fact of the world that must be compared with
+/// the output at release.
+pub fn checking(
+  desk: Desk(o, tx),
+  with check: fn(tx, ToRelease(o)) -> Result(List(Ref), Stop),
+) -> Desk(o, tx) {
+  Desk(..desk, check:)
+}
+
+/// The desk's point.
+pub fn point_of(desk: Desk(o, tx)) -> Point(o) {
+  desk.point
+}
+
+/// What a recommender proposes, and about whom. Build one with `proposal`
+/// and add what applies with `asked_by` and `hanging_from`.
+pub opaque type Proposal(output) {
+  Proposal(
+    trigger: Trigger,
+    subject: Subject,
+    context: Manifest,
+    recommendation: Recommendation(output),
+    parent: Option(Parent),
+    requester: Option(String),
+  )
+}
+
+/// A proposal that hangs from nothing and that nobody asked for.
+pub fn proposal(
+  trigger trigger: Trigger,
+  about subject: Subject,
+  context context: Manifest,
+  recommending recommendation: Recommendation(o),
+) -> Proposal(o) {
+  Proposal(
+    trigger:,
+    subject:,
+    context:,
+    recommendation:,
+    parent: None,
+    requester: None,
+  )
+}
+
+/// The person who asked. `SomeoneElseHolding` keeps them from approving
+/// it. A recommendation by `Person(subject)` is that person's request
+/// without this.
+pub fn asked_by(proposal: Proposal(o), requester: String) -> Proposal(o) {
+  Proposal(..proposal, requester: Some(requester))
+}
+
+/// What the occurrence hangs from, so settling it can start what follows.
+pub fn hanging_from(proposal: Proposal(o), parent: Parent) -> Proposal(o) {
+  Proposal(..proposal, parent: Some(parent))
+}
+
+/// Why a verb did not do what was asked. Every refusal leaves nothing the
+/// caller must keep: roll the transaction back.
+///
+/// `Refusal` may gain variants in a minor release; keep a `_` branch.
+pub type Refusal {
+  /// No occurrence of this point has this id.
+  UnknownOccurrence
+  /// The key was tried and nothing was recommended yet; these are the
+  /// failed attempts.
+  NotRecommended(attempts: List(Attempt))
+  /// The occurrence is not waiting for this: it settled, or its validity
+  /// ended, or it waits for a consulted point.
+  NotAwaiting
+  /// The occurrence no longer waits because `by`'s verdict settled it:
+  /// accepted it (held or released after) or rejected it. Only a verdict
+  /// settles this way; an occurrence that expired, was withdrawn or was
+  /// refused by the tool is `NotAwaiting`. The same verdict sent again on
+  /// the same card or ticket is not refused: it returns the occurrence.
+  AlreadyDecided(by: String)
+  /// This validator may not open or decide this occurrence.
+  NotEligible
+  /// The point's declaration does not allow this verdict.
+  VerdictNotAllowed
+  /// A rejection or a correction needs a reason category.
+  ReasonRequired
+  /// A verdict for missing context needs a note saying what was missing.
+  NoteRequired
+  /// The card names no recorded showing of this occurrence to this
+  /// validator: a ticket for someone else, or a card opened while the
+  /// occurrence was not waiting for verdicts.
+  NeverShown
+  /// The output that stands was corrected after this card was shown. Open
+  /// the card again to see the output the verdict would be about.
+  OutputChanged
+  /// The occurrence is not on hold, or its hold has already ended.
+  NotHeld
+  /// Only whoever decided may withdraw.
+  NotTheDecider
+  /// The occurrence has not been released, so nothing outside the database
+  /// can have happened yet.
+  NotReleased
+  /// The occurrence was not sampled for a review, or is not released yet.
+  NotSampled
+  /// The occurrence has not settled, so there is no outcome to assess.
+  NotSettled
+  /// The occurrence is not waiting for an answer from this point.
+  NotConsulting
+  /// A consulted point's answer holds facts the point does not declare,
+  /// or of the wrong type.
+  InvalidFacts(faults: List(Fault))
+  /// The guard or the gated tool refused in the verdict's own
+  /// transaction. Roll the transaction back, then pass `rollback` to
+  /// `record_refusal` in a transaction of its own to keep the attempt on
+  /// the record.
+  ToolRefused(reason: String, rollback: Rollback)
+  /// The guard, the release check or the tool could not tell (`Unsure`).
+  /// Nothing was recorded; roll back and try again later.
+  ToolUnsure(reason: String)
+  /// The handler wired with `consulting` failed to ask `point`.
+  ConsultFailed(point: String, reason: String)
+  /// `recommend_once` or `record_failure` was given a key that an
+  /// occurrence of another point already holds. Keys are one namespace
+  /// across every point of a store.
+  KeyTaken(point: String)
+  /// The policy could not be read.
+  NoPolicy(reason: String)
+  /// The policy read for this point fails `publishable`.
+  Unpublishable(faults: List(Fault))
+  /// The stored record does not decode with this point's codec.
+  Unreadable(reason: String)
+  /// The point's codec cannot encode an output to be stored.
+  Unencodable(reason: String)
+  /// The store refused or failed.
+  StoreFailed(error: StoreError)
+}
+
+/// What a verdict refused at release leaves behind once its transaction
+/// rolled back: who gave it, on which showing, the verdict and why it was
+/// refused. Only the desk makes one, inside `ToolRefused`, and
+/// `record_refusal` accepts nothing else, so the record can only show a
+/// refusal that happened.
+pub opaque type Rollback {
+  Rollback(
+    point: String,
+    occurrence: String,
+    by: String,
+    seen: Int,
+    verdict: String,
+    reason: String,
+  )
+}
+
+/// Why a handler the application wrote (a settlement follower, a wake-up
+/// or job handler) failed: one type both runtimes take.
+pub type HandlerFailure {
+  /// A verb of the desk refused; `disposition` classifies it.
+  DeskRefused(refusal: Refusal)
+  /// The application's own work failed, such as a call to another system.
+  ApplicationFailed(reason: String)
+}
+
+/// What a runtime does with a job whose handler failed. A runtime decides
+/// everything from this value, without looking at the failure.
+pub type Handling {
+  /// Deliver the job again soon, and do not count this failure: the store
+  /// was contended, or its outcome is unknown. Nothing about the job is
+  /// wrong.
+  Redeliver
+  /// Deliver the job again after a backoff, and count this failure toward
+  /// setting the job aside: the application's own work failed, or a desk
+  /// refusal that may pass later or may never pass (`Retry`). When the
+  /// runtime's attempts are used, it sets the job aside as for `SetAside`.
+  Backoff
+  /// Set the job aside now for an operator, without delivering it again:
+  /// the record does not decode, and every delivery would fail the same
+  /// way.
+  SetAside
+  /// The job is done; drop it. The desk refused for a reason another
+  /// delivery will not change: the occurrence moved on, the job was not
+  /// eligible, or the request was malformed.
+  Drop
+}
+
+/// What a runtime does with a handler's failure. A desk refusal follows
+/// its `disposition`: `Transient` is `Redeliver`, `Retry` is `Backoff`,
+/// `Poisoned` is `SetAside`, `Final` is `Drop`. An application failure is
+/// `Backoff`.
+pub fn handling(failure: HandlerFailure) -> Handling {
+  case failure {
+    ApplicationFailed(_) -> Backoff
+    DeskRefused(refusal:) ->
+      case disposition(refusal) {
+        Transient -> Redeliver
+        Retry -> Backoff
+        Poisoned -> SetAside
+        Final -> Drop
+      }
+  }
+}
+
+/// What a runtime that delivers wake-ups or notices may do after a
+/// refusal, without reading its text.
+pub type Disposition {
+  /// Contention, or a store whose outcome is unknown: deliver again soon,
+  /// not counted. Nothing about the job is wrong.
+  Transient
+  /// It may pass on another try, or may never pass: deliver again after a
+  /// backoff, counted, and set the job aside when the attempts are used.
+  Retry
+  /// It needs an operator, and the occurrence still waits for what the job
+  /// was delivering: set the job aside, do not drop it.
+  Poisoned
+  /// The occurrence moved on, or the job can never apply to it: the job is
+  /// done.
+  Final
+}
+
+/// Classify a refusal. Every variant is named here, so a new one cannot be
+/// classified by accident.
+///
+/// | Refusal | Disposition | Why |
+/// | --- | --- | --- |
+/// | `StoreFailed(Contended)`, `StoreFailed(Unavailable)` | `Transient` | Nothing written, or the outcome is unknown; another try is the remedy |
+/// | `StoreFailed(Conflict)` | `Retry` | A rerun reloads the record, but a conflict that repeats is a second writer that needs looking at |
+/// | `NoPolicy`, `ConsultFailed`, `ToolUnsure` | `Retry` | May pass later (a policy published, a handler wired, a provider back), or may never |
+/// | `Unreadable`, `Unpublishable`, `InvalidFacts`, `Unencodable`, `KeyTaken` | `Poisoned` | An operator must fix the record, the policy, the answer, the codec or the key; the occurrence or its trigger still waits |
+/// | every other refusal | `Final` | The occurrence moved on (settled, decided, expired, not waiting for this), or the request can never apply |
+pub fn disposition(refusal: Refusal) -> Disposition {
+  case refusal {
+    StoreFailed(store.Contended(_)) | StoreFailed(store.Unavailable(_)) ->
+      Transient
+    StoreFailed(store.Conflict(_))
+    | NoPolicy(_)
+    | ConsultFailed(..)
+    | ToolUnsure(_) -> Retry
+    Unreadable(_)
+    | Unpublishable(_)
+    | InvalidFacts(_)
+    | Unencodable(_)
+    | KeyTaken(_) -> Poisoned
+    UnknownOccurrence
+    | NotRecommended(_)
+    | NotAwaiting
+    | AlreadyDecided(_)
+    | NotEligible
+    | VerdictNotAllowed
+    | ReasonRequired
+    | NoteRequired
+    | NeverShown
+    | OutputChanged
+    | NotHeld
+    | NotTheDecider
+    | NotReleased
+    | NotSampled
+    | NotSettled
+    | NotConsulting
+    | ToolRefused(..) -> Final
+  }
+}
+
+/// The reason category that requires a note: the validator knows
+/// something the card does not show and must say what.
+pub const missing_context = "missing_context"
+
+/// A refusal as one line of text, for a person.
+pub fn describe(refusal: Refusal) -> String {
+  case refusal {
+    UnknownOccurrence -> "no such occurrence"
+    NotRecommended(attempts:) ->
+      "nothing was recommended yet after "
+      <> int.to_string(list.length(attempts))
+      <> " failed attempts"
+    NotAwaiting -> "the occurrence is not waiting for a verdict"
+    AlreadyDecided(by:) -> "the occurrence was decided by " <> by
+    NotEligible -> "this validator may not decide this occurrence"
+    VerdictNotAllowed -> "the declaration does not allow this verdict"
+    ReasonRequired -> "a rejection or a correction needs a reason"
+    NoteRequired -> "say what was missing before deciding on missing context"
+    NeverShown -> "this card was never shown to this validator"
+    OutputChanged -> "the output was corrected after this card was shown"
+    NotHeld -> "the occurrence is not on hold"
+    NotTheDecider -> "only whoever decided may withdraw"
+    NotReleased -> "the occurrence has not been released"
+    NotSampled -> "the occurrence was not sampled for review"
+    NotSettled -> "the occurrence has not settled yet"
+    NotConsulting -> "the occurrence is not waiting for an answer from there"
+    InvalidFacts(faults:) ->
+      "the answer's facts are not declared: "
+      <> string.join(list.map(faults, policy.describe), "; ")
+    ToolRefused(reason:, ..) -> reason
+    ToolUnsure(reason:) -> "the tool could not tell: " <> reason
+    ConsultFailed(point:, reason:) ->
+      "consulting " <> point <> " failed: " <> reason
+    KeyTaken(point:) -> "the key is taken by an occurrence of " <> point
+    NoPolicy(reason:) -> "the policy could not be read: " <> reason
+    Unpublishable(faults:) ->
+      "the policy cannot be used: "
+      <> string.join(list.map(faults, policy.describe), "; ")
+    Unreadable(reason:) -> "the record does not decode: " <> reason
+    Unencodable(reason:) -> "the output does not encode: " <> reason
+    StoreFailed(error:) -> store.describe(error)
+  }
+}
+
+// -- Recommending -----------------------------------------------------------------
+
+/// Record a recommendation under a new id and apply the policy. When the
+/// policy proceeds and the point has no hold, the gated tool runs here,
+/// once; when it refuses, the occurrence ends `Refused`.
+pub fn recommend(
+  desk: Desk(o, tx),
+  tx: tx,
+  proposal: Proposal(o),
+) -> Result(Occurrence(o), Refusal) {
+  let id = desk.port.new_id(tx)
+  begin(desk, tx, id, proposal, [], clock(desk, tx))
+}
+
+/// `recommend`, at most once per `key`, which becomes the occurrence's id.
+/// A trigger delivered again finds the occurrence it already made and
+/// writes nothing. Keys are one namespace across every point of a store:
+/// a key another point's occurrence holds is refused with `KeyTaken`, so
+/// prefix keys with something the point owns.
+///
+/// **The superseding window.** `happened` supersedes what waits when it
+/// runs. A worker that recommends from an older trigger and commits after
+/// `happened` creates an occurrence nothing supersedes. Close the window in
+/// the application, inside the transactions the verbs already run in:
+/// keep the latest trigger per subject in a row of your own; the
+/// transaction that calls `happened` updates it; the recommending
+/// transaction locks that row (in PostgreSQL `SELECT ... FOR UPDATE`) and
+/// recommends only if its trigger is still the latest, otherwise it
+/// records nothing. Serialising both on the subject's row leaves no
+/// window. Safe under concurrent deliveries because the port locks
+/// a key that does not exist yet. Failed attempts recorded under the key
+/// stay at the start of the record.
+pub fn recommend_once(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+  proposal proposal: Proposal(o),
+) -> Result(Occurrence(o), Refusal) {
+  use #(entries, now) <- result.try(fetch(desk, tx, key))
+  case occurrence.fold(key, entries) {
+    Ok(found) -> mine(desk, found)
+    Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], now)
+    Error(occurrence.OnlyAttempts(point:, ..)) ->
+      case point == desk.point.name {
+        True -> begin(desk, tx, key, proposal, entries, now)
+        False -> Error(UnknownOccurrence)
+      }
+    Error(occurrence.NoRecommendation) -> Error(not_a_record())
+  }
+}
+
+/// Record that a recommender failed under `key` before anything was
+/// recommended. Call it in a transaction of its own, after the one the
+/// attempt ran in rolled back, so the record shows that the trigger was
+/// tried and why it failed. Returns every failed attempt so far, from
+/// which a caller decides on another try (see `model.retryable`). When
+/// the key already holds a recommendation, nothing is written.
+///
+/// Each call records one attempt, so repeating a call records the attempt
+/// again: two attempts that failed alike look the same, and the desk
+/// cannot tell a second attempt from a repeated call. After an
+/// `Unavailable` outcome, read the record first (`read` returns
+/// `NotRecommended(attempts)`) and call again only if the attempt is not
+/// there.
+///
+/// The record lives under whatever `key` you give, before any occurrence
+/// exists, so give the key `recommend_once` will use for the same trigger:
+/// then the attempts and the recommendation that follows share one record.
+pub fn record_failure(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+  trigger trigger: Trigger,
+  about subject: Subject,
+  failure failure: Failure,
+) -> Result(List(Attempt), Refusal) {
+  record_failure_with(
+    desk,
+    tx,
+    key:,
+    trigger:,
+    about: subject,
+    failure:,
+    evidence: [],
+  )
+}
+
+/// `record_failure`, pointing at evidence the application stored about
+/// the attempt, such as a provider exchange that did not decode.
+pub fn record_failure_with(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+  trigger trigger: Trigger,
+  about subject: Subject,
+  failure failure: Failure,
+  evidence evidence: List(Ref),
+) -> Result(List(Attempt), Refusal) {
+  use #(entries, now) <- result.try(fetch(desk, tx, key))
+  let attempt =
+    entry.Entry(
+      seq: list.length(entries) + 1,
+      at: now,
+      event: entry.AttemptFailed(
+        point: desk.point.name,
+        trigger:,
+        subject:,
+        failure:,
+        evidence:,
+      ),
+    )
+  case occurrence.fold(key, entries) {
+    Ok(found) -> mine(desk, found) |> result.map(fn(found) { found.attempts })
+    Error(occurrence.NoRecommendation) -> Error(not_a_record())
+    Error(occurrence.OnlyAttempts(point:, ..)) if point != desk.point.name ->
+      Error(UnknownOccurrence)
+    Error(occurrence.NoEntries) | Error(occurrence.OnlyAttempts(..)) -> {
+      let all = list.append(entries, [attempt])
+      let first_at = case entries {
+        [first, ..] -> first.at
+        [] -> now
+      }
+      use stored <- result.try(encode([attempt], desk.point.output))
+      let head =
+        Head(
+          point: desk.point.name,
+          subject:,
+          status: store.Attempted,
+          awaiting: [],
+          due: None,
+          arrived: first_at,
+          approved: [],
+          may_not_decide: [],
+          review_pending: False,
+        )
+      use Nil <- result.try(
+        desk.port.append(tx, key, head, stored) |> result.map_error(StoreFailed),
+      )
+      Ok(case occurrence.fold(key, all) {
+        Error(occurrence.OnlyAttempts(attempts:, ..)) -> attempts
+        _ -> []
+      })
+    }
+  }
+}
+
+fn begin(
+  desk: Desk(o, tx),
+  tx: tx,
+  id: String,
+  proposal: Proposal(o),
+  prior: List(Entry(o)),
+  now: Timestamp,
+) -> Result(Occurrence(o), Refusal) {
+  let first =
+    entry.Entry(
+      seq: list.length(prior) + 1,
+      at: now,
+      event: entry.Recommended(
+        point: desk.point.name,
+        trigger: proposal.trigger,
+        parent: proposal.parent,
+        subject: proposal.subject,
+        requester: case proposal.requester, proposal.recommendation.by {
+          Some(requester), _ -> Some(requester)
+          None, Person(subject:) -> Some(subject)
+          None, _ -> None
+        },
+        context: proposal.context,
+        recommendation: proposal.recommendation,
+        valid_until: option.map(desk.point.validity, timestamp.add(now, _)),
+      ),
+    )
+  case occurrence.fold(id, list.append(prior, [first])) {
+    Ok(recommended) ->
+      settle(
+        desk,
+        tx,
+        Draft(
+          occurrence: recommended,
+          saved: list.length(prior),
+          now:,
+          wakes: [],
+          settled: False,
+        ),
+      )
+    Error(_) -> Error(not_a_record())
+  }
+}
+
+// -- Cards --------------------------------------------------------------------------
+
+/// The only way to a verdict: an occurrence as it was shown to one
+/// validator. Only `open` and `resume` construct one. Its output type ties
+/// it to points of that output type at compile time; two points with one
+/// output type are told apart at run time, where a desk refuses another
+/// point's occurrence with `UnknownOccurrence`.
+pub opaque type Card(output) {
+  Card(
+    occurrence: Occurrence(output),
+    validator: Validator,
+    seen: Int,
+    allowed: Verdicts,
+  )
+}
+
+/// What a card is known by outside this process: the occurrence and the
+/// entry that showed it. A page or another system keeps this and nothing
+/// else, and gets the card back with `resume`.
+pub type Ticket {
+  Ticket(occurrence: String, seen: Int)
+}
+
+/// Show an occurrence to a validator, and record the showing. Only an
+/// occurrence a verdict can be given on opens: one waiting for verdicts,
+/// to a holder of a set it waits for (`NotEligible` otherwise), or one
+/// released and sampled, for its review. Any other is refused with what
+/// a card would run into: `AlreadyDecided(by)` when someone's verdict
+/// settled it, `NotSampled` when the policy released it unsampled, and
+/// `NotAwaiting` otherwise (waiting for a consulted point, expired,
+/// withdrawn, refused, or its validity has passed). A queue page read
+/// before the lock learns it here.
+///
+/// The showing records every input (a context reference or one of the
+/// model's reads) whose `latest` revision differs from the one the model
+/// had. Drift says only that the content differs now: it cannot tell a
+/// change in the world from one the release itself caused (a read of
+/// "does the patient exist" differs once the release created them).
+pub fn open(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  by validator: Validator,
+  latest latest: fn(Ref) -> String,
+) -> Result(Card(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  let current = draft.occurrence
+  use Nil <- result.try(live(draft))
+  use Nil <- result.try(may_look(desk, current, validator))
+  let allowed = desk.point.verdicts
+  case is_showing(current) {
+    False -> Error(nothing_to_do(current))
+    True -> {
+      let draft =
+        add(
+          draft,
+          entry.Opened(by: validator.subject, drifted: drifted(current, latest)),
+        )
+      let seen = list.length(draft.occurrence.entries)
+      save(desk, tx, draft)
+      |> result.map(Card(occurrence: _, validator:, seen:, allowed:))
+    }
+  }
+}
+
+/// The card's ticket.
+pub fn ticket(card: Card(o)) -> Ticket {
+  Ticket(occurrence: card.occurrence.id, seen: card.seen)
+}
+
+/// The card again, in a later request, from its ticket. It is the same
+/// showing, so nothing is recorded. A ticket that names no showing of
+/// this occurrence to this validator is refused with `NeverShown`; one
+/// shown before the output was corrected by someone else, with
+/// `OutputChanged`; one whose occurrence's validity has passed, with
+/// `NotAwaiting`.
+pub fn resume(
+  desk: Desk(o, tx),
+  tx: tx,
+  ticket: Ticket,
+  by validator: Validator,
+) -> Result(Card(o), Refusal) {
+  use draft <- result.try(load(desk, tx, ticket.occurrence))
+  let current = draft.occurrence
+  use Nil <- result.try(check(
+    was_shown(current, validator, ticket.seen),
+    NeverShown,
+  ))
+  use Nil <- result.try(live(draft))
+  use Nil <- result.try(check(
+    !is_stale(current, validator, ticket.seen),
+    OutputChanged,
+  ))
+  // Admitted as `decide` would admit them. An approver may resume their
+  // card, so that the same verdict sent again on it stands.
+  use Nil <- result.try(case current.status {
+    occurrence.Awaiting(eligible:) ->
+      check(
+        occurrence.admits(current, eligible, validator.subject, validator.holds),
+        NotEligible,
+      )
+    _ -> Ok(Nil)
+  })
+  Ok(Card(
+    occurrence: current,
+    validator:,
+    seen: ticket.seen,
+    allowed: desk.point.verdicts,
+  ))
+}
+
+/// The occurrence as the card shows it, with every entry recorded up to
+/// the card's last action.
+pub fn shown(card: Card(o)) -> Occurrence(o) {
+  card.occurrence
+}
+
+/// Who holds the card.
+pub fn holder(card: Card(o)) -> Validator {
+  card.validator
+}
+
+/// The verdicts the card's point allows.
+pub fn allowed(card: Card(o)) -> Verdicts {
+  card.allowed
+}
+
+/// The validator opened more than the card showed. `result` is the
+/// captured evidence of what that read returned (see `model.capture`).
+pub fn expand(
+  desk: Desk(o, tx),
+  tx: tx,
+  card: Card(o),
+  read read: String,
+  result captured: Ref,
+) -> Result(Card(o), Refusal) {
+  act(
+    desk,
+    tx,
+    card,
+    entry.Expanded(by: card.validator.subject, read:, result: captured),
+  )
+}
+
+/// The validator enters what they know from outside the card.
+pub fn note(
+  desk: Desk(o, tx),
+  tx: tx,
+  card: Card(o),
+  note: String,
+) -> Result(Card(o), Refusal) {
+  act(desk, tx, card, entry.Noted(by: card.validator.subject, note:))
+}
+
+fn act(
+  desk: Desk(o, tx),
+  tx: tx,
+  card: Card(o),
+  event: Event(o),
+) -> Result(Card(o), Refusal) {
+  use draft <- result.try(load(desk, tx, card.occurrence.id))
+  use Nil <- result.try(check(is_showing(draft.occurrence), NotAwaiting))
+  use Nil <- result.try(live(draft))
+  add(draft, event)
+  |> save(desk, tx, _)
+  |> result.map(fn(occurrence) { Card(..card, occurrence:) })
+}
+
+/// Why a card for this occurrence would be of no use: someone's verdict
+/// settled it, it waits for something other than verdicts, or it was
+/// released without being sampled for review.
+fn nothing_to_do(current: Occurrence(o)) -> Refusal {
+  case settled_by_verdict(current), current.status {
+    Ok(by), _ -> AlreadyDecided(by:)
+    Error(Nil), occurrence.Released(..) -> NotSampled
+    Error(Nil), _ -> NotAwaiting
+  }
+}
+
+/// Who settled the occurrence with a verdict: the validator whose verdict
+/// accepted it (it is accepted, held or released by them) or rejected it.
+/// `Error(Nil)` when no verdict settled it, for one when it expired after a
+/// partial approval.
+fn settled_by_verdict(current: Occurrence(o)) -> Result(String, Nil) {
+  case current.status {
+    occurrence.Accepted(by: occurrence.ByValidator(subject:), ..)
+    | occurrence.Held(by: occurrence.ByValidator(subject:), ..)
+    | occurrence.Released(by: occurrence.ByValidator(subject:), ..) ->
+      Ok(subject)
+    occurrence.Rejected(_) ->
+      list.last(occurrence.verdicts(current))
+      |> result.map(fn(given) { given.0 })
+    _ -> Error(Nil)
+  }
+}
+
+/// Waiting for a verdict, or released and waiting for its sampled review.
+fn is_showing(current: Occurrence(o)) -> Bool {
+  case current.status {
+    occurrence.Awaiting(_) -> True
+    occurrence.Released(..) -> current.sampled
+    _ -> False
+  }
+}
+
+fn drifted(current: Occurrence(o), latest: fn(Ref) -> String) -> List(Ref) {
+  list.append(current.context.refs, current.recommendation.reads)
+  |> list.filter_map(fn(ref) {
+    case latest(ref) {
+      revision if revision == ref.revision -> Error(Nil)
+      revision -> Ok(Ref(..ref, revision:))
+    }
+  })
+}
+
+/// A waiting occurrence is shown only to holders of a set it waits for,
+/// and one waiting for its review only to the point's reviewers.
+fn may_look(
+  desk: Desk(o, tx),
+  current: Occurrence(o),
+  validator: Validator,
+) -> Result(Nil, Refusal) {
+  case current.status, desk.point.reviewers {
+    // The same rule `decide` applies: admitted, and not already an
+    // approver of the output that stands.
+    occurrence.Awaiting(eligible:), _ ->
+      check(is_eligible(eligible, validator, current), NotEligible)
+    occurrence.Released(..), Some(set) if current.sampled ->
+      check(list.contains(validator.holds, set), NotEligible)
+    _, _ -> Ok(Nil)
+  }
+}
+
+/// Refused with `NotAwaiting` once the validity of an undecided
+/// occurrence has passed, whether or not its wake-up was delivered.
+fn live(draft: Draft(o)) -> Result(Nil, Refusal) {
+  check(!occurrence.has_lapsed(draft.occurrence, draft.now), NotAwaiting)
+}
+
+/// A showing of the occurrence to this validator is recorded at `seen`.
+fn was_shown(current: Occurrence(o), validator: Validator, seen: Int) -> Bool {
+  list.any(current.entries, fn(entry) {
+    case entry.seq == seen, entry.event {
+      True, entry.Opened(by:, ..) -> by == validator.subject
+      _, _ -> False
+    }
+  })
+}
+
+/// Someone corrected the output after the card was shown, on another
+/// showing: the card shows an output that no longer stands.
+fn is_stale(current: Occurrence(o), validator: Validator, seen: Int) -> Bool {
+  list.any(current.entries, fn(entry) {
+    case entry.event {
+      entry.Decided(by:, verdict: Correct(..), seen: given_on, ..) ->
+        entry.seq > seen && { by != validator.subject || given_on != seen }
+      _ -> False
+    }
+  })
+}
+
+// -- Verdicts -------------------------------------------------------------------------
+
+/// The verdict an occurrence waits for. An accepted output is held when
+/// the point has a hold, and released otherwise, in this transaction: the
+/// guard and the gated tool run here. A refusal at release is
+/// `Error(ToolRefused(reason, rollback))`: roll the transaction back, then
+/// keep the attempt with `record_refusal(rollback)`.
+///
+/// The card must be a recorded showing to its holder (`NeverShown`), shown
+/// after the last correction by anyone else (`OutputChanged`), and the
+/// validity must not have passed (`NotAwaiting`), whether or not the
+/// wake-up that expires it was delivered.
+///
+/// The same verdict sent again on the same card returns the occurrence and
+/// runs nothing. Under `Several`, a validator gives one verdict per output
+/// that stands: after approving, they may not reject or correct the same
+/// output (`NotEligible`); after someone else corrects it, they decide
+/// again on the new output.
+pub fn decide(
+  desk: Desk(o, tx),
+  tx: tx,
+  card: Card(o),
+  verdict: Verdict(o),
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, card.occurrence.id))
+  let validator = card.validator
+  let waiting = draft.occurrence
+  let given_here =
+    list.any(waiting.entries, fn(entry) {
+      case entry.event {
+        entry.Decided(by:, verdict: given, seen:, ..) ->
+          by == validator.subject && given == verdict && seen == card.seen
+        _ -> False
+      }
+    })
+  // The same verdict on the same card, sent again, stands: once the
+  // occurrence has moved on, or while that approval still counts.
+  let stands =
+    given_here
+    && {
+      !occurrence.is_undecided(waiting.status)
+      || list.contains(occurrence.standing(waiting).1, validator.subject)
+    }
+  case stands, waiting.status {
+    True, _ -> Ok(waiting)
+    False, occurrence.Awaiting(eligible:) -> {
+      use Nil <- result.try(check(
+        was_shown(waiting, validator, card.seen),
+        NeverShown,
+      ))
+      use Nil <- result.try(live(draft))
+      use Nil <- result.try(check(
+        !is_stale(waiting, validator, card.seen),
+        OutputChanged,
+      ))
+      use Nil <- result.try(check(
+        is_eligible(eligible, validator, waiting),
+        NotEligible,
+      ))
+      use Nil <- result.try(allowed_verdict(
+        desk.point,
+        waiting,
+        validator,
+        verdict,
+      ))
+      let draft =
+        add(
+          draft,
+          entry.Decided(
+            by: validator.subject,
+            verdict:,
+            seen: card.seen,
+            holds: validator.holds,
+          ),
+        )
+      case draft.occurrence.status {
+        occurrence.Accepted(..) ->
+          accept(desk, tx, draft, Some(#(validator, card.seen, verdict)))
+          |> result.try(save(desk, tx, _))
+        // Rejected, or more approvals are needed.
+        _ -> save(desk, tx, draft)
+      }
+    }
+    False, _ ->
+      Error(case settled_by_verdict(waiting) {
+        Ok(by) -> AlreadyDecided(by:)
+        Error(Nil) -> NotAwaiting
+      })
+  }
+}
+
+/// Keep on the record a verdict whose release was refused. Call it in a
+/// transaction of its own, after `decide` returned
+/// `ToolRefused(reason, rollback)` and its transaction rolled back. It
+/// changes no status. Only the desk makes a `Rollback`, so nothing else can
+/// be recorded this way. It is safe to repeat: the token names one refused
+/// verdict (its validator, the verdict and the showing it was given on),
+/// and a second call with the same token appends nothing and returns the
+/// occurrence.
+pub fn record_refusal(
+  desk: Desk(o, tx),
+  tx: tx,
+  rollback: Rollback,
+) -> Result(Occurrence(o), Refusal) {
+  use Nil <- result.try(check(
+    rollback.point == desk.point.name,
+    UnknownOccurrence,
+  ))
+  use draft <- result.try(load(desk, tx, rollback.occurrence))
+  use verdict <- result.try(
+    json.parse(rollback.verdict, wire.verdict_decoder(desk.point.output))
+    |> result.replace_error(Unreadable("the refused verdict does not decode")),
+  )
+  let refused =
+    entry.VerdictRefused(
+      by: rollback.by,
+      verdict:,
+      seen: rollback.seen,
+      reason: rollback.reason,
+    )
+  case list.any(draft.occurrence.entries, fn(e) { e.event == refused }) {
+    True -> Ok(draft.occurrence)
+    False -> add(draft, refused) |> save(desk, tx, _)
+  }
+}
+
+/// A verdict after the fact, on a sampled and released occurrence, given
+/// on a recorded showing (`open` records one). It changes no outcome and
+/// counts toward agreement. Each reviewer reviews once; whoever decided
+/// the occurrence, asked for it, or recommended it as their own act may
+/// not review it; and when the point names reviewers (`reviewed_by`), only
+/// holders of that set may (`NotEligible`).
+pub fn review(
+  desk: Desk(o, tx),
+  tx: tx,
+  card: Card(o),
+  verdict: Verdict(o),
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, card.occurrence.id))
+  case draft.occurrence.sampled, draft.occurrence.status {
+    True, occurrence.Released(..) -> {
+      let current = draft.occurrence
+      let who = card.validator.subject
+      use Nil <- result.try(check(
+        was_shown(current, card.validator, card.seen),
+        NeverShown,
+      ))
+      let excluded =
+        current.requester == Some(who)
+        || current.recommendation.by == Person(who)
+        || list.any(occurrence.verdicts(current), fn(given) { given.0 == who })
+        || list.any(occurrence.reviews(current), fn(given) { given.0 == who })
+        || case desk.point.reviewers {
+          Some(set) -> !list.contains(card.validator.holds, set)
+          None -> False
+        }
+      use Nil <- result.try(check(!excluded, NotEligible))
+      use Nil <- result.try(allowed_verdict(
+        desk.point,
+        current,
+        card.validator,
+        verdict,
+      ))
+      add(draft, entry.Reviewed(by: card.validator.subject, verdict:))
+      |> save(desk, tx, _)
+    }
+    _, _ -> Error(NotSampled)
+  }
+}
+
+/// The decider takes a held output back before its hold ends. The decider
+/// is the validator whose verdict accepted it, or the person whose own act
+/// the policy let proceed. Once the hold has ended by the store's clock it
+/// is refused with `NotHeld`, whether or not the wake-up that releases it
+/// was delivered.
+pub fn withdraw(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  by who: String,
+) -> Result(Occurrence(o), Refusal) {
+  withdraw_held(desk, tx, id, who, False)
+}
+
+/// `withdraw` by a validator: the decider, or a holder of the set the
+/// point names with `withdrawn_by`. Refused with `NotTheDecider` for anyone
+/// else, and with `NotHeld` once the hold has ended.
+pub fn withdraw_as(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  by validator: Validator,
+) -> Result(Occurrence(o), Refusal) {
+  let entitled = case desk.point.withdrawers {
+    Some(set) -> list.contains(validator.holds, set)
+    None -> False
+  }
+  withdraw_held(desk, tx, id, validator.subject, entitled)
+}
+
+fn withdraw_held(
+  desk: Desk(o, tx),
+  tx: tx,
+  id: String,
+  who: String,
+  entitled: Bool,
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  case draft.occurrence.status {
+    occurrence.Held(by: decider, until:, ..) -> {
+      use Nil <- result.try(check(
+        timestamp.compare(draft.now, until) == order.Lt,
+        NotHeld,
+      ))
+      let is_decider = case decider, draft.occurrence.recommendation.by {
+        occurrence.ByValidator(subject:), _ -> subject == who
+        occurrence.ByPolicy(_), Person(subject:) -> subject == who
+        occurrence.ByPolicy(_), _ -> False
+      }
+      use Nil <- result.try(check(entitled || is_decider, NotTheDecider))
+      add(draft, entry.Withdrawn(by: who)) |> save(desk, tx, _)
+    }
+    _ -> Error(NotHeld)
+  }
+}
+
+// -- The world and the system --------------------------------------------------------
+
+/// What `happened` did.
+pub type Supersession(output) {
+  Supersession(
+    /// The occurrences it expired.
+    expired: List(Occurrence(output)),
+    /// The occurrences about the subject that could not be read, with why.
+    /// The others were still superseded.
+    unreadable: List(#(String, Refusal)),
+  )
+}
+
+/// A world event happened to a subject. Every undecided occurrence of this
+/// point about that subject expires as superseded, when the point declares
+/// the event with `superseded_by`; one whose validity had already passed
+/// expires as `DeadlinePassed`, which is what ended it. A held occurrence
+/// is already accepted and is not superseded. An occurrence that cannot be
+/// read is reported and does not stop the others. Occurrences are locked
+/// in the order the port's `waiting` returns.
+///
+/// **The superseding window.** `happened` supersedes what waits when it
+/// runs. A worker that recommends from an older trigger and commits after
+/// `happened` creates an occurrence nothing supersedes. Close the window in
+/// the application, inside the transactions the verbs already run in:
+/// keep the latest trigger per subject in a row of your own; the
+/// transaction that calls `happened` updates it; the recommending
+/// transaction locks that row (in PostgreSQL `SELECT ... FOR UPDATE`) and
+/// recommends only if its trigger is still the latest, otherwise it
+/// records nothing. Serialising both on the subject's row leaves no
+/// window.
+pub fn happened(
+  desk: Desk(o, tx),
+  tx: tx,
+  event: String,
+  about subject: Subject,
+) -> Result(Supersession(o), Refusal) {
+  case list.contains(desk.point.superseded_by, event) {
+    False -> Ok(Supersession(expired: [], unreadable: []))
+    True -> {
+      use ids <- result.try(
+        desk.port.waiting(tx, desk.point.name, subject)
+        |> result.map_error(StoreFailed),
+      )
+      use done <- result.map(
+        list.try_fold(ids, Supersession([], []), fn(done, id) {
+          case load(desk, tx, id) {
+            Error(StoreFailed(error)) -> Error(StoreFailed(error))
+            Error(refusal) ->
+              Ok(
+                Supersession(..done, unreadable: [
+                  #(id, refusal),
+                  ..done.unreadable
+                ]),
+              )
+            Ok(draft) ->
+              case occurrence.is_undecided(draft.occurrence.status) {
+                False -> Ok(done)
+                True -> {
+                  let cause = case
+                    occurrence.has_lapsed(draft.occurrence, draft.now)
+                  {
+                    True -> vocabulary.DeadlinePassed
+                    False -> Superseded(event:)
+                  }
+                  use expired <- result.map(
+                    add(draft, entry.Expired(cause)) |> save(desk, tx, _),
+                  )
+                  Supersession(..done, expired: [expired, ..done.expired])
+                }
+              }
+          }
+        }),
+      )
+      Supersession(
+        expired: list.reverse(done.expired),
+        unreadable: list.reverse(done.unreadable),
+      )
+    }
+  }
+}
+
+/// The consulted decision point `from` settled: its final output arrives
+/// as facts, and the policy current now is read again with them (so a
+/// version published while the consulted point worked applies).
+///
+/// Refused with `NotConsulting` unless the occurrence waits for exactly
+/// that point, with `InvalidFacts` when a fact is not declared by this
+/// point (`signal`) or has another type, and with `NotAwaiting` once the
+/// validity has passed.
+pub fn inform(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  from from: String,
+  facts facts: Facts,
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  use Nil <- result.try(live(draft))
+  case draft.occurrence.status {
+    occurrence.Recommended(consulting: Some(point)) if point == from -> {
+      let declared = declared(desk.point)
+      let faults =
+        list.filter_map(facts, fn(named) {
+          let #(name, value) = named
+          case list.key_find(declared, name) {
+            Error(Nil) -> Ok(policy.UndeclaredFact(name))
+            Ok(kind) ->
+              case kind == fact.kind_of(value) {
+                True -> Error(Nil)
+                False ->
+                  Ok(policy.WrongKind(
+                    fact: name,
+                    declared: kind,
+                    used: fact.kind_of(value),
+                  ))
+              }
+          }
+        })
+      use Nil <- result.try(check(faults == [], InvalidFacts(faults)))
+      settle(desk, tx, add(draft, entry.Informed(from:, facts:)))
+    }
+    _ -> Error(NotConsulting)
+  }
+}
+
+/// What a wake-up found.
+pub type Woken(output) {
+  /// Something was due and the occurrence moved.
+  Woken(occurrence: Occurrence(output))
+  /// Nothing is due before `until`. The wake-up arrived early, for one
+  /// because the job queue's clock is ahead of the store's: deliver it
+  /// again at `until`.
+  NotDue(until: Timestamp)
+  /// Nothing is pending: the occurrence settled, or it waits for no time.
+  /// A wake-up delivered again is harmless.
+  NothingDue
+}
+
+/// A wake-up for an occurrence: a hold ended, the validity passed, or
+/// waiting changed what the policy says. A release checks the guard, the
+/// release check and the tool again against the world as it is now; a
+/// `Refuse` ends the occurrence `Refused`, an `Unsure` fails the wake-up
+/// with `ToolUnsure` and records nothing, so it is delivered again.
+///
+/// Of the policy's later answers whose time has passed, it applies, in
+/// order, the first that proceeds, consults a point not yet consulted, or
+/// asks for what the approvals given so far already meet, and otherwise
+/// the last. So a wake-up delivered late reaches the outcome one delivered
+/// on time would have. Each is applied as the first answer was: one that
+/// consults asks the consulted point, one that asks for what the standing
+/// approvals meet accepts. A wake-up that finds
+/// nothing due writes nothing and names the next time something is due,
+/// always in the future, or `NothingDue`.
+pub fn wake(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+) -> Result(Woken(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  let now = draft.now
+  let waiting = draft.occurrence
+  let is_due = fn(at) { timestamp.compare(now, at) != order.Lt }
+  let moved = fn(saved: Result(Occurrence(o), Refusal)) {
+    result.map(saved, Woken)
+  }
+  let next = fn() {
+    case list.find(occurrence.wake_times(waiting), fn(at) { !is_due(at) }) {
+      Ok(at) -> Ok(NotDue(at))
+      Error(Nil) -> Ok(NothingDue)
+    }
+  }
+  case waiting.status {
+    occurrence.Held(until:, ..) ->
+      case is_due(until) {
+        True ->
+          release(desk, tx, draft, None)
+          |> result.try(save(desk, tx, _))
+          |> moved
+        False -> Ok(NotDue(until))
+      }
+    occurrence.Recommended(_) | occurrence.Awaiting(_) ->
+      case occurrence.has_lapsed(waiting, now) {
+        True ->
+          add(draft, entry.Expired(vocabulary.DeadlinePassed))
+          |> save(desk, tx, _)
+          |> moved
+        False -> {
+          let waited = waited_minutes(waiting, now)
+          let #(passed, _) =
+            list.partition(waiting.later, fn(step) { step.after <= waited })
+          case first_decisive(waiting, passed), waiting.status {
+            Ok(step), occurrence.Awaiting(eligible:) -> {
+              let version = option.unwrap(waiting.policy_version, 0)
+              let rest =
+                list.filter(waiting.later, fn(later) {
+                  later.after > step.after
+                })
+              let outcome = case step.outcome {
+                // A point is consulted once: the step keeps the occurrence
+                // waiting as it is.
+                policy.Consult(point:) ->
+                  case was_consulted(waiting, point) {
+                    True -> policy.Ask(eligible)
+                    False -> step.outcome
+                  }
+                outcome -> outcome
+              }
+              answer(desk, tx, draft, version, outcome, rest) |> moved
+            }
+            _, _ -> next()
+          }
+        }
+      }
+    _ -> Ok(NothingDue)
+  }
+}
+
+/// Of the steps whose time has passed, in order, the first that proceeds,
+/// consults a point not yet consulted, or asks for what the approvals
+/// given so far already meet; when none does, the last. So a wake-up
+/// delivered late reaches the outcome one delivered on time would have.
+fn first_decisive(
+  waiting: Occurrence(o),
+  passed: List(policy.Step),
+) -> Result(policy.Step, Nil) {
+  list.find(passed, fn(step) {
+    case step.outcome {
+      policy.Proceed(_) -> True
+      policy.Consult(point:) -> !was_consulted(waiting, point)
+      policy.Ask(eligible) -> occurrence.is_met(waiting, eligible)
+    }
+  })
+  |> result.lazy_or(fn() { list.last(passed) })
+}
+
+/// The desk's `wake` with its output type erased, so one job handler can
+/// serve every point by name: `#(point name, handler)`. The handler
+/// returns `None` when the job is done, and `Some(until)` when it arrived
+/// early and must be delivered again at `until`.
+pub fn waker(
+  desk: Desk(o, tx),
+) -> #(String, fn(tx, String) -> Result(Option(Timestamp), Refusal)) {
+  #(desk.point.name, fn(tx, id) {
+    wake(desk, tx, id)
+    |> result.map(fn(woken) {
+      case woken {
+        NotDue(until:) -> Some(until)
+        Woken(_) | NothingDue -> None
+      }
+    })
+  })
+}
+
+/// What became of the release outside the database: performed with a
+/// receipt, not performed, or not yet known. Report again when a lookup
+/// settles an uncertain outcome; the latest report is the one that counts.
+pub fn report(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  effect effect: Effect,
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  case draft.occurrence.status {
+    occurrence.Released(..) ->
+      add(draft, entry.Effected(effect:)) |> save(desk, tx, _)
+    _ -> Error(NotReleased)
+  }
+}
+
+/// What proved true later, about an occurrence that settled (released,
+/// rejected, expired, withdrawn or refused). It is appended and changes no
+/// verdict and no output. An occurrence that has not settled is refused
+/// with `NotSettled`: there is nothing final yet to judge. Each call
+/// appends one assessment; repeating it records the finding again.
+pub fn assess(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+  finding assessment: Assessment(o),
+) -> Result(Occurrence(o), Refusal) {
+  use draft <- result.try(load(desk, tx, id))
+  use Nil <- result.try(check(
+    occurrence.is_settled(draft.occurrence.status),
+    NotSettled,
+  ))
+  add(draft, entry.Assessed(assessment:)) |> save(desk, tx, _)
+}
+
+/// The occurrence as the record holds it now. It writes nothing.
+pub fn read(
+  desk: Desk(o, tx),
+  tx: tx,
+  occurrence id: String,
+) -> Result(Occurrence(o), Refusal) {
+  load(desk, tx, id) |> result.map(fn(draft) { draft.occurrence })
+}
+
+// -- Inside ----------------------------------------------------------------------------
+
+/// An occurrence with entries not yet appended, the time the verb runs at,
+/// and what the store held before: its pending wake-ups and whether it had
+/// settled.
+type Draft(o) {
+  Draft(
+    occurrence: Occurrence(o),
+    saved: Int,
+    now: Timestamp,
+    wakes: List(Timestamp),
+    settled: Bool,
+  )
+}
+
+/// Load and lock the record, decode it, then read the clock: the clock is
+/// read after the lock, and never earlier than the last entry.
+fn fetch(
+  desk: Desk(o, tx),
+  tx: tx,
+  id: String,
+) -> Result(#(List(Entry(o)), Timestamp), Refusal) {
+  use stored <- result.try(
+    desk.port.load(tx, id) |> result.map_error(StoreFailed),
+  )
+  use Nil <- result.try(case stored {
+    [first, ..] ->
+      case entry.point_of(first) {
+        Ok(point) if point != desk.point.name -> Error(KeyTaken(point:))
+        _ -> Ok(Nil)
+      }
+    [] -> Ok(Nil)
+  })
+  use entries <- result.try(
+    list.try_map(stored, entry.from_stored(_, desk.point.output))
+    |> result.map_error(Unreadable),
+  )
+  let clock = clock(desk, tx)
+  let now = case list.last(entries) {
+    Ok(last) ->
+      case timestamp.compare(clock, last.at) {
+        order.Lt -> last.at
+        _ -> clock
+      }
+    Error(Nil) -> clock
+  }
+  Ok(#(entries, now))
+}
+
+/// The store's clock in whole milliseconds, the resolution of every stored
+/// time. The desk reduces it here, so an adapter with a finer clock cannot
+/// store a time a wake-up or a head would not match exactly.
+fn clock(desk: Desk(o, tx), tx: tx) -> Timestamp {
+  desk.port.now(tx) |> wire.milliseconds |> wire.from_milliseconds
+}
+
+fn load(desk: Desk(o, tx), tx: tx, id: String) -> Result(Draft(o), Refusal) {
+  use #(entries, now) <- result.try(
+    fetch(desk, tx, id)
+    |> result.map_error(fn(refusal) {
+      case refusal {
+        // By id, another point's occurrence is simply not this desk's.
+        KeyTaken(_) -> UnknownOccurrence
+        _ -> refusal
+      }
+    }),
+  )
+  case occurrence.fold(id, entries) {
+    Ok(found) -> {
+      use found <- result.map(mine(desk, found))
+      Draft(
+        occurrence: found,
+        saved: list.length(entries),
+        now:,
+        wakes: occurrence.wake_times(found),
+        settled: occurrence.is_settled(found.status),
+      )
+    }
+    Error(occurrence.NoEntries) -> Error(UnknownOccurrence)
+    Error(occurrence.OnlyAttempts(point:, attempts:, ..)) ->
+      case point == desk.point.name {
+        True -> Error(NotRecommended(attempts:))
+        False -> Error(UnknownOccurrence)
+      }
+    Error(occurrence.NoRecommendation) -> Error(not_a_record())
+  }
+}
+
+/// An occurrence of another point is not this desk's, even when the two
+/// points' outputs share a codec.
+fn mine(
+  desk: Desk(o, tx),
+  found: Occurrence(o),
+) -> Result(Occurrence(o), Refusal) {
+  case found.point == desk.point.name {
+    True -> Ok(found)
+    False -> Error(UnknownOccurrence)
+  }
+}
+
+fn not_a_record() -> Refusal {
+  Unreadable("the entries do not begin with a recommendation")
+}
+
+fn add(draft: Draft(o), event: Event(o)) -> Draft(o) {
+  let seq = list.length(draft.occurrence.entries) + 1
+  Draft(
+    ..draft,
+    occurrence: occurrence.apply(
+      draft.occurrence,
+      entry.Entry(seq:, at: draft.now, event:),
+    ),
+  )
+}
+
+fn encode(
+  entries: List(Entry(o)),
+  output: Codec(o),
+) -> Result(List(store.Stored), Refusal) {
+  list.try_map(entries, entry.to_stored(_, output))
+  |> result.map_error(Unencodable)
+}
+
+/// Append what is new, replace the wake-ups when they changed, and admit
+/// the settlement notice when the occurrence settled now.
+fn save(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+) -> Result(Occurrence(o), Refusal) {
+  let current = draft.occurrence
+  let fresh = list.drop(current.entries, draft.saved)
+  use stored <- result.try(encode(fresh, desk.point.output))
+  let port = desk.port
+  let wakes = occurrence.wake_times(current)
+  let settled = occurrence.is_settled(current.status)
+  {
+    use Nil <- result.try(case stored {
+      [] -> Ok(Nil)
+      _ -> port.append(tx, current.id, occurrence.head(current), stored)
+    })
+    use Nil <- result.try(case wakes == draft.wakes {
+      True -> Ok(Nil)
+      False -> port.schedule(tx, desk.point.name, current.id, wakes)
+    })
+    case settled && !draft.settled {
+      True -> port.settled(tx, desk.point.name, current.id)
+      False -> Ok(Nil)
+    }
+  }
+  |> result.map_error(StoreFailed)
+  |> result.replace(current)
+}
+
+fn waited_minutes(current: Occurrence(o), now: Timestamp) -> Int {
+  let #(seconds, _) =
+    timestamp.difference(occurrence.recommended_at(current), now)
+    |> duration.to_seconds_and_nanoseconds
+  seconds / 60
+}
+
+/// Read the policy over everything it may read, and act on its answer.
+fn settle(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+) -> Result(Occurrence(o), Refusal) {
+  let current = draft.occurrence
+  use published <- result.try(desk.policy(tx) |> result.map_error(NoPolicy))
+  use Nil <- result.try(
+    publishable(desk.point, published) |> result.map_error(Unpublishable),
+  )
+  let facts =
+    list.flatten([
+      facts_of(desk.point, current.recommendation.output),
+      current.recommendation.signals,
+      current.informed,
+    ])
+  let #(outcome, later) =
+    policy.timeline(
+      published,
+      current.recommendation.by,
+      facts,
+      waited: waited_minutes(current, draft.now),
+    )
+  // A policy that would consult the same point twice falls to its default.
+  let #(outcome, later) = case outcome {
+    policy.Consult(point:) ->
+      case was_consulted(current, point) {
+        True -> #(published.otherwise, [])
+        False -> #(outcome, [])
+      }
+    _ -> #(outcome, later)
+  }
+  answer(desk, tx, draft, published.version, outcome, later)
+}
+
+/// Act on one answer of the policy, the first or a later one: record it
+/// with the version that gave it, then release or hold when it proceeds,
+/// wait when it asks, and ask the consulted point when it consults. A
+/// consulting answer drops the later steps: when the consulted point
+/// answers, the policy is read again.
+fn answer(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+  version: Int,
+  outcome: policy.Outcome,
+  later: List(policy.Step),
+) -> Result(Occurrence(o), Refusal) {
+  let id = draft.occurrence.id
+  let applied = fn(sampled, later) {
+    add(draft, entry.PolicyApplied(version:, outcome:, sampled:, later:))
+  }
+  case outcome {
+    policy.Proceed(sample:) ->
+      applied(is_sampled(sample, id), [])
+      |> accept(desk, tx, _, None)
+      |> result.try(save(desk, tx, _))
+    policy.Ask(_) -> {
+      let draft = applied(False, later)
+      case draft.occurrence.status {
+        // The approvals given so far already meet what it now asks.
+        occurrence.Accepted(..) ->
+          accept(desk, tx, draft, None) |> result.try(save(desk, tx, _))
+        _ -> save(desk, tx, draft)
+      }
+    }
+    policy.Consult(point:) -> {
+      // The consulted point may inform this occurrence in this same
+      // transaction, so the entries are appended before it is asked.
+      use saved <- result.try(save(desk, tx, applied(False, [])))
+      use Nil <- result.try(
+        desk.consult(
+          tx,
+          Consultation(
+            point:,
+            occurrence: saved.id,
+            subject: saved.subject,
+            context: saved.context,
+            recommendation: saved.recommendation,
+          ),
+        )
+        |> result.map_error(ConsultFailed(point:, reason: _)),
+      )
+      read(desk, tx, saved.id)
+    }
+  }
+}
+
+fn was_consulted(current: Occurrence(o), point: String) -> Bool {
+  list.any(current.entries, fn(entry) {
+    case entry.event {
+      entry.PolicyApplied(outcome: policy.Consult(point: consulted), ..) ->
+        consulted == point
+      _ -> False
+    }
+  })
+}
+
+/// An accepted output is held when the point has a hold, and released
+/// otherwise.
+fn accept(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+  on_refusal: Option(#(Validator, Int, Verdict(o))),
+) -> Result(Draft(o), Refusal) {
+  let hold = case draft.occurrence.status, desk.point.policy_hold {
+    occurrence.Accepted(by: occurrence.ByPolicy(_), ..), Some(hold) ->
+      Some(hold)
+    _, _ -> desk.point.hold
+  }
+  case hold {
+    Some(hold) ->
+      Ok(add(draft, entry.Held(until: timestamp.add(draft.now, hold))))
+    None -> release(desk, tx, draft, on_refusal)
+  }
+}
+
+/// Check the guard against the current world, hand the executor the
+/// released output, and append the release, all in the caller's
+/// transaction and the guard and executor inside a savepoint.
+/// `on_refusal` is the verdict that accepted it, when a validator is
+/// present: a refusal then fails the call so its transaction rolls back.
+/// With nobody waiting (`None`), a refusal ends the occurrence `Refused`.
+fn release(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+  on_refusal: Option(#(Validator, Int, Verdict(o))),
+) -> Result(Draft(o), Refusal) {
+  let current = draft.occurrence
+  case current.status {
+    occurrence.Accepted(final:, by:) | occurrence.Held(final:, by:, ..) -> {
+      let tool = desk.tool(final)
+      let key = "release:" <> current.id
+      use ran <- result.try(
+        desk.port.atomically(tx, fn(tx) {
+          use relied <- result.try(
+            tool.guard(tx, current.subject) |> result.map_error(stop_text),
+          )
+          use checked <- result.try(
+            desk.check(
+              tx,
+              ToRelease(
+                output: final,
+                subject: current.subject,
+                context: current.context,
+                key:,
+              ),
+            )
+            |> result.map_error(stop_text),
+          )
+          // Built for this release attempt only, after the guard and the
+          // check allowed it, and handed to the executor alone.
+          let released =
+            Released(
+              occurrence: current.id,
+              key:,
+              subject: current.subject,
+              parent: current.parent,
+              by:,
+              output: final,
+              context: current.context,
+            )
+          tool.execute(tx, released)
+          |> result.map_error(stop_text)
+          |> result.replace(list.append(relied, checked))
+        })
+        |> result.map_error(StoreFailed),
+      )
+      case result.map_error(ran, stop_of_text), on_refusal {
+        Ok(relied), _ ->
+          Ok(add(draft, entry.Released(key:, tool: tool.name, relied:)))
+        Error(Unsure(reason:)), _ -> Error(ToolUnsure(reason:))
+        Error(Refuse(reason:)), Some(#(validator, seen, verdict)) -> {
+          use encoded <- result.try(
+            wire.verdict(verdict, desk.point.output)
+            |> result.map_error(Unencodable),
+          )
+          Error(ToolRefused(
+            reason:,
+            rollback: Rollback(
+              point: desk.point.name,
+              occurrence: current.id,
+              by: validator.subject,
+              seen:,
+              verdict: json.to_string(encoded),
+              reason:,
+            ),
+          ))
+        }
+        Error(Refuse(reason:)), None -> Ok(add(draft, entry.Refused(reason:)))
+      }
+    }
+    _ -> Ok(draft)
+  }
+}
+
+/// A `Stop` as the text the port's `atomically` passes back unchanged.
+fn stop_text(stop: Stop) -> String {
+  case stop {
+    Refuse(reason:) -> "refuse:" <> reason
+    Unsure(reason:) -> "unsure:" <> reason
+  }
+}
+
+fn stop_of_text(text: String) -> Stop {
+  case text {
+    "unsure:" <> reason -> Unsure(reason:)
+    "refuse:" <> reason -> Refuse(reason:)
+    reason -> Refuse(reason:)
+  }
+}
+
+/// Admitted by the eligibility, and not already an approver of the output
+/// that stands: each validator gives one verdict per standing output.
+fn is_eligible(
+  eligible: Eligible,
+  validator: Validator,
+  current: Occurrence(o),
+) -> Bool {
+  occurrence.admits(current, eligible, validator.subject, validator.holds)
+  && !list.contains(occurrence.standing(current).1, validator.subject)
+}
+
+fn allowed_verdict(
+  point: Point(o),
+  current: Occurrence(o),
+  validator: Validator,
+  verdict: Verdict(o),
+) -> Result(Nil, Refusal) {
+  let noted =
+    list.any(occurrence.notes(current), fn(note) { note.0 == validator.subject })
+  case verdict, point.verdicts {
+    Approve, _ -> Ok(Nil)
+    Correct(..), ApproveOrReject -> Error(VerdictNotAllowed)
+    Reject(reason:), _ | Correct(reason:, ..), _ ->
+      case string.trim(reason.category) {
+        "" -> Error(ReasonRequired)
+        category if category == missing_context && !noted -> Error(NoteRequired)
+        _ -> Ok(Nil)
+      }
+  }
+}
+
+fn is_sampled(sample: Sample, id: String) -> Bool {
+  policy.is_sampled(sample, id)
+}
+
+fn check(holds: Bool, otherwise: Refusal) -> Result(Nil, Refusal) {
+  case holds {
+    True -> Ok(Nil)
+    False -> Error(otherwise)
+  }
+}
