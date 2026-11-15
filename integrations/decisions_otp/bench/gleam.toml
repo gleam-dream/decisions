@@ -1,0 +1,14 @@
+# The scale run of decisions_otp: condition H and use case 12 against the
+# process-safe in-memory store. A separate package, so that the library
+# ships no benchmark. Run with `gleam run` in this directory.
+name = "decisions_otp_bench"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.18.0"
+licenses = ["Apache-2.0"]
+
+[dependencies]
+decisions = { path = "../../.." }
+decisions_otp = { path = ".." }
+gleam_stdlib = ">= 0.70.0 and < 2.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
