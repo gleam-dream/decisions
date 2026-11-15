@@ -1,0 +1,18 @@
+#let terms = (
+  (slug: "term-runtime", title: [Runtime], body: [The supervised set of processes that deliver what the record says is owed: one sweeper, one dispatcher, and a bounded number of workers. None of them keeps state a kill could lose.]),
+  (slug: "term-sweeper", title: [Sweeper], body: [The process that delivers pending wake-ups that are due, and delivers again at the named time a wake-up that arrived early.]),
+  (slug: "term-dispatcher", title: [Dispatcher], body: [The process that delivers each settlement notice to the follower of its point.]),
+  (slug: "term-worker", title: [Worker], body: [A process that turns one trigger at a time into a recommendation, or into a recorded failed attempt.]),
+  (slug: "term-follower", title: [Follower], body: [The application's function that a settlement notice is delivered to, run in the transaction that marks the notice delivered. It starts what comes after an occurrence, such as a follow-on run.]),
+  (slug: "term-backlog", title: [Backlog], body: [The durable work a runtime delivers, kept as rows in the store: wake-ups that are due, notices not yet delivered, and triggers not yet worked. The OTP store implements it; another store can implement the same contract.]),
+  (slug: "term-job", title: [Job], body: [One item of the backlog, or one Grind job in PostgreSQL, that a delivery acts on. A job leaves its queue only in the transaction that acts on it.]),
+  (slug: "term-handler-failure", title: [Handler failure], body: [What a follower or a job handler returns when it does not succeed: a desk's refusal, classified by its disposition, or the application's own failure, which both runtimes count toward setting the job aside.]),
+  (slug: "term-control", title: [Control], body: [A named value the application keeps to pause and resume an OTP runtime's delivery and to find its supervisor and children.]),
+  (slug: "term-isolated-call", title: [Isolated model call], body: [A model run in a process of its own to a deadline it cannot ignore. A model that raises becomes a raised failure; one that has not answered in time is killed and becomes a deadline failure.]),
+  (slug: "term-hint", title: [Hint], body: [A message a subscriber receives after a commit that changed something it watches. A hint is a reason to read the record again, never a durable event.]),
+  (slug: "term-subscription", title: [Subscription], body: [A process's registration to receive hints about an occurrence or a queue, ended by unsubscribing or by the process's exit.]),
+  (slug: "term-listener", title: [Listener], body: [The one PostgreSQL process with a connection of its own that receives `NOTIFY` on the channel `decisions_changed` and forwards each notification to its subscribers.]),
+  (slug: "term-stress-suite", title: [Stress suite], body: [The race and crash scenarios of `decisions_otp/stress`, written once against a target store and ended by the invariant check. They prove the port's clauses that need several processes.]),
+  (slug: "term-kill-point", title: [Kill point], body: [A named place in a scenario where the stress suite kills a process with `process.kill`, such as inside a verdict after the gated tool wrote.]),
+  (slug: "term-recipe", title: [Recipe], body: [Application code, compiled and tested, that joins `decisions` to another library such as Fabric, llm_wire, or Relay. A recipe is never a dependency of the three packages.]),
+)
