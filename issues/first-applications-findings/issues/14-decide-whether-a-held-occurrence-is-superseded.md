@@ -1,0 +1,28 @@
+# Decide whether a held occurrence is superseded
+
+Status: ready-for-human
+Category: enhancement
+
+AI-assisted contribution.
+
+**Parent:** [What the first applications still found](../PRD.md). Design anchors: ADR 0018 (open).
+
+## Behaviour wanted
+
+`happened` supersedes only undecided occurrences; a held occurrence keeps its hold and is released or refused when it ends. Whether a superseding event during a hold should stop the release is an owner decision.
+
+## Evidence
+
+`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` and `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` both supersede waiting recommendations when a newer message or an edit arrives (`delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`; `followers_test.gleam`, `an_edit_supersedes_a_waiting_recommendation_test`); neither holds and supersedes at once today.
+
+## Done when
+
+- The owner's ruling is recorded in a new ADR that supersedes ADR 0018, and the pending ruling "Whether a held occurrence is superseded" is cleared.
+
+## Out of scope
+
+Implementing the change before the ruling.
+
+## Blocked by
+
+None.
