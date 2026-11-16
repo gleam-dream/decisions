@@ -51,11 +51,12 @@ compare captures only on the same machine and method.
 
 ## Retained measurements
 
-Captured on 2026-11-15 from the final source of the three packages, after the
-independent reviews and their corrections. The repository was not under Git,
-so no commit identifies a capture. The OTP figures are one run of the bench
-package; the PostgreSQL figures are the capture retained in the
-[adapter's README](../integrations/decisions_postgres/README.md).
+Captured on 2026-11-16 from the final source of the three packages, after the
+last code change, on a quiet machine (load average 3 to 4). The repository was
+not under Git, so no commit identifies the capture. The OTP figures are one run
+of the bench package; the PostgreSQL figures are one run of
+`scripts/test-postgres.sh scale`. An earlier capture of the same day, taken
+before one fix, is quoted where it explains a change.
 
 Machine: Apple M2 Max, 12 logical cores, 32 GiB of memory, Darwin 27.2.0,
 Erlang/OTP 29 with 12 schedulers online. PostgreSQL 16.15 on the same machine,
@@ -63,71 +64,78 @@ started by `scripts/test-postgres.sh` with `fsync=off` and
 `synchronous_commit=off`, and one pool of 24 connections shared by the workers
 and Grind.
 
-| Workload                                                | OTP in-memory store                                                                                       | PostgreSQL                                                  |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| H1, 1 process                                           | 263 ms, 37 955/s                                                                                          | 1 359/s                                                     |
-| H1, 4 processes                                         | 210 ms, 47 635/s                                                                                          | 3 741/s                                                     |
-| H1, 16 processes                                        | 205 ms, 48 736/s                                                                                          | 6 823/s                                                     |
-| H2, queue page of 50 from 10 000                        | 15 µs                                                                                                     | median 0.45 ms, p95 0.90 ms                                 |
-| H2, open and decide, 16 validators                      | per verdict median 0.65 ms, p95 1.17 ms; 22 665 verdicts/s                                                | all 10 000 at 4 336/s; per call median 3.64 ms, p95 4.28 ms |
-| H3, 10 / 100 / 1 000 entries                            | 0.05 / 0.27 / 3.89 ms                                                                                     | median 0.40 / 1.1 / 7.8 ms                                  |
-| H4, 1 000 superseded by one event                       | 41.6 ms                                                                                                   | 420 ms, one transaction                                     |
-| H5, 5 000 holds end together                            | 834 ms with one sweeper, 5 993/s                                                                          | 6.2 s through Grind, 808/s                                  |
-| H6, replay of 10 000                                    | 18.1 ms in 1 process, 14.9 ms in 12                                                                       | not retained                                                |
-| Export, 10 000 occurrences of one point in pages of 100 | `occurrences_of` 4.2 ms, `settled_since` 3.3 ms                                                           | not retained                                                |
-| Use case 12                                             | 172 ms: 9 000 proceeded, 1 000 waited, 179 sampled; agreement unchanged by the appeals, accuracy 20 of 50 | not run                                                     |
+| Workload                                                | OTP in-memory store                                                                                       | PostgreSQL                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| H1, 1 process                                           | 250 ms, 40 039/s                                                                                          | 6 459 ms, 1 548/s; per call median 0.63 ms, p95 0.75 ms         |
+| H1, 4 processes                                         | 158 ms, 63 421/s                                                                                          | 2 271 ms, 4 402/s; per call median 0.90 ms, p95 1.05 ms         |
+| H1, 16 processes                                        | 125 ms, 79 751/s                                                                                          | 1 398 ms, 7 152/s; per call median 2.21 ms, p95 2.66 ms         |
+| H2, queue page of 50 from 10 000                        | 15 µs                                                                                                     | median 0.42 ms, p95 0.85 ms                                     |
+| H2, open and decide, 16 validators                      | per verdict median 0.51 ms, p95 0.74 ms; 30 200 verdicts/s                                                | all 10 000 at 4 424/s; per call median 3.58 ms, p95 4.18 ms     |
+| H3, 10 / 100 / 1 000 entries                            | 0.06 / 0.25 / 3.46 ms                                                                                     | median 0.34 / 1.0 / 7.67 ms                                     |
+| H4, 1 000 superseded by one event                       | 43.3 ms                                                                                                   | 392 ms, one transaction                                         |
+| H5, 5 000 holds end together                            | 718 ms with one sweeper, 6 967/s                                                                          | 5.8 s through Grind, 867/s                                      |
+| H6, replay of 10 000                                    | 16.7 ms in 1 process, 12.4 ms in 12                                                                       | reading the 10 000 records: 2 084 ms in 1 process, 435 ms in 16 |
+| Export, 10 000 occurrences of one point in pages of 100 | `occurrences_of` 3.6 ms, `settled_since` 3.0 ms                                                           | not measured                                                    |
+| Use case 12                                             | 144 ms: 9 000 proceeded, 1 000 waited, 179 sampled; agreement unchanged by the appeals, accuracy 20 of 50 | not run                                                         |
 
-Further measurements in the same captures:
+Further measurements in the same capture:
 
 - PostgreSQL H1 with 16 processes and the tool run without a savepoint:
-  9 321/s against 6 823/s with it. The port requires the savepoint
+  10 074/s against 7 152/s with it. The port requires the savepoint
   ([ADR 0005](adr/0005-the-port-requires-an-absence-lock-a-savepoint-and-a-rich-head.md)).
 - `NOTIFY`, from the start of the appending transaction to the subscriber:
-  median 0.48 ms; it arrives before the writer's call returns.
+  median 0.36 ms, p95 0.44 ms; it arrives before the writer's call returns.
 - OTP, beside H4: the port's `waiting` over 10 000 waiting occurrences, 1 000
-  of them about the subject, 282 µs in one call.
+  of them about the subject, 272 µs in one call.
 
-### What moved in the in-memory store, and why
+### What moved, and why
 
-- **H5 got slower.** The adapter review's corrections make every reader see a
-  commit whole ([ADR 0043](adr/0043-an-in-memory-commit-is-whole-and-restart-is-one-step.md)).
-  The sweeper's reads now wait for, or re-read around, a commit in progress.
-  The adapter's builder measured the 5 000-holds workload going from about
-  336 ms to about 690 ms; this capture measured 834 ms.
-- **A paged export got cheaper.** Pages now follow commit order from an
-  index and start from their cursor
-  ([ADR 0044](adr/0044-paged-reads-follow-commit-order.md)). The builder
-  measured a full export of 10 000 occurrences going from 166 ms to 3.6 ms;
-  this capture measured 4.2 ms.
-- **Admission is slower than in the first capture of the day** (H1 with 16
-  processes: 92 925/s, then 62 636/s, now 48 736/s): each occurrence also
-  writes index rows for the paged reads and the review queue, and every
-  commit is applied whole.
+- **In-memory H1 with 16 processes** is about 80 000/s in both captures of
+  2026-11-16 (84 200/s and 79 751/s), against 48 736/s retained on 2026-11-15.
+  The earlier figure was captured while other work shared the machine. Nothing
+  here shows that the code got faster.
+- **H4 (1 000 superseded by one event).** The owner's round first made it
+  slower: 59.6 ms in memory and 552 ms on PostgreSQL in the earlier capture of
+  2026-11-16, because superseding read each occurrence twice through the port.
+  That is fixed, with one load per superseded record
+  (`happened_loads_each_record_once_test`), and the capture reads 43.3 ms and
+  392 ms. The subject lock adds one `load` per `happened`.
+- **In-memory H5** reads 718 ms, against 834 ms retained. The adapter's
+  builder had measured the 5 000-holds workload going from about 336 ms to
+  about 690 ms when every reader began to see a commit whole
+  ([ADR 0043](adr/0043-an-in-memory-commit-is-whole-and-restart-is-one-step.md)).
+- **A paged export of 10 000 occurrences** reads 3.6 ms, against 4.2 ms
+  retained. The builder had measured it going from 166 ms to 3.6 ms when
+  pages began to follow commit order from an index
+  ([ADR 0044](adr/0044-paged-reads-follow-commit-order.md)).
+- **PostgreSQL** H1 to H3, H5 and `NOTIFY` are within a few per cent of the
+  retained figures, mostly slightly faster; the capture gives no reason beyond
+  run-to-run variation.
 
 ### What admission costs in PostgreSQL
 
 The prototype admitted 2 400 recommendations per second at one connection
-(median 0.39 ms a call); the adapter admits about 1 400 (median 0.68 ms). The
-adapter's scale run measures each suspected cost by removing it, 3 000
-recommendations each from one process:
+(median 0.39 ms a call); the adapter admits about 1 550 (median 0.63 ms). The
+scale run measures each suspected cost by removing it, from one process:
 
 | Variant                                                    | Per second | Median per call |
 | ---------------------------------------------------------- | ---------- | --------------- |
-| As shipped, with Grind's consumers on the pool             | 1 416      | 0.68 ms         |
-| As shipped, no Grind consumers on the pool                 | 1 404      | 0.68 ms         |
-| and the node's clock instead of a query for the database's | 1 641      | 0.60 ms         |
-| and no savepoint around the gated tool                     | 2 270      | 0.43 ms         |
-| and no gap-check foreign key                               | 2 327      | 0.42 ms         |
+| As shipped, with Grind's consumers on the pool (H1)        | 1 548      | 0.63 ms         |
+| As shipped, no Grind consumers on the pool                 | 1 565      | 0.62 ms         |
+| and the node's clock instead of a query for the database's | 1 800      | 0.55 ms         |
+| and no savepoint around the gated tool                     | 2 476      | 0.40 ms         |
+| and no gap-check foreign key                               | 2 516      | 0.39 ms         |
 
-- The savepoint is the largest part, about 0.17 ms a call (two round trips).
+- The savepoint is the largest part, about 0.15 ms a call (two round trips).
   The port's contract requires it.
-- The store's clock is a query (`clock_timestamp()`), about 0.08 ms a call.
-  The prototype read the node's clock, which the contract no longer allows.
+- The store's clock is a query (`clock_timestamp()`, median 0.06 ms on its
+  own), about 0.07 ms a call in admission. The prototype read the node's
+  clock, which the contract no longer allows.
 - The gap-check foreign key costs about 0.01 ms a call, within the noise, and
   Grind's consumers on the shared pool cost nothing measurable.
-- About 0.03 ms a call remains unattributed after the savepoint and the clock
-  are removed. The candidates are the PL/pgSQL functions and the array
-  parameters of `decisions_append`; they were not measured separately.
+- With the savepoint, the clock query and the foreign key removed, a call
+  takes 0.39 ms, the prototype's figure: in this capture nothing else remains
+  to attribute.
 
 The prototype's other figures (`decision-point-lab/FINDINGS-2.md`, "Numbers")
 were 9 400/s for H1 with 16 processes, a queue page in 0.23 ms, a load of
