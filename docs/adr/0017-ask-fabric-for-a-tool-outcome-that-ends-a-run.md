@@ -22,3 +22,7 @@
 
 - The recipe described above, which ends the parked run and starts a fresh run as the follow-on, is the lab's (`decision-point-lab/ledger_fabric`). The application built on the library, `payout_desk` in `gleam-dream/oversight`, does otherwise: it resumes the same parked run once the decision point has recorded the outcome (`apps/payout_desk/src/payout_desk/jobs.gleam`, `resume`). The approval never expires, only the decision point answers it, the gated tool returns the recorded outcome, and a reply is delivered only when it matches the record. Oversight's ADR 0035 records that choice.
 - Both ways avoid the trap, and neither can make Fabric end a run from a tool outcome, so the request stands.
+
+## Note, 2026-11-16
+
+- Superseded by [ADR-0052](0052-a-gated-agent-call-is-handed-over-and-told-in-a-follow-on-run.md#adr-0052). Fabric answered the request in `fabric` 0.3.0 with a handover by policy, and `payout_desk` no longer parks a run.

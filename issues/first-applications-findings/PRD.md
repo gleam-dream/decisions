@@ -12,7 +12,7 @@ make.
 Each issue is a brief: the behaviour wanted, the evidence in the application,
 and what done looks like. None prescribes an implementation.
 
-Twenty-eight issues: 9 done, 18 needs-triage, 1 wontfix.
+Twenty-eight issues: 10 done, 17 needs-triage, 1 wontfix.
 
 | Issue                                                                                                                                                                                                      | State        |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
@@ -41,6 +41,6 @@ Twenty-eight issues: 9 done, 18 needs-triage, 1 wontfix.
 | [23. `Unsure` at a hold's wake-up was not watched to fail with the fix removed](issues/23-unsure-at-a-holds-wake-up-was-not-watched-to-fail.md)                                                            | done         |
 | [24. There is no queue of held occurrences to withdraw from](issues/24-no-queue-of-held-occurrences.md)                                                                                                    | needs-triage |
 | [25. `isolated.recommend` can never return `Skipped`, yet its caller must match it](issues/25-isolated-recommend-can-never-return-skipped.md)                                                              | needs-triage |
-| [26. The payout desk starts a fresh Fabric run per retry and cancels a parked run itself](issues/26-payout-desk-starts-a-fresh-run-per-retry-and-cancels-parked-runs.md)                                   | needs-triage |
+| [26. The payout desk starts a fresh Fabric run per retry and cancels a parked run itself](issues/26-payout-desk-starts-a-fresh-run-per-retry-and-cancels-parked-runs.md)                                   | done         |
 | [27. The in-memory runtime drops a notice for a record superseded before it began; PostgreSQL hands it to the follower](issues/27-the-two-runtimes-treat-a-notice-for-a-record-never-begun-differently.md) | needs-triage |
 | [28. Do two expectations about one subject need an order when no `happened` runs?](issues/28-admission-order-for-points-that-only-expect.md)                                                               | needs-triage |

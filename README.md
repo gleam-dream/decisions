@@ -1476,5 +1476,5 @@ limits.
   released through Saga) and `moderation_desk` (moderation at volume on the
   OTP runtime with no database). They are in
   [gleam-dream/oversight](https://github.com/gleam-dream/oversight/tree/main/apps)
-  under `apps/`, recorded in Oversight's design layer with its ADRs 0033 to 0038. Each pins this repository to one commit as Git+path dependencies.
+  under `apps/`, recorded in Oversight's design layer with its ADRs 0033 to 0039. Each pins this repository to one commit as Git+path dependencies.
 - See [AGENTS.md](AGENTS.md) for development and validation commands.

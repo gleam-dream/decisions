@@ -1,5 +1,7 @@
 # A parked agent run can wake on an expired approval and act on a decision made elsewhere
 
+> Filed on 16 November 2026 as [gleam-dream/fabric issue 5](https://github.com/gleam-dream/fabric/issues/5) and closed the same day. Fabric answered it in `fabric` 0.3.0 with a handover by policy; ADR 0052 of this repository records the answer. The text below is the request as filed.
+
 An agent run that is waiting for an approval resumes when the approval expires. The model then reads the expiry as a rejection and takes another turn. Nothing in Fabric lets a tool end the run instead, so an application that hands the decision to another system cannot stop the run from going on.
 
 ## Motivation

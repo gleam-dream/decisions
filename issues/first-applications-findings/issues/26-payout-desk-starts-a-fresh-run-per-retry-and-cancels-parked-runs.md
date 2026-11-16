@@ -1,6 +1,6 @@
 # The payout desk starts a fresh Fabric run per retry and cancels a parked run itself
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -27,3 +27,7 @@ Changing Fabric from this repository (ADR 0004, ADR 0017).
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. Fabric 0.3.0 hands a gated call over by policy and ends the run, so `payout_desk` no longer parks a run and cancels nothing on `SupersededBefore`: the run has already ended when the payout is admitted. Recorded in ADR 0052, which supersedes ADR 0017, and in Oversight's ADR 0039. The fresh run for each failed attempt stays. A failed run has ended and cannot continue, so the handover does not make it unnecessary; the comparison in "Behaviour wanted" was wrong on that half.
