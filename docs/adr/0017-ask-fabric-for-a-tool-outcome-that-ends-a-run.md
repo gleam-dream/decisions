@@ -4,7 +4,7 @@
 
 ## Decision
 
-- The owner asks Fabric's maintainers for a tool outcome that ends an agent run. The request is drafted in `docs/requests/fabric-tool-outcome-that-ends-a-run.md`; it is not filed by this repository.
+- The owner asks Fabric's maintainers for a tool outcome that ends an agent run. The request was filed on 16 November 2026 as [gleam-dream/fabric issue 5](https://github.com/gleam-dream/fabric/issues/5). Its text is retained in `docs/requests/fabric-tool-outcome-that-ends-a-run.md`.
 - This build uses Fabric as published. The recipe for an agent's gated tool call parks the run on an approval no approver can give, with an approval that never expires, records the parked call as an occurrence, ends the run, and starts a fresh run when the occurrence settles.
 
 ## Rationale and alternatives
