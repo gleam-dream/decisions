@@ -28,3 +28,7 @@ Changing `Either` and `Several` semantics (ADR 0029).
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. 2026-11-16: the owner decided that an `All` eligibility ("one from each of two sets") is added when the first real point needs it; it is not built. The second half, a policy condition that reads who recommended, is unchanged.
