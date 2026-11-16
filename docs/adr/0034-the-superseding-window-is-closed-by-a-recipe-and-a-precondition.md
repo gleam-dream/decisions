@@ -18,3 +18,7 @@
 
 - Application round, 2026-11-15. Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` (`test/clinic_registration/delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`) and `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` (`test/followers_test.gleam`, `an_edit_supersedes_a_waiting_recommendation_test`).
 - `src/decisions.gleam`, `recommend_once` and `happened`; `integrations/decisions_otp/src/decisions_otp/isolated.gleam`, `recommend_when`; `integrations/decisions_otp/test/round_test.gleam`, `a_precondition_that_fails_recommends_nothing_test`.
+
+## Note, 2026-11-16
+
+- The open question is settled without a port change: a trigger is admitted with `decisions.expect` before the model runs, and `happened` takes a subject lock through `load`. See [ADR-0050](0050-a-trigger-is-admitted-before-the-model-runs.md#adr-0050). The recipe and `recommend_when` remain for a key that was not expected first.

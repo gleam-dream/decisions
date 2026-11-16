@@ -28,23 +28,17 @@
   pending-entry(title: "Generic clients", kind: "build", since: "2026-11-15", adr: [#adr(15)])[
     A value that erases a point's output type behind closures, so that one queue, one MCP server or one page can hold cards of many points. The output's JSON Schema is already on the card document.
   ],
-  pending-entry(title: "Whether a held occurrence is superseded", kind: "ruling", since: "2026-11-15", adr: [#adr(18)])[
-    A held occurrence is accepted and `happened` does not supersede it. The owner decides whether a superseding event during a hold should stop the release.
-  ],
   pending-entry(title: "A consulted point that settles without an output", kind: "ruling", since: "2026-11-14", adr: [#adr(20)])[
     A consulted point that is rejected or expires never calls `inform`, so the consulting occurrence waits until its deadline, or forever without one. `inform` with no facts is accepted and lets the policy fall to its default; nothing calls it automatically.
   ],
   pending-entry(title: "One from finance and one from legal", kind: "ruling", since: "2026-11-14")[
-    `Several(count, of)` counts different validators under one eligibility, and `Either` accepts when any one alternative is met. Requiring approvals from two different sets at once needs an `All` eligibility. The core's builder recommends it as a small addition: approvals already record the sets their validator held, and `occurrence.is_met` evaluates per alternative.
+    `Several(count, of)` counts different validators under one eligibility, and `Either` accepts when any one alternative is met. Requiring approvals from two different sets at once needs an `All` eligibility. The owner decided to add it when the first real point needs it; approvals already record the sets their validator held, so it is a small addition. Until then it is not built.
   ],
-  pending-entry(title: "The policy hold belongs inside Proceed", kind: "ruling", since: "2026-11-15", adr: [#adr(30)])[
-    `with_policy_hold` is a declaration on the point, so every policy acceptance of the point waits. The core's builder recommends moving it into the policy outcome (`Proceed` with a hold), so a version can hold some autonomous acceptances and not others and the hold is published as data.
+  pending-entry(title: "Admission order for points that only expect", kind: "ruling", since: "2026-11-16")[
+    `happened` takes a lock per point and subject, so two `happened` calls about one subject run one after the other. A point whose triggers are admitted with `expect` alone, with no `happened`, has no such order between two expectations about one subject. Whether that matters is a question for the first application that needs it.
   ],
   pending-entry(title: "A policy condition cannot read who recommended", kind: "ruling", since: "2026-11-15")[
     A condition reads the recommender only through `OwnAct`. A rule such as "proceed when classifier v5 is sure" cannot name the recommender or its version; an application reports it as a signal instead.
-  ],
-  pending-entry(title: "Whether the port carries a per-subject marker", kind: "ruling", since: "2026-11-15", adr: [#adr(34)])[
-    The superseding window is closed by an application recipe and the `recommend_when` precondition. Whether the port should keep the latest trigger per subject itself, so every adapter closes the window, is open.
   ],
   pending-entry(title: "A policy per tenant", kind: "ruling", since: "2026-11-14")[
     A tenant can be a declared fact that rules read today. Whether a tenant instead gets its own policy, read by the desk's policy function, is open.
@@ -73,7 +67,7 @@
     (id: "policy", label: "Policy", sub: "versioned data", kind: "value-object", tint: "violet"),
     (id: "desk", label: "Desk", sub: "point + tool + policy + port", kind: "component", tint: "violet"),
     (id: "occ", label: "Occurrence", sub: "folded from its record", kind: "aggregate", tint: "violet"),
-    (id: "entry", label: "Entry", sub: "seventeen kinds", kind: "event", tint: "violet"),
+    (id: "entry", label: "Entry", sub: "eighteen kinds", kind: "event", tint: "violet"),
     (id: "card", label: "Card", sub: "one showing", kind: "value-object", tint: "violet"),
     (id: "tool", label: "Gated tool", sub: "guard + executor", kind: "component", tint: "violet"),
   ), edges: (
@@ -91,7 +85,7 @@
     #attribute(name: "Allowed verdicts", type: "Approve or reject, or approve, reject or correct", provenance: "authored")[Approve and reject by default. A correction on a point that allows none is `VerdictNotAllowed`.]
     #attribute(name: "Declared facts", type: "Facts of the output and signals, each with its type", provenance: "authored")[What a policy may read besides the recommender and the time waited.]
     #attribute(name: "Hold", type: "Optional duration", provenance: "authored")[A wait between every acceptance and its release (`with_hold`).]
-    #attribute(name: "Policy hold", type: "Optional duration", provenance: "authored")[A wait only for what the policy accepted on its own (`with_policy_hold`); an output a validator accepted is released at once unless `with_hold` also applies. When both are declared, a policy acceptance waits for the policy hold.]
+    #attribute(name: "Hold in the policy", type: "Optional duration on `Proceed`", provenance: "authored")[A policy outcome `Proceed(sample:, hold:)` may carry its own hold, an undo window on what the policy accepted by itself. When it does, that hold is used; otherwise the point's `with_hold`. A new policy version changes the window for new acceptances, not for an occurrence already held (#adr(48)).]
     #attribute(name: "Withdrawers", type: "Optional decision set", provenance: "authored")[Holders of this set may withdraw a held occurrence besides its decider (`withdrawn_by`).]
     #attribute(name: "Validity", type: "Optional duration", provenance: "authored")[How long an occurrence may wait to be decided.]
     #attribute(name: "Superseding events", type: "Event names", provenance: "authored")[World events that expire an undecided occurrence about the same subject.]
@@ -117,8 +111,9 @@
     [A recommender builds a proposal with `decisions.proposal(trigger:, about:, context:, recommending:)`, and adds `asked_by` when a person asked and `hanging_from` when the occurrence follows a run or another occurrence. A recommendation by `Person(subject)` makes that person the requester without `asked_by`.],
     [`recommend` admits the proposal under a new id from the port. `recommend_once(key:)` admits it under `key` at most once: it loads the key, which locks it even though nothing exists yet, and returns the occurrence already there when one is, writing nothing. A key held by another point's occurrence is refused with `KeyTaken(point)`. Applications prefix keys with something the point owns.],
     [The recommendation entry fixes the deadline. The desk then reads the current policy through the desk's policy function, refuses with `NoPolicy` when it cannot be read and with `Unpublishable` when it reads an undeclared fact, evaluates it over the recommender and the facts, and records the answer with its version in a `policy_applied` entry.],
-    [A model that failed before anything was recommended is recorded with `record_failure(key:, trigger:, about:, failure:)` in a transaction of its own. It appends an `attempt_failed` entry, writes a head with status `attempted`, and returns every failed attempt so far. Each call records one attempt, so after an `Unavailable` outcome the caller reads the record before calling again. Once the key holds a recommendation it writes nothing. A later `recommend_once` on the key keeps the attempts at the start of the record; any other verb on such a key is refused with `NotRecommended(attempts)`. `record_failure_with(.., evidence:)` also points at evidence the application stored about the attempt, such as a provider exchange that did not decode; the attempt keeps the references. Give `record_failure` the key `recommend_once` will use for the same trigger, so attempts and recommendation share one record.],
-    [`happened` supersedes what waits when it runs. A worker that recommends from an older trigger and commits after `happened` creates an occurrence nothing supersedes: the superseding window. The application closes it inside the transactions the verbs already run in. It keeps the latest trigger per subject in a row of its own; the transaction that calls `happened` updates that row; the recommending transaction locks it and recommends only if its trigger is still the latest. `decisions_otp/isolated.recommend_when` takes that check as a precondition run inside the recommending transaction (#adr(34)).],
+    [A model that failed before anything was recommended is recorded with `record_failure(key:, trigger:, about:, failure:)` in a transaction of its own. It appends an `attempt_failed` entry, writes a head with status `pending`, and returns every failed attempt so far. Each call records one attempt, so after an `Unavailable` outcome the caller reads the record before calling again. Once the key holds a recommendation it writes nothing. A later `recommend_once` on the key keeps the attempts at the start of the record; any other verb on such a key is refused with `NotRecommended(attempts)`, and `decisions.read_record` returns `NotBegun` for it. `record_failure_with(.., evidence:)` also points at evidence the application stored about the attempt, such as a provider exchange that did not decode; a model can carry the same references in its failure (`model.with_evidence`, `Failure.WithEvidence`), and `record_failure` stores them on the attempt. Give `record_failure` the key `recommend_once` will use for the same trigger, so attempts and recommendation share one record.],
+    [`expect(desk, tx, key:, trigger:, about:)`, called in the transaction that receives a trigger, records that a recommendation is expected under the key: an `expected` entry, and a head with status `pending`. From then on `happened` for a newer event about the subject supersedes the record before it begins, and the `recommend_once` or `record_failure` that follows for the key is refused with `SupersededBefore(event)` and writes nothing. `expect` is safe to repeat; on a key that already holds a recommendation it does nothing. An expectation has no deadline: a record that stays expected keeps status `pending` and its arrival time (#adr(50)).],
+    [The subject lock: for an event the point declares, `happened` first loads `subject_lock(point:, subject:)` through the port, which locks that id for the rest of the transaction, and only then reads which records wait. Two `happened` calls about one subject of one point therefore run one after the other, and the second sees every record the first committed, including the key its transaction expected, so two triggers about one subject admitted at the same moment cannot both miss each other. The id is `subject_lock_prefix` (`decisions.subject-lock:`, reserved) followed by the lowercase hex SHA-256 of the point, the subject's kind and its id, 87 bytes in all; no entry is stored under it. A transaction that calls only `expect`, `recommend` or `recommend_once` takes no subject lock. Locks are taken in one order, the subject lock and then the records in `waiting`'s order, so a transaction that also expects a key calls `happened` before `expect`: the other order could deadlock with a later transaction and would supersede the key just expected. A key that was not expected first is still open to the superseding window.],
   )
   #behavior(title: "A trigger delivered again finds its occurrence", area: "Admission", level: "boundary")[
     #given[An occurrence was admitted under a key.]
@@ -128,7 +123,7 @@
   ]
 ])
 
-#section(title: "The lifecycle", lead: "Nine statuses, seventeen entry kinds, and one fold that applies them.", body: [
+#section(title: "The lifecycle", lead: "Nine statuses, eighteen entry kinds, and one fold that applies them.", body: [
   #state-type(id: "status", title: "Status", variants: (
     (id: "recommended", description: [Recorded and waiting for the policy, or for a consulted point when the status names one.]),
     (id: "awaiting", description: [Waiting for verdicts from whoever an eligibility admits.]),
@@ -156,13 +151,14 @@
     ("held", "released", "hold ends; guard and tool allow"),
     ("held", "refused", "hold ends; refusal"),
     ("held", "withdrawn", "decider or withdrawer, before the end"),
+    ("held", "expired", "superseded"),
     ("released", "released", "review / effect report"),
   ), caption: [Accepted lasts only inside a verb: the same transaction holds or releases the output. When a verdict completes the acceptance and the guard or the tool refuses, the verb fails with `ToolRefused` and its transaction rolls back, so the occurrence still awaits; no transition happens. An assessment can be appended to every settled status and changes none.])
   #subsection(title: "Transitions")[
     #md-table(4, (
       [*From*], [*Trigger and guard*], [*To*], [*Entries appended*],
       [nothing], [`recommend` or `recommend_once`, the policy readable and publishable], [recommended, then as the policy says], [`recommended`, `policy_applied`],
-      [recommended], [The policy proceeds], [accepted, then held (a hold or a policy hold applies), or released, or refused], [`held`; or `released`; or `refused`],
+      [recommended], [The policy proceeds], [accepted, then held (the outcome's hold or the point's `with_hold` applies), or released, or refused], [`held`; or `released`; or `refused`],
       [recommended], [The policy asks], [awaiting], [none beyond `policy_applied`, which carries the remaining steps],
       [recommended], [The policy consults a point it has not consulted on this occurrence], [recommended, consulting it], [`policy_applied`; then the consult handler runs in the same transaction],
       [recommended, consulting P], [`inform(from: P)` with declared facts, before the deadline], [as the policy current now says], [`informed`, `policy_applied`],
@@ -171,6 +167,9 @@
       [awaiting], [`decide` with a rejection carrying a reason], [rejected], [`decided`],
       [awaiting], [`wake` when a step is due, before the deadline], [as the step says], [`policy_applied`, and what the outcome requires],
       [recommended or awaiting], [`wake` at or after the deadline], [expired, deadline passed], [`expired`],
+      [nothing], [`expect`, or `record_failure` before any recommendation], [not begun; head status `pending`], [`expected`, or `attempt_failed`],
+      [not begun], [`happened` with a declared event about the subject], [superseded before it began; `recommend_once` is then refused with `SupersededBefore`], [`expired`],
+      [held], [`happened` with a declared event about the subject], [expired, superseded; the hold's wake-up is cancelled and nothing is released], [`expired`],
       [recommended or awaiting], [`happened` with a declared event about the subject], [expired, superseded; or deadline passed when already lapsed], [`expired`],
       [held], [`wake` at or after the hold's end], [released, or refused when the guard or the tool refuses], [`released` or `refused`],
       [held], [`withdraw` by the decider, or `withdraw_as` by the decider or a withdrawer, before the hold's end], [withdrawn], [`withdrawn`],
@@ -182,6 +181,7 @@
   #subsection(title: "Entry kinds")[
     #md-table(3, (
       [*Kind*], [*Appended by*], [*What it means*],
+      [`expected`], [`expect`], [A recommendation is expected under the key, about the subject. Only before `recommended`.],
       [`attempt_failed`], [`record_failure`, `record_failure_with`], [A model failed under the key before any recommendation, with any evidence the application stored. Only before `recommended`.],
       [`recommended`], [`recommend`, `recommend_once`], [The recommendation, with point, trigger, parent, subject, requester, context and deadline.],
       [`informed`], [`inform`], [A consulted point's answer as facts.],
@@ -197,10 +197,10 @@
       [`released`], [the desk on release], [The release key, the gated tool's name and the evidence its guard and release check relied on.],
       [`effected`], [`report`], [What the release did outside the database.],
       [`refused`], [the desk on release], [A refusal by the guard, the release check or the tool with nobody waiting.],
-      [`expired`], [`wake`, `happened`], [Deadline passed, or superseded by a named event.],
+      [`expired`], [`wake`, `happened`], [Deadline passed, or superseded by a named event; also on a held occurrence or a record not yet begun.],
       [`assessed`], [`assess`], [What proved true later.],
     ))
-    #points([`decisions/entry.kinds` lists the seventeen kind names in this order, for a store's column constraint. `Event`, `Status`, `Refusal`, `Outcome` and `Eligible` may gain variants in a minor release, so code that matches them keeps a catch-all branch.])
+    #points([`decisions/entry.kinds` lists the eighteen kind names in this order, for a store's column constraint. `Event`, `Status`, `Refusal`, `Outcome` and `Eligible` may gain variants in a minor release, so code that matches them keeps a catch-all branch.])
   ]
   #subsection(title: "Refusals and their dispositions")[
     #points([`decisions.disposition(refusal)` classifies every refusal by one of four meanings, so a caller or a runtime decides what to do without reading text (#adr(21), #adr(39)). `Transient` is contention or a store whose outcome is unknown: deliver again soon, uncounted. `Retry` may pass on another try or may never pass: deliver again after a backoff, counted, and set aside when the attempts are used. `Poisoned` needs an operator while the occurrence still waits for what the job was delivering: set the job aside, never drop it. `Final` means the occurrence moved on or the job can never apply to it: the job is done. Every variant is named in the classification, so a new one cannot be classified by accident.])
@@ -236,7 +236,7 @@
   ]
   #subsection(title: "The account of an occurrence")[
     #points(
-      [`occurrence.account(occurrence)` says what really happened, as a follower or an agent tells someone, and never a status in between: `Undecided` while it waits or is held and can still be withdrawn; `Done(final, effect)` once released, with the latest effect report, or none while nothing is known or the latest is uncertain; `TurnedDown(by, reason)`; `Lapsed(cause)`; `TakenBack(by)`; `Blocked(reason)` when the guard, the check or the tool refused.],
+      [`occurrence.account(occurrence)` says what really happened, as a follower or an agent tells someone, and never a status in between: `Undecided` while it waits or is held and can still be withdrawn; `Done(final, key, effect)` once released, with its release key, with the latest effect report, or none while nothing is known or the latest is uncertain; `TurnedDown(by, reason)`; `Lapsed(cause)`; `TakenBack(by)`; `Blocked(reason)` when the guard, the check or the tool refused.],
       [`occurrence.decided_by(occurrence)` names who answers for the outcome: `ThePolicy(version)` or `APerson(subject)`, the validator who accepted, rejected or withdrew it, also for an output the tool later refused. It is `None` while the occurrence waits and when it expired, since nobody decided.],
     )
   ]
@@ -246,7 +246,8 @@
       [`recommend_once`], [Returns the same occurrence and writes nothing.],
       [`decide`], [The same verdict on the same card or ticket returns the occurrence and runs nothing, once it has moved on or while that approval still counts. A newly opened card is a new showing.],
       [`wake`], [Writes nothing when nothing is due; returns `NotDue(until)` with a future time or `NothingDue`.],
-      [`happened`], [Expires only what is still undecided, so a repeated event finds nothing more.],
+      [`happened`], [Supersedes only what has released nothing and has not been superseded, so a repeated event finds nothing more.],
+      [`expect`], [Records the expectation once; on a key that already holds a recommendation it does nothing.],
       [`inform`], [A second answer from the same point is `NotConsulting`.],
       [`withdraw`, `review`], [A second call is `NotHeld` or `NotEligible`.],
       [`resume`, `read`], [Write nothing.],
@@ -326,7 +327,7 @@
   )
   #subsection(title: "Hold and withdrawal")[
     #points(
-      [A point with a hold appends `held(until)` on acceptance instead of releasing. `with_hold` holds every acceptance; `with_policy_hold` holds only what the policy accepted on its own, an undo window on autonomous decisions. When the hold ends, `wake` runs the guard, the release check and the tool against the world as it is then and releases or ends `refused`; a refusal then never reaches the validator who approved, who was already answered.],
+      [A point with a hold appends `held(until)` on acceptance instead of releasing. The point's `with_hold` holds every acceptance. A policy outcome `Proceed(sample:, hold:)` that carries a hold is used instead for what the policy accepted by itself: an undo window on autonomous decisions, published as data with the policy version. A hold of zero or less is unpublishable (`NonPositiveHold`). When the hold ends, `wake` runs the guard, the release check and the tool against the world as it is then and releases or ends `refused`; a refusal then never reaches the validator who approved, who was already answered. A newer event declared with `superseded_by` supersedes a held occurrence: its wake-up is cancelled and nothing is released (#adr(49)).],
       [`withdraw(by:)` lets the decider take the output back while the store clock is before the hold's end. The decider is the validator whose verdict accepted it, or the person whose own act the policy let proceed; for an output the policy accepted from a model that is nobody. `withdraw_as(by: validator)` also admits a holder of the set the point names with `withdrawn_by` (`NotTheDecider` for anyone else). After the end both are refused with `NotHeld`, whether or not the wake-up was delivered (#adr(30)).],
     )
     #behavior(title: "A withdrawal after the hold ended is refused", area: "Release", level: "boundary")[
@@ -356,7 +357,7 @@
 
 #section(title: "The world: superseding and consulting", lead: "Events about a subject expire what waits for it, and a policy may ask another point first.", body: [
   #points(
-    [`happened(event, about:)` does nothing unless the point declares the event with `superseded_by`. It asks the port for the point's undecided occurrences about the subject, in ascending id order so every transaction locks them in one order, and expires each one that is still undecided. It returns the expired occurrences and, separately, each occurrence it could not read with why; an unreadable one does not stop the others. A held occurrence is accepted and is not superseded.],
+    [`happened(event, about:)` does nothing unless the point declares the event with `superseded_by`. It first loads the subject lock for the point and the subject, then asks the port for the point's records about the subject that have released nothing (pending, recommended, awaiting or held), in ascending id order so every transaction locks them in one order. It supersedes each: a record that has not begun (expected, or holding only failed attempts) is superseded before it began; an undecided occurrence expires, as deadline passed when it had already lapsed; a held occurrence expires and its hold's wake-up is cancelled, so nothing is released. A released occurrence is untouched. It returns `Supersession(expired, not_begun, unreadable)`; an unreadable record does not stop the others, and each superseded record admits one settlement notice (#adr(49), #adr(50)).],
     [A policy outcome `Consult(point)` records the answer and then calls the consult handler wired with `consulting`, in the same transaction, with a consultation: the point, the occurrence, its subject, its context and its recommendation. The handler recommends at the consulted point, whose gated tool calls `inform` on this occurrence in this transaction or a later one. A handler that fails is `ConsultFailed`.],
     [`inform(from:, facts:)` requires that the occurrence waits for exactly that point (`NotConsulting`), that every fact is declared with its type (`InvalidFacts`), and that it has not lapsed. It appends the answer and reads the policy current at that moment again with the new facts. A policy that would consult the same point twice falls to its default.],
   )
@@ -372,7 +373,7 @@
   #md-table(3, (
     [*Value*], [*Variants*], [*Meaning*],
     [`Policy`], [`Policy(version, rules, otherwise)`], [The first rule whose condition holds decides; `otherwise` decides when none does.],
-    [`Outcome`], [`Proceed(sample)`, `Ask(eligible)`, `Consult(point)`], [Proceed without a person, wait for verdicts, or ask another point first.],
+    [`Outcome`], [`Proceed(sample, hold)`, `Ask(eligible)`, `Consult(point)`], [Proceed without a person, optionally after a hold; wait for verdicts; or ask another point first. A hold is stored as `hold_ms`; absent means no hold.],
     [`Sample`], [`Never`, `PerCent(n)`], [Which proceeding occurrences wait for a review. `policy.is_sampled` hashes the occurrence id with SHA-256, so the share is uniform whatever the ids look like and a replay samples alike (#adr(32)).],
     [`Eligible`], [`AnyoneHolding(set)`, `SomeoneElseHolding(set)`, `Either(list)`, `Several(count, of)`], [Who may give the verdict, and how many approvals it needs; `policy.approvals(Either)` is the fewest any alternative needs.],
     [`Condition`], [`OwnAct`, `Below`, `AtLeast`, `Is`, `Known`, `All`, `AnyOf`, `Not`], [Over the recommender and named facts.],
@@ -382,7 +383,7 @@
     [A condition over an absent fact is unknown, stays unknown under `Not`, and never matches, so what is unknown never proceeds. `All` is false when any part is false and unknown when any part is unknown; `AnyOf` is true when any part is true.],
     [The facts a policy reads are the output's declared facts, the recommender's signals, what consulted points returned, and `waited_minutes`, the whole minutes since the recommendation. A rule over the time waited makes the policy change its answer as the occurrence waits: escalation to a second set, expiry by validity, and "proceed if nobody objects within the hour".],
     [When the desk applies a policy it computes the timeline: the answer now and each later answer at every threshold of the time waited the rules name. The steps are kept on the `policy_applied` entry. A wake-up applies the next step without reading the policy again, so an occurrence keeps the version it was given while it waits. A consulted point's answer is the one moment the policy is read again, and then the version current at that moment applies. Every `policy_applied` entry records the version that gave its answer.],
-    [Publishing a version is a write wherever the application keeps it; the desk reads it through its policy function in the caller's transaction. `publishable(point, policy)` lists every fault: an undeclared fact, a fact compared as the wrong type, fewer than one approval, a `Several` inside another `Several` (an inner count would be ignored), an `Either` with no alternative (the occurrence would wait in no queue), a sample outside 0 to 100. The desk checks it again on every read and refuses with `Unpublishable`.],
+    [Publishing a version is a write wherever the application keeps it; the desk reads it through its policy function in the caller's transaction. `publishable(point, policy)` lists every fault: an undeclared fact, a fact compared as the wrong type, fewer than one approval, a `Several` inside another `Several` (an inner count would be ignored), a hold of zero or less on `Proceed` (`NonPositiveHold`), an `Either` with no alternative (the occurrence would wait in no queue), a sample outside 0 to 100. The desk checks it again on every read and refuses with `Unpublishable`.],
     [#adr(13) records why the policy is data rather than code, and why it is checked against the point's #term("term-declared-fact") list.],
     [A policy is plain data. `to_json` and `decoder` round-trip it, and a policy read back is equal to the one written: `Never` is stored as a null sample and `PerCent(0)` as zero.],
     [Typed fact keys (`fact.number`, `fact.text`, `fact.flag`) carry a fact's name and type. A policy written in Gleam with `policy.below`, `policy.at_least`, `policy.is` and `policy.known` uses the key the point declared, so a misspelt name or a number rule on a text fact does not compile.],

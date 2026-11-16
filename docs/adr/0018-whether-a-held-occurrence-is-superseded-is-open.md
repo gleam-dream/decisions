@@ -17,3 +17,7 @@
 
 - Core review of 2026-11-15, correction C15: document that a held occurrence is not superseded and ask the owner, without changing the behavior.
 - `src/decisions.gleam`, `superseded_by` and `happened`; `test/corrections_test.gleam`, `c15_documented_behaviour_holds_test`. Pending ruling in the record context.
+
+## Note, 2026-11-16
+
+- Decided by the owner: a held occurrence is superseded. See [ADR-0049](0049-a-held-occurrence-is-superseded.md#adr-0049).
