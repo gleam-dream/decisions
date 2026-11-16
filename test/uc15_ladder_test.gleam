@@ -34,7 +34,7 @@ fn truth(n: Int) -> String {
 }
 
 fn version(number: Int) -> Policy {
-  let own = When(OwnAct, Proceed(Never))
+  let own = When(OwnAct, Proceed(Never, None))
   let finance = AnyoneHolding("finance")
   case number {
     // 1. Cold start: there is no model. A person's own act proceeds.
@@ -47,7 +47,10 @@ fn version(number: Int) -> Policy {
         version: 3,
         rules: [
           own,
-          When(policy.at_least(classify.score(), 0.9), Proceed(PerCent(10))),
+          When(
+            policy.at_least(classify.score(), 0.9),
+            Proceed(PerCent(10), None),
+          ),
         ],
         otherwise: Ask(finance),
       )

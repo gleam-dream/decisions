@@ -15,7 +15,9 @@ import decisions/vocabulary.{
 }
 import decisions_usage/clinic.{type Refund, Refund}
 import gleam/json
+import gleam/option.{None, Some}
 import gleam/result
+import gleam/time/duration
 
 /// The classifier's confidence, reported beside its output.
 pub fn confidence() -> fact.Key(Float) {
@@ -36,7 +38,7 @@ pub fn point() -> decisions.Point(Refund) {
 pub fn assisted() -> Policy {
   Policy(
     version: 1,
-    rules: [When(OwnAct, Proceed(Never))],
+    rules: [When(OwnAct, Proceed(Never, None))],
     otherwise: Ask(AnyoneHolding("finance")),
   )
 }
@@ -47,13 +49,33 @@ pub fn confident() -> Policy {
   Policy(
     version: 2,
     rules: [
-      When(OwnAct, Proceed(Never)),
+      When(OwnAct, Proceed(Never, None)),
       When(
         policy.All([
           policy.at_least(confidence(), 0.95),
           policy.below(clinic.amount(), 100.0),
         ]),
-        Proceed(PerCent(10)),
+        Proceed(PerCent(10), None),
+      ),
+    ],
+    otherwise: Ask(AnyoneHolding("finance")),
+  )
+}
+
+/// Rung 3: the same refunds proceed with a thirty-minute undo window
+/// instead of a sample: each is held, and released when the window ends
+/// unless finance withdraws it first.
+pub fn undoable() -> Policy {
+  Policy(
+    version: 3,
+    rules: [
+      When(OwnAct, Proceed(Never, None)),
+      When(
+        policy.All([
+          policy.at_least(confidence(), 0.95),
+          policy.below(clinic.amount(), 100.0),
+        ]),
+        Proceed(Never, Some(duration.minutes(30))),
       ),
     ],
     otherwise: Ask(AnyoneHolding("finance")),
@@ -136,14 +158,16 @@ pub fn run() -> List(String) {
   let second = status(arrive(store, "fee-2", 8000, 0.99))
   let third = status(arrive(store, "fee-3", 8000, 0.6))
   let fourth = status(arrive(store, "fee-4", 90_000, 0.99))
+  let assert Ok(Nil) = publish(store, undoable())
+  let fifth = status(arrive(store, "fee-5", 8000, 0.99))
   // A version that reads a misspelt fact is never stored.
   let typo =
-    Policy(..confident(), version: 3, rules: [
-      When(policy.AtLeast("confidense", 0.9), Proceed(Never)),
+    Policy(..confident(), version: 4, rules: [
+      When(policy.AtLeast("confidense", 0.9), Proceed(Never, None)),
     ])
   let refused = case publish(store, typo) {
     Error([policy.UndeclaredFact("confidense")]) -> "refused"
     _ -> "published"
   }
-  [first, second, third, fourth, refused]
+  [first, second, third, fourth, fifth, refused]
 }

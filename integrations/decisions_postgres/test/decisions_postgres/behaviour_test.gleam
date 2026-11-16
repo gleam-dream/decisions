@@ -156,10 +156,25 @@ pub fn a_verdict_after_the_deadline_is_refused_before_any_wake_up_test() {
   kit.check(env, [desk])
 }
 
-/// The application's port reads a store clock two seconds behind the
-/// database's, which Grind delivers by. The hold's job arrives early; the
-/// wake-up says when to come back, the worker reschedules it, and the hold
-/// is released once, at its time.
+type Offset
+
+@external(erlang, "kit_ffi", "offset_new")
+fn offset_new() -> Offset
+
+@external(erlang, "kit_ffi", "offset_get")
+fn offset_get(offset: Offset) -> Int
+
+@external(erlang, "kit_ffi", "offset_add")
+fn offset_add(offset: Offset, ms: Int) -> Nil
+
+/// The application's port reads a store clock behind the database's,
+/// which Grind delivers by. The hold's job arrives before the hold ends on
+/// the store's clock: the wake-up says when to come back, the worker
+/// reschedules it by the time left on that clock, and once the store's
+/// clock reaches the hold's end the wake-up releases it once.
+///
+/// The store's clock is ten minutes behind until the test moves it, so
+/// every delivery before that is early by construction.
 pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
   let #(name, store) = kit.store()
   let spec =
@@ -169,44 +184,53 @@ pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
       hold: Some(duration.milliseconds(300)),
     )
   let base = decisions_postgres.port(store)
-  let behind =
+  let behind = offset_new()
+  offset_add(behind, -600_000)
+  let skewed =
     store.Port(..base, now: fn(tx) {
-      timestamp.add(base.now(tx), duration.seconds(-2))
+      timestamp.add(base.now(tx), duration.milliseconds(offset_get(behind)))
     })
-  let desk = kit.desk_over(behind, spec)
+  let desk = kit.desk_over(skewed, spec)
   let rescheduled = process.new_subject()
   let watch =
     sinal.observe(telemetry.wake_rescheduled(), fn(_, early) {
       case early.point == spec.name {
-        True -> process.send(rescheduled, early.occurrence)
+        True -> process.send(rescheduled, early)
         False -> Nil
       }
     })
-  use env <- kit.run(name, store, kit.delivering(), [decisions.waker(desk)], [])
+  let wakers = [decisions.waker(desk)]
+  use env <- kit.run(name, store, kit.delivering(), wakers, [])
   let assert Ok(held) =
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
-  let assert True =
-    kit.eventually(10_000, fn() { kit.effects_of(env.db, held.id) == 1 })
-  let _ = sinal.detach(watch)
-  // The early delivery was rescheduled before the one that released it.
+  let assert occurrence.Held(until:, ..) = held.status
+  // The wake-up is due on the database's clock (ten minutes past), so its
+  // delivery now, through the worker's code path, comes before the hold's
+  // end on the store's clock: it is rescheduled, and nothing is released.
+  // (Grind's own delivery of the job, whenever it comes, is early in the
+  // same way and is snoozed.)
+  let assert Ok(0) =
+    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
   let assert Ok(early) = process.receive(rescheduled, 5000)
-  assert early == held.id
+  let _ = sinal.detach(watch)
+  assert early.occurrence == held.id
+  assert early.until_ms == wire.milliseconds(until)
+  assert kit.effects_of(env.db, held.id) == 0
+  // The store's clock catches up; the wake-up, delivered now through the
+  // worker's code path, releases it once.
+  offset_add(behind, 600_000)
+  kit.wait_for_store_clock(env, until)
+  let assert Ok(1) =
+    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
+  assert kit.effects_of(env.db, held.id) == 1
   let assert Ok(known) =
     kit.tx(env, decisions.read(desk, _, occurrence: held.id))
   let assert occurrence.Released(..) = known.status
-  // Released no earlier than its hold's end by the store's own clock.
   let assert Ok(last) = list.last(known.entries)
-  let assert Ok(hold) =
-    list.find_map(known.entries, fn(e) {
-      case e.event {
-        entry.Held(until:) -> Ok(until)
-        _ -> Error(Nil)
-      }
-    })
-  assert timestamp.compare(last.at, hold) != order.Lt
-  // Once Grind acknowledged the job, nothing else delivers it.
-  let assert [#("succeeded", _)] = kit.finished_jobs(env, "decisions.wake")
-  assert kit.effects_of(env.db, held.id) == 1
+  assert timestamp.compare(last.at, until) != order.Lt
+  // The snoozed job, when it comes back, finds nothing pending.
+  let assert Ok(0) =
+    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
   kit.check(env, [desk])
 }
 
@@ -284,6 +308,9 @@ pub fn a_verb_that_waited_for_the_lock_is_stamped_after_it_test() {
 /// a store that is unavailable.
 pub fn the_transaction_helper_classifies_failures_test() {
   let #(name, store) = kit.store()
+  // The store's own lock timeout, short, ends the wait below.
+  let store =
+    decisions_postgres.with_lock_timeout(store, Some(duration.milliseconds(50)))
   let spec = kit.spec("helper")
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
@@ -322,7 +349,7 @@ pub fn the_transaction_helper_classifies_failures_test() {
   let assert Ok(waiting) =
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
   let holder = process.new_subject()
-  process.spawn(fn() {
+  process.spawn_unlinked(fn() {
     pog.transaction(env.db, fn(tx) {
       let _ = port.load(tx, waiting.id)
       let release = process.new_subject()
@@ -334,11 +361,7 @@ pub fn the_transaction_helper_classifies_failures_test() {
   })
   let assert Ok(release) = process.receive(holder, 5000)
   let assert Error(Contended(detail)) =
-    kit.tx(env, fn(tx) {
-      let assert Ok(_) =
-        pog.query("SET LOCAL lock_timeout = '50ms'") |> pog.execute(tx)
-      decisions.read(desk, tx, occurrence: waiting.id)
-    })
+    kit.tx(env, fn(tx) { decisions.read(desk, tx, occurrence: waiting.id) })
   assert string.contains(detail, "55P03")
   process.send(release, Nil)
 }

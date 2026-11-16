@@ -66,7 +66,7 @@ pub fn waiting_reads_the_statuses_the_core_calls_waiting_test() {
   let waiting =
     list.filter(store.statuses, store.is_waiting)
     |> list.map(store.status_name)
-  assert waiting == ["recommended", "awaiting"]
+  assert waiting == ["pending", "recommended", "awaiting", "held"]
 }
 
 pub fn migrate_again_and_at_once_applies_each_step_once_test() {

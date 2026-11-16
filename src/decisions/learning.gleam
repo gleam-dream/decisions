@@ -28,8 +28,8 @@ import decisions/model.{type Failure, type Model, type Resolver}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{type Outcome, type Policy}
 import decisions/vocabulary.{
-  type Explanation, type Manifest, type Recommender, type Ref, type Verdict,
-  Approve, Correct, Person, Ref, Reject, Right, Wrong,
+  type Explanation, type Manifest, type Recommendation, type Recommender,
+  type Ref, type Verdict, Approve, Correct, Person, Ref, Reject, Right, Wrong,
 }
 import decisions/wire.{type Codec}
 import gleam/json.{type Json}
@@ -76,9 +76,11 @@ pub const nothing =
 /// it in `rejected` instead, so neither figure hides it. Not judged and
 /// not counted at all: an output the policy accepted with no verdict and
 /// no review; a partial quorum that expired (approvals that never reached
-/// acceptance are not a judgment); and a withdrawn occurrence (the decider
+/// acceptance are not a judgment); a withdrawn occurrence (the decider
 /// took it back during its hold, which says they changed their mind, not
-/// what the right output was). Each assessment counts toward accuracy.
+/// what the right output was); and an acceptance a newer event superseded
+/// before its release, for the same reason as a withdrawal: the world
+/// moved on, which says nothing about whether the output was right. Each assessment counts toward accuracy.
 pub fn tally(occurrences: List(Occurrence(o))) -> List(#(Recommender, Tally)) {
   list.fold(occurrences, [], fn(tallies, known) {
     let by = known.recommendation.by
@@ -355,6 +357,76 @@ pub fn answer_under(
       known.informed,
     ])
   policy.timeline(candidate, known.recommendation.by, facts, waited: 0).0
+}
+
+/// What `policy` would say about a candidate model's answer on a recorded
+/// example: the candidate runs on the example's recorded sources (as in
+/// `replay`), and its recommendation is evaluated as `answer_under`
+/// evaluates the recorded one, with the facts consulted points returned.
+/// Returns the candidate's recommendation with the policy's answer, or why
+/// the candidate could not answer from the record.
+pub fn candidate_under(
+  example: Example(o),
+  candidate candidate: Model(o),
+  policy policy_version: Policy,
+  point point: Point(o),
+) -> Result(#(Recommendation(o), Outcome), Failure) {
+  let known = example.known
+  use recommendation <- result.map(model.run(
+    candidate,
+    known.context,
+    sources(example),
+  ))
+  let facts =
+    list.flatten([
+      decisions.facts_of(point, recommendation.output),
+      recommendation.signals,
+      known.informed,
+    ])
+  #(
+    recommendation,
+    policy.timeline(policy_version, recommendation.by, facts, waited: 0).0,
+  )
+}
+
+/// How triggers fared before a recommendation, for coverage: of the
+/// records read, how many began with an expectation (`decisions.expect`),
+/// how many of those a newer event superseded before anything was
+/// recommended, and how many are still expected with nothing recommended
+/// (work in flight, or a worker that died for good).
+pub type Coverage {
+  Coverage(expected: Int, superseded_before: Int, still_expected: Int)
+}
+
+/// Count `Coverage` over records read with `decisions.read_record`.
+pub fn coverage(records: List(decisions.Record(o))) -> Coverage {
+  list.fold(records, Coverage(0, 0, 0), fn(sum, record) {
+    case record {
+      decisions.Begun(known) ->
+        case occurrence.was_expected(known) {
+          True -> Coverage(..sum, expected: sum.expected + 1)
+          False -> sum
+        }
+      decisions.NotBegun(pending) ->
+        case pending.expected, pending.superseded {
+          True, Some(_) ->
+            Coverage(
+              ..sum,
+              expected: sum.expected + 1,
+              superseded_before: sum.superseded_before + 1,
+            )
+          True, None ->
+            Coverage(
+              ..sum,
+              expected: sum.expected + 1,
+              still_expected: sum.still_expected + 1,
+            )
+          False, Some(_) ->
+            Coverage(..sum, superseded_before: sum.superseded_before + 1)
+          False, None -> sum
+        }
+    }
+  })
 }
 
 /// Add up replays that ran apart, keeping their order.

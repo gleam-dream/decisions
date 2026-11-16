@@ -53,8 +53,9 @@ pub fn describe(error: pog.QueryError) -> String {
 ///
 /// - an integrity violation (SQLSTATE class 23: a key, the gap constraint,
 ///   the one-release index, the kind check, the append-only trigger) is
-///   the database refusing a write that breaks the record's rules:
-///   `Conflict`;
+///   the database refusing a write that breaks the record's rules, and a
+///   transaction at another isolation level than READ COMMITTED (25000,
+///   raised by `decisions_load`) breaks the port's contract: `Conflict`;
 /// - a deadlock (`40P01`), a serialization failure (`40001`) or a lock
 ///   wait that timed out (`55P03`) wrote nothing: `Contended`;
 /// - everything else, a lost connection or a query timeout among them, is
@@ -63,6 +64,8 @@ pub fn store_error(error: pog.QueryError) -> StoreError {
   case error {
     pog.ConstraintViolated(..) -> Conflict(describe(error))
     pog.PostgresqlError(code: "23" <> _, ..) -> Conflict(describe(error))
+    // `decisions_load` refuses a transaction that is not READ COMMITTED.
+    pog.PostgresqlError(code: "25000", ..) -> Conflict(describe(error))
     pog.PostgresqlError(code: "40P01", ..)
     | pog.PostgresqlError(code: "40001", ..)
     | pog.PostgresqlError(code: "55P03", ..) -> Contended(describe(error))

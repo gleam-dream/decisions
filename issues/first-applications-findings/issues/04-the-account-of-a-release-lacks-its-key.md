@@ -1,6 +1,6 @@
 # `occurrence.account` does not carry the release key
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -27,3 +27,7 @@ Changing the release key's form (`release:` and the occurrence id).
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. `occurrence.Account.Done(final, key, effect)` carries the release key. Code: `/code/gleam-dream/decisions/src/decisions/occurrence.gleam`, `Account`.

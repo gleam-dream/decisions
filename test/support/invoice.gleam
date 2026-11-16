@@ -15,6 +15,7 @@ import decisions/vocabulary.{
 import decisions/wire.{type Codec}
 import gleam/int
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import json/blueprint/codec
 import support/world.{type World}
@@ -77,7 +78,7 @@ pub fn desk() -> Desk(Invoice, Memory) {
     under: fn(_) {
       Ok(Policy(
         version: 1,
-        rules: [When(OwnAct, Proceed(Never))],
+        rules: [When(OwnAct, Proceed(Never, None))],
         otherwise: Ask(AnyoneHolding("operators")),
       ))
     },

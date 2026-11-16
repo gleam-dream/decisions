@@ -21,7 +21,8 @@
 //// **Locks.** `load`, `append`, `schedule` and taking a wake-up lock the
 //// occurrence's id until the transaction ends, **whether or not the
 //// occurrence exists yet**: a second transaction that asks for the same
-//// lock waits. A wait that would close a cycle of transactions waiting for
+//// lock waits. The core's subject lock (`decisions.subject_lock`) is such
+//// an id: it never holds entries and leaves no row. A wait that would close a cycle of transactions waiting for
 //// each other is refused at once with `Contended("deadlock ...")`; a wait
 //// longer than the configured `lock_timeout` is refused with
 //// `Contended("lock wait ...")`. Either way nothing was written; the
@@ -778,7 +779,7 @@ fn is_settled(status: port_types.Status) -> Bool {
     | port_types.Expired
     | port_types.Withdrawn
     | port_types.Refused -> True
-    port_types.Attempted
+    port_types.Pending
     | port_types.Recommended
     | port_types.Awaiting
     | port_types.Accepted

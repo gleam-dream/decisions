@@ -22,6 +22,10 @@
 //// validator for each output that stands, and a correction starts a new
 //// round that its author belongs to.
 ////
+//// A record that has not begun (expected, or holding only failed attempts)
+//// needs no wake-up and no notice; once a newer event superseded it, it is
+//// settled: no wake-up, exactly one notice, head status `Expired`.
+////
 //// ```gleam
 //// import decisions/testing
 ////
@@ -98,9 +102,9 @@ fn build(
 ) -> Audit(tx) {
   let point = decisions.name(decisions.point_of(desk))
   Audit(point:, effects:, read: fn(tx, id) {
-    case decisions.read(desk, tx, occurrence: id) {
-      Ok(known) -> Ok(Some(see(known)))
-      Error(decisions.NotRecommended(_)) -> Ok(None)
+    case decisions.read_record(desk, tx, key: id) {
+      Ok(decisions.Begun(known)) -> Ok(Some(see(known)))
+      Ok(decisions.NotBegun(pending)) -> Ok(Some(see_pending(pending)))
       Error(refusal) -> Error(decisions.describe(refusal))
     }
   })
@@ -243,6 +247,22 @@ fn stored(
     ]
   }
   list.flatten([i5, i6, i8])
+}
+
+/// A record that has not begun: it needs no wake-up; once superseded it is
+/// settled and has exactly one settlement notice; its head is
+/// `occurrence.pending_head`.
+fn see_pending(pending: occurrence.Pending) -> Seen {
+  let head = occurrence.pending_head(pending)
+  Seen(
+    id: pending.id,
+    status: store.status_name(head.status),
+    settled: pending.superseded != None,
+    released: False,
+    head:,
+    must_wake: [],
+    violations: [],
+  )
 }
 
 /// I1, I2, I3, I4 and I7, from the record alone.

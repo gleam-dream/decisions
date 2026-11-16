@@ -1,6 +1,6 @@
 # A lone worker can loop on a trigger that must be delivered again
 
-Status: needs-triage
+Status: done
 Category: bug
 
 AI-assisted contribution.
@@ -27,3 +27,7 @@ Changing the handling classification (ADR 0039).
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. A lone worker no longer loops on a trigger that keeps ending `Redeliver`: it leaves the trigger out of its looks for a time and works the others. Test: `/code/gleam-dream/decisions/integrations/decisions_otp/test/owner_round_test.gleam`, `a_lone_worker_does_not_loop_on_a_redelivered_trigger_test`.

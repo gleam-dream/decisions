@@ -280,6 +280,45 @@ pub fn occurrences_of(
   |> rows(db)
 }
 
+/// The records of `point` that have stayed pending: a trigger was
+/// expected (`decisions.expect`) or only failed attempts are recorded, and
+/// no recommendation has arrived. The oldest first, so "which triggers are
+/// still expected, and since when" is this one query: each `Summary`'s
+/// `arrived` is when the record began. `after` is the last record of the
+/// previous page, or `None` for the first. A pending record is never in a
+/// validator's queue (`page`, `page_at`): it waits for no verdict.
+/// `counts` reports them under `store.Pending`.
+///
+/// Index: `decisions_occurrences_pending (point, arrived, id) WHERE status
+/// = 'pending'`; a page reads from its cursor.
+pub fn pending(
+  db: pog.Connection,
+  point point: String,
+  limit limit: Int,
+  after after: Option(Summary),
+) -> Result(List(Summary), pog.QueryError) {
+  let #(start, arrived, id) = case after {
+    None -> #(True, timestamp.unix_epoch, "")
+    Some(last) -> #(False, last.arrived, last.occurrence)
+  }
+  pog.query(
+    "SELECT id, point, status, decisions_ms(arrived), decisions_ms(due)
+     FROM decisions_occurrences
+     WHERE point = $1 AND status = 'pending'
+       AND (arrived, id) > (
+         CASE WHEN $2 THEN '-infinity'::timestamptz ELSE decisions_at($3) END,
+         CASE WHEN $2 THEN '' ELSE $4::text END COLLATE \"C\")
+     ORDER BY arrived, id LIMIT $5",
+  )
+  |> pog.parameter(pog.text(point))
+  |> pog.parameter(pog.bool(start))
+  |> pog.parameter(sql.at(arrived))
+  |> pog.parameter(pog.text(id))
+  |> pog.parameter(pog.int(limit))
+  |> pog.returning(summary_decoder())
+  |> rows(db)
+}
+
 /// An occurrence that settled, and when its settlement was recorded.
 pub type Settlement {
   Settlement(

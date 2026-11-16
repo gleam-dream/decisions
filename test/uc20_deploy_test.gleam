@@ -12,6 +12,7 @@ import decisions/vocabulary.{
 }
 import decisions/wire
 import gleam/int
+import gleam/option.{None}
 import gleam/time/duration
 import json/blueprint/codec
 import support/world.{type World}
@@ -56,7 +57,7 @@ fn point() -> Point(Promotion) {
 fn policy() {
   Policy(
     version: 1,
-    rules: [When(policy.is(environment(), "staging"), Proceed(Never))],
+    rules: [When(policy.is(environment(), "staging"), Proceed(Never, None))],
     otherwise: Ask(AnyoneHolding("release-managers")),
   )
 }
@@ -164,7 +165,11 @@ pub fn production_asks_and_an_incident_during_the_canary_stops_it_test() {
 pub fn a_newer_build_supersedes_a_promotion_that_still_waits_test() {
   let w = world.new()
   let old = build_passed(w, 812, "production")
-  let assert Ok(decisions.Supersession(expired: [superseded], unreadable: [])) =
+  let assert Ok(decisions.Supersession(
+    expired: [superseded],
+    not_begun: [],
+    unreadable: [],
+  )) =
     world.in_tx(w, decisions.happened(
       desk(),
       _,

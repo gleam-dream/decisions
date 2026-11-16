@@ -4,6 +4,7 @@ import decisions/view.{Item}
 import decisions/vocabulary.{Ref}
 import decisions_usage/autonomy_ladder
 import decisions_usage/card_document
+import decisions_usage/expect_then_recommend
 import decisions_usage/first_point
 import decisions_usage/four_eyes
 import decisions_usage/provider_effect
@@ -25,7 +26,7 @@ pub fn a_first_point_is_released_once_test() {
 
 pub fn the_ladder_climbs_by_publishing_policies_test() {
   assert autonomy_ladder.run()
-    == ["awaiting", "released", "awaiting", "awaiting", "refused"]
+    == ["awaiting", "released", "awaiting", "awaiting", "held", "refused"]
 }
 
 pub fn a_ticket_carries_a_card_across_requests_test() {
@@ -78,6 +79,10 @@ pub fn a_new_model_is_scored_on_recorded_decisions_test() {
 
 pub fn either_alternatives_are_judged_on_the_approvals_test() {
   assert two_or_one_senior.run() == ["awaiting", "released", "released"]
+}
+
+pub fn a_late_recommendation_for_a_superseded_line_is_dropped_test() {
+  assert expect_then_recommend.run() == #(Ok(["refund:fee-7"]), decisions.Drop)
 }
 
 pub fn finance_may_take_back_what_the_policy_let_proceed_test() {

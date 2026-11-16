@@ -1,6 +1,6 @@
 # Decide whether the policy hold belongs inside `Proceed`
 
-Status: ready-for-human
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -26,3 +26,7 @@ Implementing the change before the ruling.
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. The owner decided: the undo window lives in the policy outcome, `Proceed(sample:, hold:)`, and `with_policy_hold` is removed. Recorded in ADR 0048, which settles ADR 0030's open point.

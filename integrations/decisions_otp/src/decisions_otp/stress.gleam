@@ -14,6 +14,9 @@
 //// | A2 | sixteen validators drain a queue: each occurrence is decided once and nobody blocks |
 //// | A3 | a withdrawal, a wake-up and the clock passing the hold race: each trial ends withdrawn with no send or released with one, and both endings occur |
 //// | A4 | a random walk of eight processes over fifty occurrences: every invariant, and every earlier record is a prefix of the later |
+//// | held superseded | a held occurrence whose hold has ended, raced by its wake-up and a superseding event: each trial ends released (the wake-up came first) or superseded with nothing released, never both |
+//// | admissions | eight transactions about one subject, each `happened` then `expect` of its own key, all open before any commits: the subject lock orders them, so exactly one key is left pending, every other key was superseded before it began, and the lock's id holds nothing |
+//// | expect | a key expected with `decisions.expect`, raced by a slow model's recommendation and a superseding event: never a stale occurrence left waiting; the same sequence without `expect` leaves one, which is why the verb exists |
 //// | one key | concurrent `recommend_once` on one key: one occurrence, one effect |
 //// | clauses | a load of an absent or present id waits for the transaction that holds it (seen positively: the load returns after the holder is let go); uncommitted writes, wake-ups and notices are invisible, and a commit appears to a racing reader all at once; a process killed inside a transaction or a savepoint leaves nothing and releases its lock; concurrent `happened` and `decide` do not deadlock; wake-ups and notices survive a store restart, and so does every commit acknowledged while four processes commit through the restart; `now` is the wall clock at the moment of the call, so a transaction that stays open sees time move; `schedule` leaves alone a wake-up a delivery already took |
 //// | B1 | a worker killed during the model, and after the commit before acknowledging: one occurrence per trigger |
@@ -176,6 +179,15 @@ pub fn scenarios() -> List(Scenario(tx)) {
     Scenario("A2 sixteen validators drain a queue", a2),
     Scenario("A3 a withdrawal races the hold's end", a3),
     Scenario("A4 a random walk keeps every invariant", a4),
+    Scenario(
+      "a held occurrence superseded under a race releases nothing",
+      held_superseded,
+    ),
+    Scenario("expect closes the superseding window", expect_closes_window),
+    Scenario(
+      "concurrent admissions about one subject leave one key pending",
+      admissions,
+    ),
     Scenario("recommend_once on one key from many processes", one_key),
     Scenario("a load of an absent id waits for the holder", absent_waits),
     Scenario("a load of a present id waits for the holder", present_waits),
@@ -380,7 +392,7 @@ fn asking(set: String) -> Policy {
 }
 
 fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never))
+  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
 }
 
 /// A desk whose gated tool adds `key=output` to the table named after
@@ -894,6 +906,323 @@ fn load_snapshot(
   id: String,
 ) -> Result(#(String, List(Stored)), String) {
   load_entries(target, id) |> result.map(fn(entries) { #(id, entries) })
+}
+
+// -- Superseding -----------------------------------------------------------------------
+
+/// A held reply whose hold has ended; its wake-up and a superseding
+/// event about its subject race. Either the wake-up came first and the
+/// reply was released, once, or the event came first and the reply
+/// expired superseded, with nothing released and no wake-up left.
+fn held_superseded(target: Target(tx), load: Load) -> Result(Nil, String) {
+  let desk =
+    desk(
+      target,
+      point(unique(target, "held"), Some(duration.minutes(2))),
+      proceeding(),
+    )
+  use _endings <- result.try(
+    list.try_map(numbers(1, load.a3_trials), fn(trial) {
+      let key = unique(target, "held-" <> int.to_string(trial))
+      let about = Subject("person", key)
+      use held <- result.try(
+        within(target, recommend(
+          desk,
+          _,
+          key,
+          about:,
+          output: "Olá",
+          by: Person("bia"),
+          score: 1.0,
+        ))
+        |> result.map_error(said),
+      )
+      use Nil <- result.try(case held.status {
+        occurrence.Held(..) -> Ok(Nil)
+        other -> Error("expected held, found " <> occurrence.status_name(other))
+      })
+      target.advance(duration.minutes(3))
+      let raced =
+        race([0, 1], fn(n) {
+          case n {
+            0 ->
+              within(target, decisions.wake(desk, _, occurrence: key))
+              |> result.replace(Nil)
+            _ ->
+              within(target, decisions.happened(desk, _, "superseded", about:))
+              |> result.replace(Nil)
+          }
+        })
+      use Nil <- result.try(
+        list.try_each(raced, fn(outcome) {
+          case outcome {
+            Error(StoreSaid(reason)) -> Error("the store said " <> reason)
+            _ -> Ok(Nil)
+          }
+        }),
+      )
+      // What the sweeper would deliver after the race.
+      let _ = within(target, decisions.wake(desk, _, occurrence: key))
+      use final <- result.try(read(target, desk, key))
+      use rows <- result.try(effects(target, desk))
+      let sent =
+        list.count(rows, fn(row) { string.starts_with(row, decisions_key(key)) })
+      case final.status, sent {
+        occurrence.Released(..), 1 -> Ok("released")
+        occurrence.Expired(vocabulary.Superseded(_)), 0 -> Ok("superseded")
+        other, _ ->
+          Error(
+            key
+            <> " ended "
+            <> occurrence.status_name(other)
+            <> " with "
+            <> int.to_string(sent)
+            <> " sends",
+          )
+      }
+    }),
+  )
+  invariants(target, [desk])
+}
+
+/// A trigger's key is expected; a slow model's recommendation and a
+/// superseding event about the subject race. With `expect`, whichever
+/// comes first, nothing stale is left waiting: the recommendation came
+/// first and the event expired it, or the event came first and the late
+/// recommendation was refused with `SupersededBefore`. Then the same
+/// sequence without `expect`, the event first: the late recommendation
+/// waits although a newer event superseded its subject. That is the
+/// window `expect` closes.
+fn expect_closes_window(target: Target(tx), load: Load) -> Result(Nil, String) {
+  let desk =
+    desk(target, point(unique(target, "expected"), None), asking("finance"))
+  let name = decisions.name(decisions.point_of(desk))
+  use Nil <- result.try(
+    list.try_each(numbers(1, int.max(4, load.a1_trials)), fn(trial) {
+      let key = unique(target, "expected-" <> int.to_string(trial))
+      let about = Subject("person", key)
+      use Nil <- result.try(
+        within(target, decisions.expect(
+          desk,
+          _,
+          key:,
+          trigger: Trigger("stress", key),
+          about:,
+        ))
+        |> result.map_error(said),
+      )
+      let raced =
+        race([0, 1], fn(n) {
+          case n {
+            0 -> {
+              // The slow model.
+              process.sleep(int.random(4))
+              within(target, recommend(
+                desk,
+                _,
+                key,
+                about:,
+                output: "late",
+                by: Rules("rules", "1"),
+                score: 0.5,
+              ))
+              |> result.replace(Nil)
+            }
+            _ ->
+              within(target, decisions.happened(desk, _, "superseded", about:))
+              |> result.replace(Nil)
+          }
+        })
+      use Nil <- result.try(
+        list.try_each(raced, fn(outcome) {
+          case outcome {
+            Ok(Nil) | Error(Refused(decisions.SupersededBefore(_))) -> Ok(Nil)
+            Error(other) -> Error("a racer was told " <> said(other))
+          }
+        }),
+      )
+      use waiting <- result.try(
+        target.adapter.port.waiting(target.adapter.handle, name, about)
+        |> store_text,
+      )
+      expect(
+        waiting == [],
+        "with expect, a stale occurrence waits: " <> string.inspect(waiting),
+      )
+    }),
+  )
+  // Without `expect`: the event first, then the slow model's answer.
+  let key = unique(target, "unexpected")
+  let about = Subject("person", key)
+  use _ <- result.try(
+    within(target, decisions.happened(desk, _, "superseded", about:))
+    |> result.map_error(said),
+  )
+  use _ <- result.try(
+    within(target, recommend(
+      desk,
+      _,
+      key,
+      about:,
+      output: "stale",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  use waiting <- result.try(
+    target.adapter.port.waiting(target.adapter.handle, name, about)
+    |> store_text,
+  )
+  use Nil <- result.try(expect(
+    waiting == [key],
+    "without expect, the window should leave the late occurrence waiting; found "
+      <> string.inspect(waiting),
+  ))
+  invariants(target, [desk])
+}
+
+/// Eight admissions about one subject of one point, each one transaction
+/// of `happened` then `expect` of its own key. Every transaction is open
+/// before any of them goes on (a barrier inside the transactions), so
+/// they meet at the subject lock `happened` takes. Afterwards exactly one
+/// key is pending; every other key was reported in a later admission's
+/// `not_begun`, and its `recommend_once` is refused with
+/// `SupersededBefore`. An admission refused as `Contended` is tried again;
+/// any other failure fails the scenario. The lock's id holds no entries
+/// and is in neither `waiting` nor the heads.
+fn admissions(target: Target(tx), _load: Load) -> Result(Nil, String) {
+  let desk =
+    desk(target, point(unique(target, "admitted"), None), asking("finance"))
+  let name = decisions.name(decisions.point_of(desk))
+  let about = Subject("person", unique(target, "admitted"))
+  let keys =
+    list.map(numbers(1, 8), fn(n) {
+      unique(target, "admit-" <> int.to_string(n))
+    })
+  // The barrier: each admission opens its transaction and reports in; a
+  // releaser lets them all go only once every one has reported in, so all
+  // the transactions are open before any of them commits.
+  let ready = process.new_subject()
+  process.spawn(fn() {
+    let arrived = process.new_subject()
+    process.send(ready, arrived)
+    let gates =
+      list.filter_map(keys, fn(_) { process.receive(arrived, 60_000) })
+    list.each(gates, process.send(_, Nil))
+  })
+  use arrived <- result.try(
+    process.receive(ready, 5000) |> result.replace_error("no releaser"),
+  )
+  let admitted =
+    race(keys, fn(key) { admit(target, desk, about, key, Some(arrived), 0) })
+  use not_begun <- result.try(result.all(admitted) |> result.map(list.flatten))
+  use statuses <- result.try(
+    list.try_map(keys, fn(key) {
+      status_of(target, key) |> result.map(fn(status) { #(key, status) })
+    }),
+  )
+  let pending =
+    list.filter_map(statuses, fn(pair) {
+      case pair.1 == "pending" {
+        True -> Ok(pair.0)
+        False -> Error(Nil)
+      }
+    })
+  use Nil <- result.try(expect(
+    list.length(pending) == 1,
+    "pending after the admissions: " <> string.inspect(statuses),
+  ))
+  let superseded = list.filter(keys, fn(key) { !list.contains(pending, key) })
+  use Nil <- result.try(expect(
+    list.all(superseded, list.contains(not_begun, _)),
+    "keys superseded but never reported in not_begun: "
+      <> string.inspect(
+      list.filter(superseded, fn(key) { !list.contains(not_begun, key) }),
+    ),
+  ))
+  use Nil <- result.try(
+    list.try_each(superseded, fn(key) {
+      case
+        within(target, recommend(
+          desk,
+          _,
+          key,
+          about:,
+          output: "late",
+          by: Rules("rules", "1"),
+          score: 0.5,
+        ))
+      {
+        Error(Refused(decisions.SupersededBefore(_))) -> Ok(Nil)
+        other ->
+          Error(key <> ": a late recommendation gave " <> string.inspect(other))
+      }
+    }),
+  )
+  let lock = decisions.subject_lock(point: name, subject: about)
+  use held <- result.try(load_entries(target, lock))
+  use head <- result.try(
+    target.adapter.inspect.head(target.adapter.handle, lock) |> store_text,
+  )
+  use waiting <- result.try(
+    target.adapter.port.waiting(target.adapter.handle, name, about)
+    |> store_text,
+  )
+  use ids <- result.try(
+    target.adapter.inspect.occurrences(target.adapter.handle, name)
+    |> store_text,
+  )
+  use Nil <- result.try(expect(
+    held == []
+      && head == None
+      && !list.contains(waiting, lock)
+      && !list.contains(ids, lock),
+    "the subject lock's id is visible: "
+      <> string.inspect(#(held, head, waiting, ids)),
+  ))
+  invariants(target, [desk])
+}
+
+/// One admission: open the transaction, meet the barrier on the first
+/// try, then `happened` and `expect`. Returns the keys `happened`
+/// reported as superseded before they began. `Contended` is tried again,
+/// at most 20 times.
+fn admit(
+  target: Target(tx),
+  desk: Desk(String, tx),
+  about: Subject,
+  key: String,
+  barrier: Option(process.Subject(process.Subject(Nil))),
+  tries: Int,
+) -> Result(List(String), String) {
+  let attempt =
+    within(target, fn(tx) {
+      case barrier {
+        Some(arrived) -> {
+          let go = process.new_subject()
+          process.send(arrived, go)
+          let _ = process.receive(go, 60_000)
+          Nil
+        }
+        None -> Nil
+      }
+      use done <- result.try(decisions.happened(desk, tx, "superseded", about:))
+      use Nil <- result.try(decisions.expect(
+        desk,
+        tx,
+        key:,
+        trigger: Trigger("stress", key),
+        about:,
+      ))
+      Ok(done.not_begun)
+    })
+  case attempt {
+    Ok(not_begun) -> Ok(not_begun)
+    Error(Refused(decisions.StoreFailed(store.Contended(_)))) if tries < 20 ->
+      admit(target, desk, about, key, None, tries + 1)
+    Error(other) -> Error(key <> ": an admission failed: " <> said(other))
+  }
 }
 
 // -- One key --------------------------------------------------------------------------------
@@ -2013,7 +2342,9 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
     |> result.map_error(decisions.DeskRefused)
     |> result.try(fn(attempted) {
       case attempted {
-        isolated.Recommended(_) | isolated.Skipped(_) -> Ok(Nil)
+        isolated.Recommended(_)
+        | isolated.Skipped(_)
+        | isolated.Superseded(_) -> Ok(Nil)
         isolated.Failed(failure:, ..) ->
           Error(decisions.ApplicationFailed(model.describe(failure)))
       }

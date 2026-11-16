@@ -42,11 +42,25 @@
 ////
 //// The verbs, grouped by who calls them:
 ////
+//// - Whoever admits a trigger: `happened` for what the trigger reports,
+////   then `expect`, in the transaction that receives it, before the
+////   recommender runs. `happened` locks the point and subject first, so
+////   two admissions about one subject run one after the other.
 //// - A recommender: `recommend`, `recommend_once`, `record_failure`.
 //// - A validator: `open`, `resume` (with a `Ticket`), `expand`, `note`,
 ////   `decide`, `review`, `withdraw`, `record_refusal`.
 //// - The world and the system: `happened`, `inform`, `wake` (or `waker`),
-////   `report`, `assess`, `read`.
+////   `report`, `assess`, `read`, `read_record`.
+////
+//// A record's life, by the status of its head: `pending` (expected, or
+//// only failed attempts so far), then `recommended`, `awaiting` a person,
+//// `accepted`, possibly `held` for an undo window, and finally one of
+//// `released`, `rejected`, `expired` or `withdrawn`. `happened` ends every
+//// record of its subject that has not been released yet: a pending record
+//// is reported in `not_begun` and its later recommendation is refused with
+//// `SupersededBefore`; an undecided or held one expires and nothing is
+//// released. Only a key never expected can still
+//// be recommended after the event that should have superseded it.
 ////
 //// Every verb loads the occurrence first, which locks it, then reads the
 //// store's clock, so entries are stored in time order. A verb that returns
@@ -62,7 +76,7 @@ import decisions/fact.{type Key, type Kind}
 import decisions/model.{type Failure}
 import decisions/occurrence.{type Attempt, type Decider, type Occurrence}
 import decisions/policy.{type Eligible, type Fault, type Policy, type Sample}
-import decisions/store.{type Port, type StoreError, Head}
+import decisions/store.{type Port, type StoreError}
 import decisions/vocabulary.{
   type Assessment, type Effect, type Fact, type Facts, type Manifest,
   type Parent, type Recommendation, type Ref, type Subject, type Trigger,
@@ -70,6 +84,8 @@ import decisions/vocabulary.{
   Person, Ref, Reject, Superseded,
 }
 import decisions/wire.{type Codec}
+import gleam/bit_array
+import gleam/crypto
 import gleam/int
 import gleam/json
 import gleam/list
@@ -97,7 +113,6 @@ pub opaque type Point(output) {
     superseded_by: List(String),
     reviewers: Option(String),
     withdrawers: Option(String),
-    policy_hold: Option(Duration),
   )
 }
 
@@ -116,7 +131,6 @@ pub fn point(name: String, output: Codec(output)) -> Point(output) {
     superseded_by: [],
     reviewers: None,
     withdrawers: None,
-    policy_hold: None,
   )
 }
 
@@ -143,7 +157,10 @@ pub fn signal(point: Point(o), key: Key(a)) -> Point(o) {
 }
 
 /// A wait between every acceptance and its release, during which the
-/// decider, or a holder of the `withdrawn_by` set, may withdraw. The guard and the tool run when it ends, at the
+/// decider, or a holder of the `withdrawn_by` set, may withdraw. A
+/// `Proceed` that declares its own hold takes the place of this one for
+/// the acceptances it makes; to hold only what the policy lets proceed,
+/// put the hold in the policy's `Proceed` and not here. The guard and the tool run when it ends, at the
 /// wake-up: a refusal then ends the occurrence `Refused`, and never
 /// reaches the validator who approved, who has already been answered.
 pub fn with_hold(point: Point(o), hold: Duration) -> Point(o) {
@@ -156,18 +173,11 @@ pub fn valid_for(point: Point(o), validity: Duration) -> Point(o) {
   Point(..point, validity: Some(validity))
 }
 
-/// A wait before releasing what the policy accepted on its own, and only
-/// that: an output a validator accepted is released at once (unless
-/// `with_hold` also applies). This is an undo window on autonomous
-/// decisions; pair it with `withdrawn_by` so someone can use it. When both
-/// are declared, a policy acceptance waits for this one.
-pub fn with_policy_hold(point: Point(o), hold: Duration) -> Point(o) {
-  Point(..point, policy_hold: Some(hold))
-}
-
 /// Who may withdraw a held occurrence besides its decider: holders of
 /// `set`, through `withdraw_as`. Without it only the decider may, which
-/// for an output the policy accepted from a model is nobody.
+/// for an output the policy accepted from a model is nobody. Pair it with
+/// a `Proceed` that holds (an undo window the policy declares) or with
+/// `with_hold`.
 pub fn withdrawn_by(point: Point(o), set: String) -> Point(o) {
   Point(..point, withdrawers: Some(set))
 }
@@ -180,9 +190,9 @@ pub fn reviewed_by(point: Point(o), set: String) -> Point(o) {
   Point(..point, reviewers: Some(set))
 }
 
-/// A world event that expires an undecided occurrence about the same
-/// subject, reported with `happened`. A held occurrence is already
-/// accepted and is not superseded.
+/// A world event that expires an occurrence about the same subject that
+/// has not been released, reported with `happened`: one still undecided,
+/// and one accepted and held, since nothing is released while it is held.
 pub fn superseded_by(point: Point(o), event: String) -> Point(o) {
   Point(..point, superseded_by: [event, ..point.superseded_by])
 }
@@ -520,6 +530,10 @@ pub type Refusal {
   ToolUnsure(reason: String)
   /// The handler wired with `consulting` failed to ask `point`.
   ConsultFailed(point: String, reason: String)
+  /// A newer event, `event`, superseded this key before anything was
+  /// recommended under it: the trigger's work is moot. Nothing was written,
+  /// shown or released. A runtime drops the job as done.
+  SupersededBefore(event: String)
   /// `recommend_once` or `record_failure` was given a key that an
   /// occurrence of another point already holds. Keys are one namespace
   /// across every point of a store.
@@ -656,6 +670,7 @@ pub fn disposition(refusal: Refusal) -> Disposition {
     | NotSampled
     | NotSettled
     | NotConsulting
+    | SupersededBefore(_)
     | ToolRefused(..) -> Final
   }
 }
@@ -694,6 +709,8 @@ pub fn describe(refusal: Refusal) -> String {
     ConsultFailed(point:, reason:) ->
       "consulting " <> point <> " failed: " <> reason
     KeyTaken(point:) -> "the key is taken by an occurrence of " <> point
+    SupersededBefore(event:) ->
+      "superseded by " <> event <> " before it was recommended"
     NoPolicy(reason:) -> "the policy could not be read: " <> reason
     Unpublishable(faults:) ->
       "the policy cannot be used: "
@@ -720,22 +737,20 @@ pub fn recommend(
 
 /// `recommend`, at most once per `key`, which becomes the occurrence's id.
 /// A trigger delivered again finds the occurrence it already made and
-/// writes nothing. Keys are one namespace across every point of a store:
-/// a key another point's occurrence holds is refused with `KeyTaken`, so
-/// prefix keys with something the point owns.
+/// writes nothing. Safe under concurrent deliveries because the port locks
+/// a key that does not exist yet. Keys are one namespace across every
+/// point of a store: a key another point's occurrence holds is refused
+/// with `KeyTaken`, so prefix keys with something the point owns.
 ///
-/// **The superseding window.** `happened` supersedes what waits when it
-/// runs. A worker that recommends from an older trigger and commits after
-/// `happened` creates an occurrence nothing supersedes. Close the window in
-/// the application, inside the transactions the verbs already run in:
-/// keep the latest trigger per subject in a row of your own; the
-/// transaction that calls `happened` updates it; the recommending
-/// transaction locks that row (in PostgreSQL `SELECT ... FOR UPDATE`) and
-/// recommends only if its trigger is still the latest, otherwise it
-/// records nothing. Serialising both on the subject's row leaves no
-/// window. Safe under concurrent deliveries because the port locks
-/// a key that does not exist yet. Failed attempts recorded under the key
-/// stay at the start of the record.
+/// An expectation (`expect`) and failed attempts recorded under the key
+/// stay at the start of the record. A key that a newer event superseded
+/// before it was recommended is refused with `SupersededBefore(event)`, and
+/// nothing is written, shown or released: the work in flight is moot.
+///
+/// **The superseding window.** `happened` supersedes what the record holds
+/// when it runs. Call `expect` with this key in the transaction that
+/// receives the trigger, and the record holds it while the model works;
+/// the window stays open only for a key that was not expected first.
 pub fn recommend_once(
   desk: Desk(o, tx),
   tx: tx,
@@ -746,12 +761,93 @@ pub fn recommend_once(
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found)
     Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], now)
-    Error(occurrence.OnlyAttempts(point:, ..)) ->
-      case point == desk.point.name {
-        True -> begin(desk, tx, key, proposal, entries, now)
-        False -> Error(UnknownOccurrence)
+    Error(occurrence.NotYet(pending)) ->
+      case pending.superseded {
+        Some(cause) -> Error(superseded_before(cause))
+        None -> begin(desk, tx, key, proposal, entries, now)
       }
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
+  }
+}
+
+/// Record, in the transaction that receives a trigger, that a
+/// recommendation is expected under `key` about `subject`. From then on
+/// the record holds the key, so `happened` for a newer event about the
+/// subject supersedes it like any waiting occurrence, and the
+/// `recommend_once` that follows for this key is refused with
+/// `SupersededBefore`. Call it in the same transaction as the `happened`
+/// that the trigger itself reports, **after** that `happened`, and in the
+/// transaction that admits the job that will recommend, so the expectation
+/// and the job exist together or not at all.
+///
+/// `happened` takes the subject lock and then the records' locks; `expect`
+/// before `happened` would take a record's lock first, which could
+/// deadlock with a transaction that keeps that order, and the `happened`
+/// would supersede the key just expected. `expect` takes no subject lock
+/// itself: what orders two admissions about one subject is the `happened`
+/// each runs first.
+///
+/// Safe to repeat: an expected key is recorded once. On a key that already
+/// holds a recommendation it does nothing; on a key another point holds it
+/// is refused with `KeyTaken`; on a key already superseded it is refused
+/// with `SupersededBefore`. An expectation has no deadline: a record that
+/// stays expected (its worker died for good) keeps the head status
+/// `Pending` and its arrival time, which a queue or an operator can ask
+/// for.
+pub fn expect(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+  trigger trigger: Trigger,
+  about subject: Subject,
+) -> Result(Nil, Refusal) {
+  use #(entries, now) <- result.try(fetch(desk, tx, key))
+  let expected = entry.Expected(point: desk.point.name, trigger:, subject:)
+  case occurrence.fold(key, entries) {
+    Ok(found) -> mine(desk, found) |> result.replace(Nil)
+    Error(occurrence.NoRecommendation) -> Error(not_a_record())
+    Error(occurrence.NotYet(pending)) ->
+      case pending.superseded, pending.expected {
+        Some(cause), _ -> Error(superseded_before(cause))
+        None, True -> Ok(Nil)
+        None, False ->
+          append_pending(desk, tx, key, entries, expected, now)
+          |> result.replace(Nil)
+      }
+    Error(occurrence.NoEntries) ->
+      append_pending(desk, tx, key, entries, expected, now)
+      |> result.replace(Nil)
+  }
+}
+
+/// Append one entry to a record that has not begun, with its head.
+fn append_pending(
+  desk: Desk(o, tx),
+  tx: tx,
+  key: String,
+  entries: List(Entry(o)),
+  event: Event(o),
+  now: Timestamp,
+) -> Result(occurrence.Pending, Refusal) {
+  let added = entry.Entry(seq: list.length(entries) + 1, at: now, event:)
+  let all = list.append(entries, [added])
+  case occurrence.fold(key, all) {
+    Error(occurrence.NotYet(pending)) -> {
+      use stored <- result.try(encode([added], desk.point.output))
+      use Nil <- result.try(
+        desk.port.append(tx, key, occurrence.pending_head(pending), stored)
+        |> result.map_error(StoreFailed),
+      )
+      Ok(pending)
+    }
+    _ -> Error(not_a_record())
+  }
+}
+
+fn superseded_before(cause: vocabulary.ExpiryCause) -> Refusal {
+  case cause {
+    Superseded(event:) -> SupersededBefore(event:)
+    vocabulary.DeadlinePassed -> SupersededBefore(event: "")
   }
 }
 
@@ -760,7 +856,10 @@ pub fn recommend_once(
 /// attempt ran in rolled back, so the record shows that the trigger was
 /// tried and why it failed. Returns every failed attempt so far, from
 /// which a caller decides on another try (see `model.retryable`). When
-/// the key already holds a recommendation, nothing is written.
+/// the key already holds a recommendation, nothing is written. When a
+/// newer event superseded the key before it was recommended, nothing is
+/// written and the result is `Error(SupersededBefore(event))`: do not try
+/// again.
 ///
 /// Each call records one attempt, so repeating a call records the attempt
 /// again: two attempts that failed alike look the same, and the desk
@@ -772,6 +871,8 @@ pub fn recommend_once(
 /// The record lives under whatever `key` you give, before any occurrence
 /// exists, so give the key `recommend_once` will use for the same trigger:
 /// then the attempts and the recommendation that follows share one record.
+/// A failure that carries evidence (`model.with_evidence`) is recorded with
+/// it.
 pub fn record_failure(
   desk: Desk(o, tx),
   tx: tx,
@@ -792,7 +893,8 @@ pub fn record_failure(
 }
 
 /// `record_failure`, pointing at evidence the application stored about
-/// the attempt, such as a provider exchange that did not decode.
+/// the attempt, such as a provider exchange that did not decode. The
+/// evidence a failure carries itself (`model.with_evidence`) is added.
 pub fn record_failure_with(
   desk: Desk(o, tx),
   tx: tx,
@@ -804,49 +906,21 @@ pub fn record_failure_with(
 ) -> Result(List(Attempt), Refusal) {
   use #(entries, now) <- result.try(fetch(desk, tx, key))
   let attempt =
-    entry.Entry(
-      seq: list.length(entries) + 1,
-      at: now,
-      event: entry.AttemptFailed(
-        point: desk.point.name,
-        trigger:,
-        subject:,
-        failure:,
-        evidence:,
-      ),
+    entry.AttemptFailed(
+      point: desk.point.name,
+      trigger:,
+      subject:,
+      failure: model.without_evidence(failure),
+      evidence: list.append(evidence, model.evidence_of(failure)),
     )
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found) |> result.map(fn(found) { found.attempts })
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
-    Error(occurrence.OnlyAttempts(point:, ..)) if point != desk.point.name ->
-      Error(UnknownOccurrence)
-    Error(occurrence.NoEntries) | Error(occurrence.OnlyAttempts(..)) -> {
-      let all = list.append(entries, [attempt])
-      let first_at = case entries {
-        [first, ..] -> first.at
-        [] -> now
-      }
-      use stored <- result.try(encode([attempt], desk.point.output))
-      let head =
-        Head(
-          point: desk.point.name,
-          subject:,
-          status: store.Attempted,
-          awaiting: [],
-          due: None,
-          arrived: first_at,
-          approved: [],
-          may_not_decide: [],
-          review_pending: False,
-        )
-      use Nil <- result.try(
-        desk.port.append(tx, key, head, stored) |> result.map_error(StoreFailed),
-      )
-      Ok(case occurrence.fold(key, all) {
-        Error(occurrence.OnlyAttempts(attempts:, ..)) -> attempts
-        _ -> []
-      })
-    }
+    Error(occurrence.NotYet(occurrence.Pending(superseded: Some(cause), ..))) ->
+      Error(superseded_before(cause))
+    Error(occurrence.NotYet(_)) | Error(occurrence.NoEntries) ->
+      append_pending(desk, tx, key, entries, attempt, now)
+      |> result.map(fn(pending) { pending.attempts })
   }
 }
 
@@ -1232,7 +1306,7 @@ pub fn decide(
         )
       case draft.occurrence.status {
         occurrence.Accepted(..) ->
-          accept(desk, tx, draft, Some(#(validator, card.seen, verdict)))
+          accept(desk, tx, draft, None, Some(#(validator, card.seen, verdict)))
           |> result.try(save(desk, tx, _))
         // Rejected, or more approvals are needed.
         _ -> save(desk, tx, draft)
@@ -1386,48 +1460,82 @@ fn withdraw_held(
 /// What `happened` did.
 pub type Supersession(output) {
   Supersession(
-    /// The occurrences it expired.
+    /// The occurrences it expired: undecided or held ones, which had a
+    /// recommendation.
     expired: List(Occurrence(output)),
+    /// The keys of records it superseded before they began: expected, or
+    /// holding only failed attempts. Their `recommend_once` will be
+    /// refused with `SupersededBefore`.
+    not_begun: List(String),
     /// The occurrences about the subject that could not be read, with why.
     /// The others were still superseded.
     unreadable: List(#(String, Refusal)),
   )
 }
 
-/// A world event happened to a subject. Every undecided occurrence of this
-/// point about that subject expires as superseded, when the point declares
-/// the event with `superseded_by`; one whose validity had already passed
-/// expires as `DeadlinePassed`, which is what ended it. A held occurrence
-/// is already accepted and is not superseded. An occurrence that cannot be
-/// read is reported and does not stop the others. Occurrences are locked
-/// in the order the port's `waiting` returns.
+/// A world event happened to a subject. Every record of this point about
+/// that subject that has released nothing expires as superseded, when the
+/// point declares the event with `superseded_by`:
 ///
-/// **The superseding window.** `happened` supersedes what waits when it
-/// runs. A worker that recommends from an older trigger and commits after
-/// `happened` creates an occurrence nothing supersedes. Close the window in
-/// the application, inside the transactions the verbs already run in:
-/// keep the latest trigger per subject in a row of your own; the
-/// transaction that calls `happened` updates it; the recommending
-/// transaction locks that row (in PostgreSQL `SELECT ... FOR UPDATE`) and
-/// recommends only if its trigger is still the latest, otherwise it
-/// records nothing. Serialising both on the subject's row leaves no
-/// window.
+/// - a record that has not begun (`expect`ed, or holding only failed
+///   attempts): its `recommend_once` is then refused, so the work in
+///   flight for an older trigger never shows or releases anything;
+/// - an undecided occurrence; one whose validity had already passed
+///   expires as `DeadlinePassed`, which is what ended it;
+/// - a held occurrence: its hold's wake-up is cancelled and its output is
+///   never released.
+///
+/// A released occurrence is untouched. A record that cannot be read is
+/// reported and does not stop the others. Each superseded record admits
+/// one settlement notice.
+///
+/// **The subject lock.** For an event the point declares, `happened` first
+/// loads `subject_lock(point, subject)` through the port, which locks that
+/// id for the rest of the transaction, and only then reads `waiting`. So
+/// two `happened` about one subject of one point run one after the other,
+/// and the second sees every record the first committed, including the key
+/// its transaction `expect`ed: two triggers about one subject admitted at
+/// the same moment cannot both miss each other. A transaction that calls
+/// only `expect`, `recommend` or `recommend_once`, without `happened`,
+/// takes no subject lock and is ordered by nothing here. An event the
+/// point does not declare takes no lock. A store error while waiting for
+/// the lock is `StoreFailed` (`Contended` after a long wait), so the
+/// delivery is tried again.
+///
+/// Locks are taken in one order: the subject lock, then the records in the
+/// order `waiting` returns. In a transaction that also expects a key, call
+/// `happened` before `expect`: the other order could deadlock with a
+/// transaction that follows this one, and would supersede the key just
+/// expected.
+///
+/// **The superseding window.** A worker that recommends from an older
+/// trigger and commits after `happened` would create an occurrence nothing
+/// supersedes. Call `happened` and then `expect` with that trigger's key in
+/// the transaction that received it, and a later `happened` supersedes it
+/// before it begins; the window stays open only for a key that was not
+/// expected first.
 pub fn happened(
   desk: Desk(o, tx),
   tx: tx,
   event: String,
   about subject: Subject,
 ) -> Result(Supersession(o), Refusal) {
+  let none = Supersession(expired: [], not_begun: [], unreadable: [])
   case list.contains(desk.point.superseded_by, event) {
-    False -> Ok(Supersession(expired: [], unreadable: []))
+    False -> Ok(none)
     True -> {
+      // The subject lock first, then the records in `waiting`'s order.
+      use _ <- result.try(
+        desk.port.load(tx, subject_lock(point: desk.point.name, subject:))
+        |> result.map_error(StoreFailed),
+      )
       use ids <- result.try(
         desk.port.waiting(tx, desk.point.name, subject)
         |> result.map_error(StoreFailed),
       )
       use done <- result.map(
-        list.try_fold(ids, Supersession([], []), fn(done, id) {
-          case load(desk, tx, id) {
+        list.try_fold(ids, none, fn(done, id) {
+          case supersede(desk, tx, id, event) {
             Error(StoreFailed(error)) -> Error(StoreFailed(error))
             Error(refusal) ->
               Ok(
@@ -1436,29 +1544,102 @@ pub fn happened(
                   ..done.unreadable
                 ]),
               )
-            Ok(draft) ->
-              case occurrence.is_undecided(draft.occurrence.status) {
-                False -> Ok(done)
-                True -> {
-                  let cause = case
-                    occurrence.has_lapsed(draft.occurrence, draft.now)
-                  {
-                    True -> vocabulary.DeadlinePassed
-                    False -> Superseded(event:)
-                  }
-                  use expired <- result.map(
-                    add(draft, entry.Expired(cause)) |> save(desk, tx, _),
-                  )
-                  Supersession(..done, expired: [expired, ..done.expired])
-                }
-              }
+            Ok(NothingSuperseded) -> Ok(done)
+            Ok(SupersededOccurrence(expired)) ->
+              Ok(Supersession(..done, expired: [expired, ..done.expired]))
+            Ok(SupersededRecord) ->
+              Ok(Supersession(..done, not_begun: [id, ..done.not_begun]))
           }
         }),
       )
       Supersession(
         expired: list.reverse(done.expired),
+        not_begun: list.reverse(done.not_begun),
         unreadable: list.reverse(done.unreadable),
       )
+    }
+  }
+}
+
+/// The prefix of every subject lock id (`subject_lock`). It is reserved:
+/// do not use it for keys of your own.
+pub const subject_lock_prefix = "decisions.subject-lock:"
+
+/// The id `happened` loads, purely as a lock, before it reads which
+/// records of `point` about `subject` are waiting: `subject_lock_prefix`
+/// followed by the lowercase hex SHA-256 of the point name, the subject's
+/// kind and the subject's id, each written as its byte length, a colon and
+/// the text. The length prefixes keep the parts apart, so `("a", "b:c")`
+/// and `("a:b", "c")` give different ids, and the id is 87 bytes however
+/// long the parts are. No entry is ever stored under it.
+///
+/// A key of your own that equalled it would still be harmless: `happened`
+/// ignores what the load returns and only waits on the lock, so such a
+/// record would merely make `happened` about that subject wait for its
+/// transactions too. Matching 64 hex digits of a SHA-256 takes a choice,
+/// not an accident; the reserved prefix rules out the choice.
+pub fn subject_lock(point point: String, subject subject: Subject) -> String {
+  let part = fn(text) { int.to_string(string.byte_size(text)) <> ":" <> text }
+  let body = part(point) <> part(subject.kind) <> part(subject.id)
+  subject_lock_prefix
+  <> crypto.hash(crypto.Sha256, bit_array.from_string(body))
+  |> bit_array.base16_encode
+  |> string.lowercase
+}
+
+type Superseding(o) {
+  NothingSuperseded
+  SupersededOccurrence(Occurrence(o))
+  SupersededRecord
+}
+
+fn supersede(
+  desk: Desk(o, tx),
+  tx: tx,
+  id: String,
+  event: String,
+) -> Result(Superseding(o), Refusal) {
+  use #(entries, now) <- result.try(
+    fetch(desk, tx, id)
+    |> result.map_error(fn(refusal) {
+      case refusal {
+        KeyTaken(_) -> UnknownOccurrence
+        _ -> refusal
+      }
+    }),
+  )
+  let folded = occurrence.fold(id, entries)
+  case folded {
+    Error(occurrence.NotYet(occurrence.Pending(superseded: None, ..))) -> {
+      use _ <- result.try(append_pending(
+        desk,
+        tx,
+        id,
+        entries,
+        entry.Expired(Superseded(event:)),
+        now,
+      ))
+      use Nil <- result.map(
+        desk.port.settled(tx, desk.point.name, id)
+        |> result.map_error(StoreFailed),
+      )
+      SupersededRecord
+    }
+    Error(occurrence.NotYet(_)) -> Ok(NothingSuperseded)
+    _ -> {
+      use draft <- result.try(drafted(desk, entries, now, folded))
+      case is_supersedable(draft.occurrence.status) {
+        False -> Ok(NothingSuperseded)
+        True -> {
+          let cause = case occurrence.has_lapsed(draft.occurrence, draft.now) {
+            True -> vocabulary.DeadlinePassed
+            False -> Superseded(event:)
+          }
+          add(draft, entry.Expired(cause))
+          |> save(desk, tx, _)
+          |> result.map(SupersededOccurrence)
+        }
+      }
     }
   }
 }
@@ -1599,6 +1780,15 @@ pub fn wake(
   }
 }
 
+/// Undecided, or accepted and held: nothing has been released.
+fn is_supersedable(status: occurrence.Status(o)) -> Bool {
+  occurrence.is_undecided(status)
+  || case status {
+    occurrence.Held(..) -> True
+    _ -> False
+  }
+}
+
 /// Of the steps whose time has passed, in order, the first that proceeds,
 /// consults a point not yet consulted, or asks for what the approvals
 /// given so far already meet; when none does, the last. So a wake-up
@@ -1609,7 +1799,7 @@ fn first_decisive(
 ) -> Result(policy.Step, Nil) {
   list.find(passed, fn(step) {
     case step.outcome {
-      policy.Proceed(_) -> True
+      policy.Proceed(..) -> True
       policy.Consult(point:) -> !was_consulted(waiting, point)
       policy.Ask(eligible) -> occurrence.is_met(waiting, eligible)
     }
@@ -1669,6 +1859,38 @@ pub fn assess(
     NotSettled,
   ))
   add(draft, entry.Assessed(assessment:)) |> save(desk, tx, _)
+}
+
+/// What a key's record holds: an occurrence, or a record that has not
+/// begun (expected, holding failed attempts, or superseded before it
+/// began).
+pub type Record(output) {
+  Begun(occurrence: Occurrence(output))
+  NotBegun(pending: occurrence.Pending)
+}
+
+/// The record under a key, whether or not it has begun. It writes
+/// nothing. `UnknownOccurrence` when the key holds nothing of this point.
+pub fn read_record(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+) -> Result(Record(o), Refusal) {
+  use #(entries, _) <- result.try(
+    fetch(desk, tx, key)
+    |> result.map_error(fn(refusal) {
+      case refusal {
+        KeyTaken(_) -> UnknownOccurrence
+        _ -> refusal
+      }
+    }),
+  )
+  case occurrence.fold(key, entries) {
+    Ok(found) -> mine(desk, found) |> result.map(Begun)
+    Error(occurrence.NotYet(pending)) -> Ok(NotBegun(pending))
+    Error(occurrence.NoEntries) -> Error(UnknownOccurrence)
+    Error(occurrence.NoRecommendation) -> Error(not_a_record())
+  }
 }
 
 /// The occurrence as the record holds it now. It writes nothing.
@@ -1747,7 +1969,18 @@ fn load(desk: Desk(o, tx), tx: tx, id: String) -> Result(Draft(o), Refusal) {
       }
     }),
   )
-  case occurrence.fold(id, entries) {
+  drafted(desk, entries, now, occurrence.fold(id, entries))
+}
+
+/// The draft of entries already fetched and folded, so a verb that read
+/// them for another reason does not read them through the port again.
+fn drafted(
+  desk: Desk(o, tx),
+  entries: List(Entry(o)),
+  now: Timestamp,
+  folded: Result(Occurrence(o), occurrence.NotBegun),
+) -> Result(Draft(o), Refusal) {
+  case folded {
     Ok(found) -> {
       use found <- result.map(mine(desk, found))
       Draft(
@@ -1759,10 +1992,11 @@ fn load(desk: Desk(o, tx), tx: tx, id: String) -> Result(Draft(o), Refusal) {
       )
     }
     Error(occurrence.NoEntries) -> Error(UnknownOccurrence)
-    Error(occurrence.OnlyAttempts(point:, attempts:, ..)) ->
-      case point == desk.point.name {
-        True -> Error(NotRecommended(attempts:))
-        False -> Error(UnknownOccurrence)
+    Error(occurrence.NotYet(pending)) ->
+      case pending.point == desk.point.name, pending.superseded {
+        False, _ -> Error(UnknownOccurrence)
+        True, Some(cause) -> Error(superseded_before(cause))
+        True, None -> Error(NotRecommended(attempts: pending.attempts))
       }
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
   }
@@ -1895,16 +2129,16 @@ fn answer(
     add(draft, entry.PolicyApplied(version:, outcome:, sampled:, later:))
   }
   case outcome {
-    policy.Proceed(sample:) ->
+    policy.Proceed(sample:, hold:) ->
       applied(is_sampled(sample, id), [])
-      |> accept(desk, tx, _, None)
+      |> accept(desk, tx, _, hold, None)
       |> result.try(save(desk, tx, _))
     policy.Ask(_) -> {
       let draft = applied(False, later)
       case draft.occurrence.status {
         // The approvals given so far already meet what it now asks.
         occurrence.Accepted(..) ->
-          accept(desk, tx, draft, None) |> result.try(save(desk, tx, _))
+          accept(desk, tx, draft, None, None) |> result.try(save(desk, tx, _))
         _ -> save(desk, tx, draft)
       }
     }
@@ -1942,16 +2176,18 @@ fn was_consulted(current: Occurrence(o), point: String) -> Bool {
 
 /// An accepted output is held when the point has a hold, and released
 /// otherwise.
+/// `policy_hold` is the hold of the `Proceed` that accepted it, which
+/// takes the place of the point's `with_hold` for that acceptance.
 fn accept(
   desk: Desk(o, tx),
   tx: tx,
   draft: Draft(o),
+  policy_hold: Option(Duration),
   on_refusal: Option(#(Validator, Int, Verdict(o))),
 ) -> Result(Draft(o), Refusal) {
-  let hold = case draft.occurrence.status, desk.point.policy_hold {
-    occurrence.Accepted(by: occurrence.ByPolicy(_), ..), Some(hold) ->
-      Some(hold)
-    _, _ -> desk.point.hold
+  let hold = case policy_hold {
+    Some(hold) -> Some(hold)
+    None -> desk.point.hold
   }
   case hold {
     Some(hold) ->

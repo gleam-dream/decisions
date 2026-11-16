@@ -244,7 +244,9 @@ claim(Claims, Key) ->
         true -> true;
         false ->
             case ets:lookup(Claims, Key) of
-                [{_, Self}] -> true;
+                %% Held by the caller already: not a new claim, so a worker
+                %% that keeps a claim while it looks goes on to the next.
+                [{_, Self}] -> false;
                 [{_, Holder}] ->
                     case is_process_alive(Holder) of
                         true -> false;

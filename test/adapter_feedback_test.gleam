@@ -16,6 +16,7 @@ import decisions/vocabulary.{
 }
 import decisions/wire
 import gleam/list
+import gleam/option.{None}
 import gleam/time/duration
 import gleam/time/timestamp
 import support/world
@@ -137,7 +138,7 @@ pub fn contention_is_its_own_store_error_test() {
     store.Port(..base, append: fn(_, _, _, _) {
       Error(store.Contended("deadlock detected"))
     })
-  let desk = desk_over(contended, Policy(1, [], Proceed(Never)))
+  let desk = desk_over(contended, Policy(1, [], Proceed(Never, None)))
   let assert Error(refusal) =
     memory.transaction(db, decisions.recommend(
       desk,

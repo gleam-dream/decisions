@@ -10,7 +10,7 @@ import decisions_postgres.{Refused}
 import gleam/erlang/process
 import gleam/int
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/time/duration
 import kit
 
@@ -137,7 +137,11 @@ pub fn withdraw_races_the_wake_up_test() {
   let spec =
     kit.Spec(
       ..kit.spec("a3"),
-      policy: Policy(version: 1, rules: [], otherwise: Proceed(policy.Never)),
+      policy: Policy(
+        version: 1,
+        rules: [],
+        otherwise: Proceed(sample: policy.Never, hold: None),
+      ),
       hold: Some(duration.milliseconds(40)),
     )
   let desk = kit.desk(store, spec)

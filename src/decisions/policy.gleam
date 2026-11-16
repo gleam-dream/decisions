@@ -20,8 +20,8 @@
 ////   Policy(
 ////     version: 2,
 ////     rules: [
-////       When(OwnAct, Proceed(Never)),
-////       When(policy.below(amount, 100.0), Proceed(Never)),
+////       When(OwnAct, Proceed(Never, None)),
+////       When(policy.below(amount, 100.0), Proceed(Never, None)),
 ////     ],
 ////     otherwise: Ask(AnyoneHolding("finance")),
 ////   )
@@ -58,6 +58,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/time/duration.{type Duration}
 
 /// One version of a point's policy.
 pub type Policy {
@@ -72,8 +73,14 @@ pub type Rule {
 /// What the policy says about a recommendation.
 pub type Outcome {
   /// Proceed without a person. `sample` picks which released occurrences
-  /// wait for a review after the fact.
-  Proceed(sample: Sample)
+  /// wait for a review after the fact. `hold`, when present, is an undo
+  /// window on this decision: the accepted output waits that long before
+  /// release, and its decider or a holder of the point's `withdrawn_by` set
+  /// may withdraw it meanwhile. It takes the place of the point's
+  /// `with_hold` for this acceptance; without it, the point's hold, if
+  /// any, applies. Stored as `"hold_ms"`; a stored policy without it has
+  /// no hold.
+  Proceed(sample: Sample, hold: Option(Duration))
   /// Wait for a verdict from whoever `eligible` admits.
   Ask(eligible: Eligible)
   /// Ask the decision point named `point` first. Its final output returns
@@ -160,6 +167,8 @@ pub type Fault {
   /// An `Either` with no alternative: the occurrence would wait in no
   /// queue, for nobody.
   EmptyEither
+  /// A `Proceed` holds for zero or a negative number of milliseconds.
+  NonPositiveHold(milliseconds: Int)
 }
 
 // -- Conditions over typed keys -----------------------------------------------------
@@ -346,6 +355,8 @@ pub fn describe(fault: Fault) -> String {
       "samples " <> int.to_string(per_cent) <> " per cent"
     NestedSeveral -> "counts approvals with a Several inside another Several"
     EmptyEither -> "asks an Either with no alternative"
+    NonPositiveHold(milliseconds:) ->
+      "holds a proceed for " <> int.to_string(milliseconds) <> " ms"
   }
 }
 
@@ -359,10 +370,24 @@ fn kind_name(kind: Kind) -> String {
 
 fn outcome_faults(outcome: Outcome) -> List(Fault) {
   case outcome {
-    Proceed(PerCent(share)) if share < 0 || share > 100 -> [
-      SampleOutOfRange(share),
-    ]
-    Proceed(_) | Consult(_) -> []
+    Proceed(sample:, hold:) ->
+      list.flatten([
+        case sample {
+          PerCent(share) if share < 0 || share > 100 -> [
+            SampleOutOfRange(share),
+          ]
+          _ -> []
+        },
+        case hold {
+          Some(hold) ->
+            case duration.to_milliseconds(hold) <= 0 {
+              True -> [NonPositiveHold(duration.to_milliseconds(hold))]
+              False -> []
+            }
+          None -> []
+        },
+      ])
+    Consult(_) -> []
     Ask(eligible) -> eligible_faults(eligible)
   }
 }
@@ -512,9 +537,17 @@ pub fn decoder() -> Decoder(Policy) {
 /// An outcome as JSON.
 pub fn outcome_to_json(outcome: Outcome) -> Json {
   case outcome {
-    Proceed(sample: Never) -> wire.tagged("proceed", [#("sample", json.null())])
-    Proceed(sample: PerCent(share)) ->
-      wire.tagged("proceed", [#("sample", json.int(share))])
+    Proceed(sample:, hold:) ->
+      wire.tagged("proceed", [
+        #("sample", case sample {
+          Never -> json.null()
+          PerCent(share) -> json.int(share)
+        }),
+        #("hold_ms", case hold {
+          Some(hold) -> json.int(duration.to_milliseconds(hold))
+          None -> json.null()
+        }),
+      ])
     Ask(eligible:) ->
       wire.tagged("ask", [#("eligible", eligible_to_json(eligible))])
     Consult(point:) -> wire.tagged("consult", [#("point", json.string(point))])
@@ -527,10 +560,16 @@ pub fn outcome_decoder() -> Decoder(Outcome) {
   case tag {
     "proceed" -> {
       use share <- decode.field("sample", decode.optional(decode.int))
-      case share {
-        None -> decode.success(Proceed(Never))
-        Some(share) -> decode.success(Proceed(PerCent(share)))
+      use hold <- decode.optional_field(
+        "hold_ms",
+        None,
+        decode.optional(decode.map(decode.int, duration.milliseconds)),
+      )
+      let sample = case share {
+        None -> Never
+        Some(share) -> PerCent(share)
       }
+      decode.success(Proceed(sample:, hold:))
     }
     "ask" -> {
       use eligible <- decode.field("eligible", eligible_decoder())
@@ -540,7 +579,7 @@ pub fn outcome_decoder() -> Decoder(Outcome) {
       use point <- decode.field("point", decode.string)
       decode.success(Consult(point:))
     }
-    _ -> decode.failure(Proceed(Never), "Outcome")
+    _ -> decode.failure(Proceed(Never, None), "Outcome")
   }
 }
 

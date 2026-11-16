@@ -1,6 +1,6 @@
 # `recommend_when`'s precondition cannot report a store failure
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -28,3 +28,7 @@ Changing how `happened` supersedes; the superseding-window recipe itself (ADR 00
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. `decisions_otp/isolated.recommend_when`'s precondition now answers an `Unmet`: `Skip(reason)` gives `Skipped`, `CouldNotCheck(error)` gives `Error(StoreFailed(error))`, retried by its disposition. Tests: `/code/gleam-dream/decisions/integrations/decisions_otp/test/owner_round_test.gleam` (issue 01, in the step and in the runtime).

@@ -33,9 +33,17 @@ The application owns the pool and the Grind runtime. In this order:
 5. Start Grind in the application's supervision tree.
 6. Run `sweep(store, db)`, so that every pending wake-up and every
    undelivered notice of a followed point has a job.
-7. Run each verb in a transaction at `READ COMMITTED`, the PostgreSQL default,
+7. Run each verb in a transaction at `READ COMMITTED`, the PostgreSQL default
+   (the port refuses another level with `Conflict`),
    or through `transaction`, `transaction_with` (a body that also fails with
-   the application's own error) and `decide`.
+   the application's own error), `decide`, or `refusing` (the same transaction
+   in the shape of a verb, for `decisions_otp/isolated.recommend_when`'s
+   `in:`). To admit a trigger, call `decisions.happened` and then
+   `decisions.expect` in the transaction that receives it: `happened` takes
+   the subject's lock, so two admissions about one subject run one after the
+   other and the second supersedes the first's expectation. In the other
+   order PostgreSQL detects the deadlock between two admissions and one ends
+   `Contended`.
 
 `test/wiring/postgres_wiring.gleam` holds this order as compiled code
 (region `postgres-wiring`), and `wiring_test` runs it.
@@ -44,6 +52,22 @@ The tables are named without a schema and resolved through the connection's
 `search_path`. An occurrence id (a `recommend_once` key) and a point name are
 at most 255 bytes (`max_name_bytes`); a longer one is refused with
 `Conflict`.
+
+### Lock waits and pog's 5-second checkout
+
+`pog.transaction` (pog 4.1) checks a connection out of the pool for at most 5
+seconds and offers no other value: a transaction still open then loses its
+connection, which reaches the caller as `Unavailable` (outcome unknown).
+`transaction`, `transaction_with`, `decide`, `refusing` and the workers use
+it. So that a long wait for a contended occurrence ends as `Contended`
+(nothing written, safe to retry) instead, the port's `load` sets the
+transaction's `lock_timeout` to 4 seconds before it locks
+(`with_lock_timeout(store, Some(duration))` changes it, `None` leaves the
+connection's own setting). It is set with `SET LOCAL` semantics, so it
+applies to the rest of the caller's transaction too, and it overrides a
+`lock_timeout` the caller set earlier in that transaction; pass `None` to keep
+the caller's. A transaction that does more than wait can still reach the 5
+second limit.
 
 ### Roles and grants
 
@@ -118,12 +142,21 @@ point that has none (run it at start). `deliver_due` and `deliver_notices`
 deliver what is due now through the same code paths, for tests with a clock
 offset and for an operator; both are safe beside the workers.
 
+### Pending records
+
+A record is `pending` when a trigger was expected (`decisions.expect`) or
+only failed attempts are recorded. It is never in a validator's queue
+(`page`, `page_at`); `queue.counts` reports it under `store.Pending`, and
+`queue.pending(db, point:, limit:, after:)` lists the records still
+expected, the oldest first, with the time each began (`arrived`). The port's
+`waiting` returns pending, recommended, awaiting and held records, so a newer
+event supersedes each of them.
+
 ## Live hints
 
 `decisions_postgres/live` sends a `Change` for every committed append to the
-processes subscribed to everything, a point, or an occurrence. It has no
-`Missed` message; `decisions_otp/live` has topics for an occurrence, a point,
-a queue and the reviews, and a `Missed` message.
+processes subscribed to everything, a point, or an occurrence. "The two
+adapters compared" below sets this beside `decisions_otp/live`.
 
 - `subscribe` is acknowledged and returns the listener's process: monitor it
   to learn that the listener went away, then subscribe again.
@@ -152,28 +185,29 @@ setting aside and paging differ.
 
 ## The schema
 
-| Object                                                                                                            | Holds                                                                                                                                                                                                                        | Serves                                                                       |
-| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `decisions_occurrences`                                                                                           | The head of each occurrence: point, subject, status (check `decisions_occurrences_status`), the sets it waits in, who approved, who may not decide, due and arrival times, review flag, last sequence number, set-aside mark | `load`'s row lock; inspection                                                |
-| `decisions_occurrences_waiting (point, subject_kind, subject_id, id) WHERE status IN ('recommended', 'awaiting')` |                                                                                                                                                                                                                              | The port's `waiting`, in id order                                            |
-| `decisions_occurrences_subject (subject_kind, subject_id, arrived DESC, id DESC)`                                 |                                                                                                                                                                                                                              | `queue.about`                                                                |
-| `decisions_occurrences_status (point, status)`                                                                    |                                                                                                                                                                                                                              | `queue.counts`                                                               |
-| `decisions_occurrences_review (point, arrived, id) WHERE review_pending`                                          |                                                                                                                                                                                                                              | `queue.review_queue`                                                         |
-| `decisions_occurrences_review_all (arrived, id) WHERE review_pending`                                             |                                                                                                                                                                                                                              | `queue.review_queue_all`                                                     |
-| `decisions_occurrences_point (point, id)`                                                                         |                                                                                                                                                                                                                              | `queue.occurrences_of`                                                       |
-| `decisions_occurrences_set_aside (set_aside_at, id) WHERE set_aside_at IS NOT NULL`                               |                                                                                                                                                                                                                              | `queue.set_aside`                                                            |
-| `decisions_entries`                                                                                               | The append-only record: `(occurrence_id, seq)` primary key, `at`, `kind` (check `decisions_entries_kind`), the event's JSON text                                                                                             | `load`                                                                       |
-| `decisions_entries_no_gap`                                                                                        | Foreign key from entry `n` to entry `n - 1`                                                                                                                                                                                  | Refuses a gap                                                                |
-| `decisions_entries_one_release`                                                                                   | Unique index on released entries                                                                                                                                                                                             | Refuses a second release                                                     |
-| `decisions_entries_append_only`                                                                                   | Statement trigger                                                                                                                                                                                                            | Refuses `UPDATE`, `DELETE`, `TRUNCATE` of entries                            |
-| `decisions_awaiting`                                                                                              | One row per decision set an occurrence waits in, with its due time (`infinity` when none), arrival and who may not decide it                                                                                                 |                                                                              |
-| `decisions_awaiting_queue (set_name, due_order, arrived, occurrence_id)`                                          |                                                                                                                                                                                                                              | `queue.page`                                                                 |
-| `decisions_awaiting_point_queue (set_name, point, due_order, arrived, occurrence_id)`                             |                                                                                                                                                                                                                              | `queue.page_at`                                                              |
-| `decisions_wakes`                                                                                                 | One row per pending wake-up; a delivered one is removed, a poisoned one set aside                                                                                                                                            | The wake-up worker; `decisions_wakes_pending` keeps one pending row per time |
-| `decisions_settled`                                                                                               | One settlement notice per occurrence (`decisions_settled_once`), delivered or set aside                                                                                                                                      | The settlement worker                                                        |
-| `decisions_settled_point (point, admitted_xid, id)`                                                               |                                                                                                                                                                                                                              | `queue.settled_since`                                                        |
-| `decisions_load(id)`, `decisions_append(...)`                                                                     | The port's two hot statements, one round trip each                                                                                                                                                                           |                                                                              |
-| `decisions_at(ms)`, `decisions_ms(at)`                                                                            | Time as Unix milliseconds on the wire                                                                                                                                                                                        | Every query                                                                  |
+| Object                                                                                                                               | Holds                                                                                                                                                                                                                        | Serves                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `decisions_occurrences`                                                                                                              | The head of each occurrence: point, subject, status (check `decisions_occurrences_status`), the sets it waits in, who approved, who may not decide, due and arrival times, review flag, last sequence number, set-aside mark | `load`'s row lock; inspection                                                |
+| `decisions_occurrences_waiting (point, subject_kind, subject_id, id) WHERE status IN ('pending', 'recommended', 'awaiting', 'held')` |                                                                                                                                                                                                                              | The port's `waiting`, in id order                                            |
+| `decisions_occurrences_subject (subject_kind, subject_id, arrived DESC, id DESC)`                                                    |                                                                                                                                                                                                                              | `queue.about`                                                                |
+| `decisions_occurrences_status (point, status)`                                                                                       |                                                                                                                                                                                                                              | `queue.counts`                                                               |
+| `decisions_occurrences_review (point, arrived, id) WHERE review_pending`                                                             |                                                                                                                                                                                                                              | `queue.review_queue`                                                         |
+| `decisions_occurrences_review_all (arrived, id) WHERE review_pending`                                                                |                                                                                                                                                                                                                              | `queue.review_queue_all`                                                     |
+| `decisions_occurrences_point (point, id)`                                                                                            |                                                                                                                                                                                                                              | `queue.occurrences_of`                                                       |
+| `decisions_occurrences_pending (point, arrived, id) WHERE status = 'pending'`                                                        |                                                                                                                                                                                                                              | `queue.pending`: the triggers still expected, oldest first                   |
+| `decisions_occurrences_set_aside (set_aside_at, id) WHERE set_aside_at IS NOT NULL`                                                  |                                                                                                                                                                                                                              | `queue.set_aside`                                                            |
+| `decisions_entries`                                                                                                                  | The append-only record: `(occurrence_id, seq)` primary key, `at`, `kind` (check `decisions_entries_kind`), the event's JSON text                                                                                             | `load`                                                                       |
+| `decisions_entries_no_gap`                                                                                                           | Foreign key from entry `n` to entry `n - 1`                                                                                                                                                                                  | Refuses a gap                                                                |
+| `decisions_entries_one_release`                                                                                                      | Unique index on released entries                                                                                                                                                                                             | Refuses a second release                                                     |
+| `decisions_entries_append_only`                                                                                                      | Statement trigger                                                                                                                                                                                                            | Refuses `UPDATE`, `DELETE`, `TRUNCATE` of entries                            |
+| `decisions_awaiting`                                                                                                                 | One row per decision set an occurrence waits in, with its due time (`infinity` when none), arrival and who may not decide it                                                                                                 |                                                                              |
+| `decisions_awaiting_queue (set_name, due_order, arrived, occurrence_id)`                                                             |                                                                                                                                                                                                                              | `queue.page`                                                                 |
+| `decisions_awaiting_point_queue (set_name, point, due_order, arrived, occurrence_id)`                                                |                                                                                                                                                                                                                              | `queue.page_at`                                                              |
+| `decisions_wakes`                                                                                                                    | One row per pending wake-up; a delivered one is removed, a poisoned one set aside                                                                                                                                            | The wake-up worker; `decisions_wakes_pending` keeps one pending row per time |
+| `decisions_settled`                                                                                                                  | One settlement notice per occurrence (`decisions_settled_once`), delivered or set aside                                                                                                                                      | The settlement worker                                                        |
+| `decisions_settled_point (point, admitted_xid, id)`                                                                                  |                                                                                                                                                                                                                              | `queue.settled_since`                                                        |
+| `decisions_load(id)`, `decisions_append(...)`                                                                                        | The port's two hot statements, one round trip each                                                                                                                                                                           |                                                                              |
+| `decisions_at(ms)`, `decisions_ms(at)`                                                                                               | Time as Unix milliseconds on the wire                                                                                                                                                                                        | Every query                                                                  |
 
 ## Tests
 
@@ -209,53 +243,46 @@ nix develop path:/code/gleam-dream/decisions --no-update-lock-file --command bas
 
 ## Numbers
 
-From the scale run (`scripts/test-postgres.sh scale`) on an Apple M2 Max (12
-cores, 32 GB), OTP 29 and PostgreSQL 16.15 on the same machine, in the
-script's throwaway cluster (`fsync` and `synchronous_commit` off), with one
-pool of 24 connections shared by the workers and Grind. The run is
-observational and gates nothing; `docs/BENCHMARKS.md` keeps the full table.
+From the scale run (`scripts/test-postgres.sh scale`) of 2026-11-16 on an Apple
+M2 Max (12 cores, 32 GB) with a load average of 3 to 4, OTP 29 and PostgreSQL
+16.15 on the same machine, in the script's throwaway cluster (`fsync` and
+`synchronous_commit` off), with one pool of 24 connections shared by the
+workers and Grind. The run is observational and gates nothing;
+`docs/BENCHMARKS.md` keeps the full table.
 
 | Load                                                                 | Result                                                      |
 | -------------------------------------------------------------------- | ----------------------------------------------------------- |
-| H1: 10 000 recommendations the policy proceeds, 1 / 4 / 16 processes | 1 359 / 3 741 / 6 823 per second                            |
-| H1 at 16 processes without the savepoint                             | 9 321 per second                                            |
-| H2: queue page of 50 from 10 000 waiting                             | median 0.45 ms, p95 0.90 ms                                 |
-| H2: open and decide 10 000, 16 validators                            | 4 336 per second; median 3.64 ms, p95 4.28 ms               |
-| H3: read an occurrence of 10 / 100 / 1 000 entries                   | median 0.40 / 1.1 / 7.8 ms                                  |
-| H4: 1 000 waiting about one subject superseded                       | 420 ms, one transaction                                     |
-| H5: 5 000 holds ending in one millisecond, released through Grind    | 6.2 s, 808 per second                                       |
-| NOTIFY, from the start of the appending transaction                  | median 0.48 ms; it arrives before the writer's call returns |
+| H1: 10 000 recommendations the policy proceeds, 1 / 4 / 16 processes | 1 548 / 4 402 / 7 152 per second                            |
+| H1 at 16 processes without the savepoint                             | 10 074 per second                                           |
+| H2: queue page of 50 from 10 000 waiting                             | median 0.42 ms, p95 0.85 ms                                 |
+| H2: open and decide 10 000, 16 validators                            | 4 424 per second; median 3.58 ms, p95 4.18 ms               |
+| H3: read an occurrence of 10 / 100 / 1 000 entries                   | median 0.34 / 1.0 / 7.67 ms                                 |
+| H4: 1 000 waiting about one subject superseded                       | 392 ms, one transaction                                     |
+| H5: 5 000 holds ending in one millisecond, released through Grind    | 5.8 s, 867 per second                                       |
+| H6: read 10 000 records for replay, 1 / 16 processes                 | 2 084 / 435 ms                                              |
+| NOTIFY, from the start of the appending transaction                  | median 0.36 ms; it arrives before the writer's call returns |
 
 ### Why admission at one connection is slower than the prototype
 
 The prototype admitted 2 400 recommendations per second at one connection
-(median 0.39 ms per call); this package admits about 1 400 (median 0.68 ms).
-The scale run measures each suspected cost by removing it, 3 000
-recommendations each, one process, on a pool with no Grind consumers (figures
-from the run before the review corrections; the latest run gave 1 349, 1 561,
-2 092 and 2 226 per second for the four variants below the first, the same
-shape):
+(median 0.39 ms per call); this package admits about 1 550 (median 0.63 ms).
+The scale run measures each suspected cost by removing it, from one process:
 
 | Variant                                                    | Per second | Median per call |
 | ---------------------------------------------------------- | ---------- | --------------- |
-| As shipped, with Grind's consumers on the pool (H1)        | 1 416      | 0.68 ms         |
-| As shipped, no Grind consumers on the pool                 | 1 404      | 0.68 ms         |
-| and the node's clock instead of a query for the database's | 1 641      | 0.60 ms         |
-| and no savepoint around the gated tool                     | 2 270      | 0.43 ms         |
-| and no gap-check foreign key                               | 2 327      | 0.42 ms         |
+| As shipped, with Grind's consumers on the pool (H1)        | 1 548      | 0.63 ms         |
+| As shipped, no Grind consumers on the pool                 | 1 565      | 0.62 ms         |
+| and the node's clock instead of a query for the database's | 1 800      | 0.55 ms         |
+| and no savepoint around the gated tool                     | 2 476      | 0.40 ms         |
+| and no gap-check foreign key                               | 2 516      | 0.39 ms         |
 
-- **The savepoint is the largest part** (about 0.17 ms a call, two round
+- **The savepoint is the largest part** (about 0.15 ms a call, two round
   trips). It is part of the port's contract: a tool that writes and then
-  refuses must leave nothing. The prototype's single-connection figure was
-  measured with its own optional savepoint, so this part does not explain all
-  of the difference by itself.
-- **The store's clock is a query** (`clock_timestamp()`, median 0.07 ms on its
-  own, about 0.08 ms a call in admission). The prototype read the node's
+  refuses must leave nothing.
+- **The store's clock is a query** (`clock_timestamp()`, median 0.06 ms on its
+  own, about 0.07 ms a call in admission). The prototype read the node's
   clock, which the store contract no longer allows.
 - **The gap-check foreign key** costs about 0.01 ms a call, within the noise.
 - **Grind's consumers on the shared pool** cost nothing measurable.
-- What remains, about 0.03 ms a call against the prototype's 0.39 ms after
-  the savepoint and the clock are removed, is not attributed further. The
-  candidates are the plpgsql functions (`decisions_load`, `decisions_append`)
-  and the array parameters `decisions_append` takes; they were not measured
-  separately.
+- With all three removed a call takes 0.39 ms, the prototype's figure; in this
+  capture nothing else remains to attribute.

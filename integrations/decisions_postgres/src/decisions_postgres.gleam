@@ -62,7 +62,24 @@
 //// `store.Unavailable`.
 ////
 //// Every transaction that uses the port must run at `READ COMMITTED`, the
-//// PostgreSQL default and what Grind's `submit_in` requires.
+//// PostgreSQL default and what Grind's `submit_in` requires. The port
+//// relies on it: each statement takes a new snapshot, so a read made after
+//// a lock is granted sees what the lock's previous holder committed. That
+//// is how `decisions.happened`, after taking the subject's lock, sees a key
+//// an earlier admission `expect`ed. Under REPEATABLE READ or SERIALIZABLE
+//// the snapshot is the transaction's first, and the second of two
+//// admissions about one subject would miss the first. So `load`
+//// (`decisions_load`, which every verb reaches first) refuses a transaction
+//// at another level with `store.Conflict` naming the level, in the same
+//// statement, without a round trip of its own.
+////
+//// Admitting a trigger: call `decisions.happened` first and
+//// `decisions.expect` after, in one transaction. `happened` takes the
+//// subject's lock (`decisions.subject_lock`, an id that never holds
+//// entries; `load` locks it with an advisory lock and stores nothing), so
+//// two admissions about one subject run one after the other. In the other
+//// order, two admissions can each hold what the other waits for;
+//// PostgreSQL detects the deadlock and one transaction ends `Contended`.
 ////
 //// The tables are created in the schema of the migrating transaction's
 //// `search_path` and are named without a schema, so every connection that
@@ -110,6 +127,7 @@ pub opaque type Store {
     settlement_attempts: Int,
     wake_attempts: Int,
     snooze_limit: Int,
+    lock_timeout: Option(Duration),
   )
 }
 
@@ -128,7 +146,28 @@ pub fn new(jobs: grind.Grind) -> Store {
     settlement_attempts: 20,
     wake_attempts: 20,
     snooze_limit: 1000,
+    lock_timeout: Some(duration.seconds(4)),
   )
+}
+
+/// How long `load` waits for an occurrence's lock before the database
+/// gives up, which the port reports as `store.Contended` (nothing written,
+/// safe to run again); 4 seconds unless set, `None` to leave the
+/// connection's own setting alone.
+///
+/// Why a default: `pog.transaction` checks a connection out for at most 5
+/// seconds, and a transaction still waiting then loses its connection,
+/// which reaches the caller as `Unavailable` (outcome unknown) for what
+/// was only contention. Below that limit, a long lock wait ends as
+/// contention by construction.
+///
+/// `load` sets it with `SET LOCAL` semantics (`set_config(.., true)`), so
+/// it applies to the rest of the caller's transaction too, and it
+/// **overrides** a `lock_timeout` the caller set earlier in that
+/// transaction. With `None`, the caller's setting, or the role's, is
+/// respected.
+pub fn with_lock_timeout(store: Store, timeout: Option(Duration)) -> Store {
+  Store(..store, lock_timeout: timeout)
 }
 
 /// How many times a wake-up or a notice may be delivered again without an
@@ -208,7 +247,12 @@ pub fn following(store: Store, point: String) -> Store {
 ///
 /// - `load` is one statement (`decisions_load`): it locks the head row,
 ///   or, when there is none, an advisory lock on the id and then the row
-///   again, and reads the entries after the lock is held.
+///   again, and reads the entries after the lock is held. An id with no
+///   row, such as `decisions.subject_lock`, is locked and nothing is
+///   stored for it. It refuses a transaction that is not READ COMMITTED
+///   with `store.Conflict`. It first sets the
+///   transaction's `lock_timeout` (`with_lock_timeout`, 4 s by default), so
+///   a long lock wait ends as `store.Contended`.
 /// - `append` is one statement (`decisions_append`): the head, the entries,
 ///   the queue rows and a `NOTIFY` on channel `decisions_changed`. The
 ///   database refuses a repeated sequence number, a gap and a second
@@ -225,7 +269,7 @@ pub fn following(store: Store, point: String) -> Store {
 /// - `new_id` is a UUID version 7 made on this node.
 pub fn port(store: Store) -> Port(pog.Connection) {
   Port(
-    load:,
+    load: fn(tx, id) { load(store, tx, id) },
     append:,
     waiting:,
     schedule: fn(tx, point, occurrence, times) {
@@ -243,9 +287,19 @@ fn clock(store: Store, tx: pog.Connection) -> Timestamp {
   timestamp.add(sql.now(tx), store.offset)
 }
 
-fn load(tx: pog.Connection, id: String) -> Result(List(Stored), StoreError) {
-  pog.query("SELECT seq, at_ms, kind, event FROM decisions_load($1)")
+fn load(
+  store: Store,
+  tx: pog.Connection,
+  id: String,
+) -> Result(List(Stored), StoreError) {
+  pog.query("SELECT seq, at_ms, kind, event FROM decisions_load($1, $2)")
   |> pog.parameter(pog.text(id))
+  |> pog.parameter(pog.nullable(
+    fn(timeout) {
+      pog.text(int.to_string(duration.to_milliseconds(timeout)) <> "ms")
+    },
+    store.lock_timeout,
+  ))
   |> pog.returning({
     use seq <- decode.field(0, decode.int)
     use at <- decode.field(1, sql.time())
@@ -314,12 +368,16 @@ fn waiting(
   point: String,
   subject: Subject,
 ) -> Result(List(String), StoreError) {
-  // In id order (the column's collation is "C", byte order), so every
-  // transaction that locks several occurrences locks them in one order.
+  // The statuses `store.is_waiting` accepts, named here so the partial
+  // index `decisions_occurrences_waiting` serves the query
+  // (`migrations_test` checks the two agree). In id order (the column's
+  // collation is "C", byte order), so every transaction that locks several
+  // occurrences locks them in one order. Set-aside records are left out.
   pog.query(
     "SELECT id FROM decisions_occurrences
      WHERE point = $1 AND subject_kind = $2 AND subject_id = $3
-       AND status IN ('recommended', 'awaiting') AND set_aside_at IS NULL
+       AND status IN ('pending', 'recommended', 'awaiting', 'held')
+       AND set_aside_at IS NULL
      ORDER BY id",
   )
   |> pog.parameter(pog.text(point))
@@ -582,7 +640,7 @@ pub fn status_decoder() -> decode.Decoder(store.Status) {
   use name <- decode.then(decode.string)
   case store.parse_status(name) {
     Ok(status) -> decode.success(status)
-    Error(Nil) -> decode.failure(store.Attempted, "a head status")
+    Error(Nil) -> decode.failure(store.Pending, "a head status")
   }
 }
 
@@ -784,6 +842,28 @@ pub fn transaction_with(
       Error(LibraryFailed(failure_of(pog.TransactionRolledBack(refusal))))
     Error(pog.TransactionQueryError(error)) ->
       Error(LibraryFailed(failure_of(pog.TransactionQueryError(error))))
+  }
+}
+
+/// `transaction` in the shape of a verb: its failure is a `Refusal`, as
+/// `decisions_otp/isolated.recommend` and `recommend_when` want for their
+/// `in:`. A refusal the body returns is returned as it is (its
+/// transaction rolled back); a failure of the transaction itself becomes
+/// `StoreFailed` with its classification kept: contention stays
+/// `Contended`, a lost connection or an unknown commit stays `Unavailable`.
+///
+/// ```gleam
+/// isolated.recommend_when(desk, in: decisions_postgres.refusing(db, _), ..)
+/// ```
+pub fn refusing(
+  db: pog.Connection,
+  body: fn(pog.Connection) -> Result(a, Refusal),
+) -> Result(a, Refusal) {
+  case pog.transaction(db, body) {
+    Ok(value) -> Ok(value)
+    Error(pog.TransactionRolledBack(refusal)) -> Error(refusal)
+    Error(pog.TransactionQueryError(error)) ->
+      Error(decisions.StoreFailed(sql.store_error(error)))
   }
 }
 
@@ -1503,6 +1583,12 @@ pub type Follower =
 /// silently. `sweep` gives a job to any undelivered notice of a followed
 /// point left without one, such as one that settled before its point was
 /// followed.
+///
+/// A record superseded before it began (expected, then a newer event)
+/// still admits a notice, and its follower is handed it like any other.
+/// Reading it (`decisions.read`) is refused with `SupersededBefore`, whose
+/// handling is `Drop`: return that refusal and the notice ends delivered;
+/// `decisions.read_record` tells such a record apart as `NotBegun`.
 pub fn settlement_worker(
   store: Store,
   followers: List(Follower),

@@ -279,7 +279,7 @@ pub fn ask() -> Policy {
 }
 
 pub fn proceed() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never))
+  Policy(version: 1, rules: [], otherwise: Proceed(sample: Never, hold: None))
 }
 
 pub type Spec {

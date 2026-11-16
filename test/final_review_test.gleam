@@ -18,7 +18,7 @@ import decisions/vocabulary.{
 }
 import decisions/wire
 import gleam/list
-import gleam/option
+import gleam/option.{None}
 import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
@@ -122,7 +122,12 @@ pub fn r2_a_late_wake_up_skips_no_step_that_accepts_test() {
   let ladder =
     Policy(
       1,
-      [When(All([policy.waited(30), Not(policy.waited(60))]), Proceed(Never))],
+      [
+        When(
+          All([policy.waited(30), Not(policy.waited(60))]),
+          Proceed(Never, None),
+        ),
+      ],
       Ask(AnyoneHolding("finance")),
     )
   let desk = desk_on(base_point(), ladder)
@@ -141,7 +146,7 @@ pub fn r2_a_late_wake_up_skips_no_step_that_accepts_test() {
 pub fn r3_the_check_sees_what_is_about_to_be_released_test() {
   let db = fresh()
   let desk =
-    desk_on(base_point(), Policy(1, [], Proceed(Never)))
+    desk_on(base_point(), Policy(1, [], Proceed(Never, None)))
     |> decisions.checking(with: fn(tx, release: decisions.ToRelease(String)) {
       world.push(tx, "checked", release.output <> "@" <> release.key)
       Error(decisions.Refuse("balance does not cover"))
@@ -437,7 +442,7 @@ pub fn r12_guard_check_then_executor_test() {
           },
         )
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(Never))) },
+      under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
       over: memory.port(),
     )
     |> decisions.checking(with: fn(tx, _) {
@@ -446,4 +451,70 @@ pub fn r12_guard_check_then_executor_test() {
     })
   let assert Ok(_) = recommend(db, desk, "1")
   assert world.all(db, "order") == ["guard", "check", "execute"]
+}
+
+/// A desk on a held point whose tool's executor, or whose release check,
+/// cannot tell while `db_down` is "1".
+fn flaky_desk(in_tool: Bool) -> Desk(String, Memory) {
+  let down = fn(tx) { memory.get(tx, "db_down") == Ok("1") }
+  let desk =
+    decisions.desk(
+      base_point() |> decisions.with_hold(duration.minutes(5)),
+      drives: fn(_) {
+        Gated(..tool(), execute: fn(tx, released) {
+          case in_tool && down(tx) {
+            True -> Error(decisions.Unsure("connection reset"))
+            False -> tool().execute(tx, released)
+          }
+        })
+      },
+      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      over: memory.port(),
+    )
+  case in_tool {
+    True -> desk
+    False ->
+      decisions.checking(desk, with: fn(tx, _) {
+        case down(tx) {
+          True -> Error(decisions.Unsure("balance unknown"))
+          False -> Ok([])
+        }
+      })
+  }
+}
+
+fn unsure_at_wake_up(in_tool: Bool, reason: String) -> Nil {
+  let db = fresh()
+  let desk = flaky_desk(in_tool)
+  let assert Ok(w) = recommend(db, desk, "100")
+  let assert Ok(_) = approve(db, desk, w.id, ana)
+  memory.put(db, "db_down", "1")
+  at(db, 6)
+  let before = memory.entries(db, w.id)
+  let assert Error(refusal) =
+    memory.transaction(db, decisions.wake(desk, _, w.id))
+  assert refusal == decisions.ToolUnsure(reason)
+  assert decisions.handling(decisions.DeskRefused(refusal)) == decisions.Backoff
+  assert memory.entries(db, w.id) == before
+  assert effects(db) == []
+  // Sure again: the next wake-up releases, once.
+  memory.put(db, "db_down", "0")
+  let assert Ok(decisions.Woken(done)) =
+    memory.transaction(db, decisions.wake(desk, _, w.id))
+  let assert occurrence.Released(..) = done.status
+  assert memory.transaction(db, decisions.wake(desk, _, w.id))
+    == Ok(decisions.NothingDue)
+  assert effects(db) == ["100"]
+}
+
+/// R10. A tool whose executor could not tell at a hold's wake-up refuses
+/// nothing for good: the wake-up fails, nothing is recorded, and a later
+/// wake-up releases once.
+pub fn r10_an_unsure_tool_at_a_wake_up_is_tried_again_test() {
+  unsure_at_wake_up(True, "connection reset")
+}
+
+/// R10. Likewise for a release check that could not tell.
+pub fn r10_an_unsure_release_check_at_a_wake_up_is_tried_again_test() {
+  unsure_at_wake_up(False, "balance unknown")
 }

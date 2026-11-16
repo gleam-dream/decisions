@@ -11,6 +11,7 @@ import decisions/store.{Head, Stored}
 import decisions/vocabulary.{Approve}
 import decisions/wire
 import decisions_postgres.{Contended}
+import decisions_postgres/internal/sql
 import decisions_postgres/queue
 import decisions_postgres/telemetry
 import gleam/dynamic/decode
@@ -431,13 +432,22 @@ pub fn a_deadlock_and_a_serialization_failure_are_contention_test() {
     })
   let assert [detail] = deadlocked
   assert string.contains(detail, "40P01")
-  // A repeatable-read transaction whose snapshot predates another's
-  // committed write cannot lock that occurrence: 40001.
+  // A real serialization failure: a repeatable-read transaction updates a
+  // row another transaction changed after its snapshot (40001). The port
+  // itself refuses repeatable read (see `isolation_test`), so the failure
+  // is produced on an application row and classified as the port would.
+  let row = kit.tag("row")
+  let assert Ok(_) =
+    pog.query(
+      "INSERT INTO test_effects (point, occurrence, key) VALUES ('rr', $1, 'v1')",
+    )
+    |> pog.parameter(pog.text(row))
+    |> pog.execute(env.db)
   let gates = process.new_subject()
   let outcomes = process.new_subject()
   process.spawn(fn() {
     let outcome =
-      decisions_postgres.transaction(env.db, fn(tx) {
+      pog.transaction(env.db, fn(tx) {
         let assert Ok(_) =
           pog.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
           |> pog.execute(tx)
@@ -445,14 +455,20 @@ pub fn a_deadlock_and_a_serialization_failure_are_contention_test() {
         let go = process.new_subject()
         process.send(gates, go)
         let _ = process.receive(go, 10_000)
-        load(tx, x)
+        pog.query("UPDATE test_effects SET key = 'v3' WHERE occurrence = $1")
+        |> pog.parameter(pog.text(row))
+        |> pog.execute(tx)
       })
     process.send(outcomes, outcome)
   })
   let assert Ok(go) = process.receive(gates, 5000)
   let assert Ok(_) =
-    kit.tx(env, kit.open_and_decide(desk, _, x, kit.finance("bia"), Approve))
+    pog.query("UPDATE test_effects SET key = 'v2' WHERE occurrence = $1")
+    |> pog.parameter(pog.text(row))
+    |> pog.execute(env.db)
   process.send(go, Nil)
-  let assert Ok(Error(Contended(detail))) = process.receive(outcomes, 10_000)
+  let assert Ok(Error(pog.TransactionRolledBack(error))) =
+    process.receive(outcomes, 10_000)
+  let assert store.Contended(detail) = sql.store_error(error)
   assert string.contains(detail, "40001")
 }

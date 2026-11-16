@@ -21,6 +21,7 @@
 import decisions.{type Desk, type Refusal}
 import decisions/model.{type Failure, type Model, type Sources}
 import decisions/occurrence.{type Attempt, type Occurrence}
+import decisions/store.{type StoreError}
 import decisions/vocabulary.{
   type Manifest, type Recommendation, type Subject, type Trigger,
 }
@@ -186,9 +187,29 @@ pub type Attempted(output) {
   /// The model failed; the attempt is on the record with every earlier
   /// one. Decide on another try with `decisions/model.retryable`.
   Failed(failure: Failure, attempts: List(Attempt))
-  /// `recommend_when`'s precondition did not hold inside the recommending
-  /// transaction: nothing was recommended or recorded.
+  /// `recommend_when`'s precondition said to skip, inside the
+  /// recommending transaction: nothing was recommended or recorded. Skip
+  /// it for good.
   Skipped(reason: String)
+  /// A newer event superseded the key before anything was recommended
+  /// (it was expected with `decisions.expect`): the recommendation, or
+  /// the failed attempt, was refused with `SupersededBefore` and nothing
+  /// was written. The trigger is done.
+  Superseded(event: String)
+}
+
+/// Why `recommend_when`'s precondition does not let the recommendation
+/// go ahead.
+pub type Unmet {
+  /// The precondition was checked and says to skip this trigger for good,
+  /// such as "a later trigger arrived". `recommend_when` returns
+  /// `Ok(Skipped(reason))`.
+  Skip(reason: String)
+  /// The precondition could not be checked, because the store failed.
+  /// `recommend_when` returns `Error(StoreFailed(error))`, so the attempt
+  /// is retried as the error's disposition says (a contended store is
+  /// delivered again soon, without counting), and never taken for a skip.
+  CouldNotCheck(error: StoreError)
 }
 
 /// Run `model` outside any transaction, then in a transaction of
@@ -215,25 +236,32 @@ pub fn recommend(
 
 /// `recommend`, with a precondition checked **inside the recommending
 /// transaction**, after the model answered and before anything is
-/// written, such as "this trigger is still the latest about its subject".
-/// When `holds` returns `Error(reason)`, nothing is recommended and the
-/// result is `Skipped(reason)`. A failed model is recorded as by
-/// `recommend`, without the check.
+/// written. `holds` returns `Ok(Nil)` to go ahead, `Error(Skip(reason))`
+/// to skip the trigger for good (the result is `Ok(Skipped(reason))`), or
+/// `Error(CouldNotCheck(error))` when the store failed while it checked
+/// (the result is `Error(StoreFailed(error))`, retried as that error's
+/// disposition says). A failed model is recorded as by `recommend`,
+/// without the check.
 ///
-/// The check and the recommendation commit together, but that alone does
-/// not stop a later trigger from committing between the check's read and
-/// the commit. It closes the superseding window only when `holds` **locks
-/// what it reads**, and whoever records a newer trigger takes the same
-/// lock, for example with `decisions_otp/store.lock`:
+/// **To close the superseding window, use `decisions.expect`, not this.**
+/// Call `happened` and then `expect` for the key in the transaction that
+/// receives the trigger: a newer event then supersedes the key before it is
+/// recommended, and the late recommendation comes back as
+/// `Ok(Superseded(event))`. `recommend_when` remains the right tool for a
+/// precondition that is not "a newer trigger arrived", such as "the
+/// customer still has an open account" or "the feature is still switched
+/// on". Such a check closes a race only when it **locks what it reads**
+/// and whoever changes it takes the same lock, for example with
+/// `decisions_otp/store.lock`:
 ///
 /// ```gleam
 /// holds: fn(tx) {
 ///   use Nil <- result.try(
-///     store.lock(tx, "latest:" <> subject) |> result.map_error(store_text),
+///     store.lock(tx, "account:" <> id) |> result.map_error(isolated.CouldNotCheck),
 ///   )
-///   case store.get(tx, "latest", subject) {
-///     Ok(key) if key == request.key -> Ok(Nil)
-///     _ -> Error("a later trigger arrived")
+///   case store.get(tx, "accounts", id) {
+///     Ok("open") -> Ok(Nil)
+///     _ -> Error(isolated.Skip("the account is closed"))
 ///   }
 /// }
 /// ```
@@ -243,7 +271,7 @@ pub fn recommend_when(
     Result(Attempted(o), Refusal),
   request request: Request,
   model chosen: Model(o),
-  holds holds: fn(tx) -> Result(Nil, String),
+  holds holds: fn(tx) -> Result(Nil, Unmet),
 ) -> Result(Attempted(o), Refusal) {
   let started = monotonic_us()
   case model.run(chosen, request.context, request.sources) {
@@ -262,6 +290,7 @@ pub fn recommend_when(
           ),
         )
         |> result.map(Recommended)
+        |> superseded
       })
     Error(failure) -> {
       report(desk, request, failure, started)
@@ -275,18 +304,31 @@ pub fn recommend_when(
           failure:,
         )
         |> result.map(Failed(failure, _))
+        |> superseded
       })
     }
   }
 }
 
 fn check(
-  held: Result(Nil, String),
+  held: Result(Nil, Unmet),
   then: fn() -> Result(Attempted(o), Refusal),
 ) -> Result(Attempted(o), Refusal) {
   case held {
     Ok(Nil) -> then()
-    Error(reason) -> Ok(Skipped(reason))
+    Error(Skip(reason:)) -> Ok(Skipped(reason))
+    Error(CouldNotCheck(error:)) -> Error(decisions.StoreFailed(error))
+  }
+}
+
+/// A key superseded before it was recommended wrote nothing and is done:
+/// say so in the result rather than as a refusal.
+fn superseded(
+  attempted: Result(Attempted(o), Refusal),
+) -> Result(Attempted(o), Refusal) {
+  case attempted {
+    Error(decisions.SupersededBefore(event:)) -> Ok(Superseded(event))
+    other -> other
   }
 }
 
@@ -297,7 +339,9 @@ fn report(
   started: Int,
 ) -> Nil {
   let key = request.key
-  let kind: Option(telemetry.ModelFailure) = case failure {
+  let kind: Option(telemetry.ModelFailure) = case
+    model.without_evidence(failure)
+  {
     model.Deadline(_) -> Some(telemetry.ModelDeadline)
     model.Raised(_) -> Some(telemetry.ModelRaised)
     _ -> None

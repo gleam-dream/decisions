@@ -1,6 +1,6 @@
 # `recommend_when` needs an adapter around `decisions_postgres.transaction`
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -28,3 +28,7 @@ Making `decisions_otp` depend on `decisions_postgres` or the reverse at run time
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. `decisions_postgres.refusing(db, body)` is a transaction whose failure is a `Refusal`, with the store failure's classification kept, for `recommend_when`'s `in:`. Test: `/code/gleam-dream/decisions/integrations/decisions_postgres/test/decisions_postgres/owner_round_test.gleam` (issue 03).

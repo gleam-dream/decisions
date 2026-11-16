@@ -1,6 +1,6 @@
 # Decide whether the port carries a per-subject marker for the superseding window
 
-Status: ready-for-human
+Status: wontfix
 Category: enhancement
 
 AI-assisted contribution.
@@ -26,3 +26,7 @@ Implementing the change before the ruling.
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `wontfix` on 2026-11-16. Not needed: `decisions.expect` admits a trigger before the model runs, and `happened` takes a lock per point and subject through the port's existing `load`, so the superseding window is closed for every expected key without a new port clause. Recorded in ADR 0050, which settles ADR 0034's open question.

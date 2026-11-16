@@ -17,7 +17,7 @@ killed at any instant and its replacement carries on.
 | `decisions_otp/replay`    | A replay spread over processes, with the same tally as the sequential one.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `decisions_otp/live`      | Subscriptions to an occurrence, a point, a queue or a point's review queue: a hint after each commit that changed it, and `Missed(count)` as soon as a subscriber that fell behind has room again.                                                                                                                                                                                                                                                                                                    |
 | `decisions_otp/telemetry` | The Sinal events the runtime and isolated calls emit, each with its `source`, including `[decisions, job, dropped]` for a job removed as done.                                                                                                                                                                                                                                                                                                                                                        |
-| `decisions_otp/stress`    | Conditions A and B (twenty race and crash scenarios) as scenarios any store can run.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `decisions_otp/stress`    | Conditions A and B (twenty-two race and crash scenarios) as scenarios any store can run.                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `decisions_otp/scale`     | Condition H and use case 12 as workloads any store can run.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## What a kill loses
@@ -44,6 +44,16 @@ whose outcome is unknown, is delivered again uncounted. After 20 counted
 failures by default the job is set aside. Every commit is seen whole by every
 reader, and `restart` keeps every acknowledged commit; `named` and `subscribe`
 return an `OwnerError` instead of failing silently.
+
+## Admitting a trigger
+
+Admit a trigger in one transaction: `decisions.happened` with the point's
+superseding event, then `decisions.expect` with the trigger's key, in that
+order. `happened` takes the core's subject lock (an id this store locks
+like any other and keeps nothing for), so two admissions about one subject
+run one after the other and the later one supersedes the earlier key. The
+other order can deadlock; this store refuses one of the two transactions
+with `Contended`, and the runtime delivers it again.
 
 ## The two adapters compared
 

@@ -13,6 +13,7 @@ import decisions/vocabulary.{
 }
 import decisions/wire
 import gleam/int
+import gleam/option.{None}
 import gleam/order
 import gleam/result
 import gleam/time/duration
@@ -60,7 +61,7 @@ pub fn desk() -> Desk(String, Memory) {
     under: fn(_) {
       Ok(Policy(
         version: 1,
-        rules: [When(OwnAct, Proceed(Never))],
+        rules: [When(OwnAct, Proceed(Never, None))],
         otherwise: Ask(AnyoneHolding("operators")),
       ))
     },

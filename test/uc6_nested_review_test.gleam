@@ -14,7 +14,7 @@ import decisions/vocabulary.{
 }
 import decisions/wire
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/result
 import support/refund.{type Refund, Refund}
 import support/world.{type World}
@@ -35,7 +35,7 @@ fn policy() {
           policy.is(opinion(), "approve"),
           policy.below(refund.amount(), 500.0),
         ]),
-        Proceed(Never),
+        Proceed(Never, None),
       ),
     ],
     otherwise: Ask(AnyoneHolding("finance")),
@@ -78,7 +78,7 @@ fn review() -> Desk(String, Memory) {
       )
     },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never)))
+      Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never, None)))
     },
     over: memory.port(),
   )

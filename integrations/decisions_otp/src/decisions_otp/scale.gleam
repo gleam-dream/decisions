@@ -84,7 +84,7 @@ fn desk(
 }
 
 fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never))
+  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
 }
 
 fn asking(set: String) -> Policy {
@@ -94,7 +94,9 @@ fn asking(set: String) -> Policy {
 fn scoring(share: Int) -> Policy {
   Policy(
     version: 2,
-    rules: [When(policy.at_least(score(), 0.9), Proceed(PerCent(share)))],
+    rules: [
+      When(policy.at_least(score(), 0.9), Proceed(PerCent(share), hold: None)),
+    ],
     otherwise: Ask(AnyoneHolding("support")),
   )
 }

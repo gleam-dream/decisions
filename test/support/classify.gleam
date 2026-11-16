@@ -49,7 +49,7 @@ pub fn store_class() -> Gated(String, Memory) {
 pub fn production() -> Policy {
   Policy(
     version: 1,
-    rules: [When(policy.at_least(score(), 0.9), Proceed(PerCent(5)))],
+    rules: [When(policy.at_least(score(), 0.9), Proceed(PerCent(5), None))],
     otherwise: Ask(AnyoneHolding("finance")),
   )
 }

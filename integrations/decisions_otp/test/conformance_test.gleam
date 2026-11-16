@@ -34,6 +34,6 @@ pub fn the_store_conforms_with_the_wall_clock_test() {
   assert conforms(store.defaults()) == Ok(Nil)
 }
 
-pub fn the_suite_has_twenty_checks_test() {
-  assert list.length(conformance.names()) == 20
+pub fn the_suite_has_twenty_one_checks_test() {
+  assert list.length(conformance.names()) == 21
 }

@@ -33,7 +33,7 @@ fn desk(execute) -> Desk(String, Memory) {
     under: fn(_) {
       Ok(Policy(
         1,
-        [When(OwnAct, Proceed(Never))],
+        [When(OwnAct, Proceed(Never, None))],
         Ask(AnyoneHolding("finance")),
       ))
     },
@@ -145,7 +145,7 @@ pub fn tally_and_replay_judge_alike_test() {
       drives: fn(_) {
         Gated(name: "t", guard: fn(_, _) { Ok([]) }, execute: ok_tool)
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(policy.PerCent(100)))) },
+      under: fn(_) { Ok(Policy(1, [], Proceed(policy.PerCent(100), None))) },
       over: memory.port(),
     )
   let echo_by = Rules("echo", "1")

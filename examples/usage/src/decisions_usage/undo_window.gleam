@@ -1,7 +1,7 @@
 //// An undo window on what the policy lets proceed by itself: small refunds
 //// the classifier is sure of proceed, are held for thirty minutes, and
-//// anyone in finance may withdraw them meanwhile. What a person approved
-//// is released at once.
+//// anyone in finance may withdraw them meanwhile. The window is part of
+//// the policy's outcome, so what a person approved is released at once.
 
 // snips-start: undo-window
 import decisions
@@ -13,13 +13,12 @@ import decisions/vocabulary.{
 }
 import decisions_usage/autonomy_ladder
 import decisions_usage/clinic.{type Refund, Refund}
+import gleam/option.{Some}
 import gleam/time/duration
 
 pub fn desk() -> decisions.Desk(Refund, Memory) {
   decisions.desk(
-    autonomy_ladder.point()
-      |> decisions.with_policy_hold(duration.minutes(30))
-      |> decisions.withdrawn_by("finance"),
+    autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
       Ok(Policy(
@@ -27,7 +26,8 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
         rules: [
           When(
             policy.at_least(autonomy_ladder.confidence(), 0.95),
-            Proceed(Never),
+            // Proceed, with a thirty-minute undo window.
+            Proceed(Never, Some(duration.minutes(30))),
           ),
         ],
         otherwise: Ask(AnyoneHolding("finance")),

@@ -1,10 +1,13 @@
 //// The in-memory store passes the storage port's conformance suite, and
 //// the suite catches a broken adapter for every clause it claims to check.
 
+import decisions
 import decisions/conformance.{type Adapter}
 import decisions/memory.{type Memory}
 import decisions/store.{Conflict, Stored}
+import decisions/vocabulary
 import gleam/list
+import gleam/option
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
@@ -191,6 +194,41 @@ pub fn each_check_catches_its_broken_adapter_test() {
       port(fn(p) {
         store.Port(..p, schedule: fn(tx, point, id, at) {
           p.schedule(tx, point, id, list.take(at, 1))
+        })
+      }),
+    ),
+    #(
+      "a subject lock stores nothing and orders two admissions",
+      port(fn(p) {
+        // Loading an id with no entry creates a row for it.
+        store.Port(..p, load: fn(tx, id) {
+          case p.load(tx, id) {
+            Ok([]) ->
+              case string.starts_with(id, decisions.subject_lock_prefix) {
+                True -> {
+                  let assert Ok(Nil) =
+                    p.append(
+                      tx,
+                      id,
+                      store.Head(
+                        point: "",
+                        subject: vocabulary.Subject("", ""),
+                        status: store.Pending,
+                        awaiting: [],
+                        due: option.None,
+                        arrived: world.t0(),
+                        approved: [],
+                        may_not_decide: [],
+                        review_pending: False,
+                      ),
+                      [fake],
+                    )
+                  Ok([])
+                }
+                False -> Ok([])
+              }
+            other -> other
+          }
         })
       }),
     ),

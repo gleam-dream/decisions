@@ -431,7 +431,7 @@ fn head_decoder() -> Decoder(Head) {
     use name <- decode.then(decode.string)
     case store.parse_status(name) {
       Ok(status) -> decode.success(status)
-      Error(Nil) -> decode.failure(store.Attempted, "a status")
+      Error(Nil) -> decode.failure(store.Pending, "a status")
     }
   })
   use awaiting <- decode.field("awaiting", decode.list(decode.string))

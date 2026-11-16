@@ -1,6 +1,6 @@
 # Judging a candidate model under a candidate policy means rebuilding the example
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -27,3 +27,7 @@ Changing how `replay` tallies agreement (ADR 0024).
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. `learning.candidate_under(example, candidate:, policy:, point:)` runs a candidate model on the example's recorded sources and evaluates its recommendation under a candidate policy. Code: `/code/gleam-dream/decisions/src/decisions/learning.gleam`.

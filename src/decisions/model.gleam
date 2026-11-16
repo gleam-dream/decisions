@@ -72,6 +72,11 @@ pub type Failure {
   /// The model declined to recommend, or no stage of a cascade answered. A
   /// retry with the same context cannot help.
   Declined(reason: String)
+  /// `failure`, pointing at evidence the model stored about it, such as
+  /// the provider exchange that did not decode. Build it with
+  /// `with_evidence`; `decisions.record_failure` records the evidence on
+  /// the failed attempt.
+  WithEvidence(failure: Failure, evidence: List(Ref))
 }
 
 /// Whether trying the same model on the same context again can give a
@@ -84,6 +89,7 @@ pub fn retryable(failure: Failure) -> Bool {
     | Raised(_)
     | Undecodable(_) -> True
     NotRecorded(..) | Declined(_) -> False
+    WithEvidence(failure:, ..) -> retryable(failure)
   }
 }
 
@@ -103,6 +109,7 @@ pub fn describe(failure: Failure) -> String {
       "the provider " <> provider <> " failed: " <> reason
     Undecodable(reason:) -> "the answer does not decode: " <> reason
     Declined(reason:) -> "the model declined: " <> reason
+    WithEvidence(failure:, ..) -> describe(failure)
   }
 }
 
@@ -112,6 +119,32 @@ pub fn describe(failure: Failure) -> String {
 /// the same type. A reference the source does not hold is `NotRecorded`.
 pub type Resolver =
   fn(Ref) -> Result(String, Failure)
+
+/// `failure`, pointing at evidence the model stored about it. Evidence on
+/// a failure that already carries some is added to it.
+pub fn with_evidence(failure: Failure, evidence: List(Ref)) -> Failure {
+  case failure {
+    WithEvidence(failure: inner, evidence: earlier) ->
+      WithEvidence(failure: inner, evidence: list.append(earlier, evidence))
+    _ -> WithEvidence(failure:, evidence:)
+  }
+}
+
+/// The evidence a failure points at; empty for a failure without any.
+pub fn evidence_of(failure: Failure) -> List(Ref) {
+  case failure {
+    WithEvidence(evidence:, ..) -> evidence
+    _ -> []
+  }
+}
+
+/// The failure without the evidence it points at.
+pub fn without_evidence(failure: Failure) -> Failure {
+  case failure {
+    WithEvidence(failure:, ..) -> without_evidence(failure)
+    _ -> failure
+  }
+}
 
 /// What a read returned, and the reference to the evidence that holds it.
 pub type Captured {
@@ -367,6 +400,11 @@ fn push(cell: Cell, ref: Ref) -> Nil
 /// A failure as JSON, as a failed attempt's entry keeps it.
 pub fn failure_to_json(failure: Failure) -> Json {
   case failure {
+    WithEvidence(failure:, evidence:) ->
+      wire.tagged("with_evidence", [
+        #("failure", failure_to_json(failure)),
+        #("evidence", json.array(evidence, wire.ref)),
+      ])
     NotRecorded(read:, argument:) ->
       wire.tagged("not_recorded", [
         #("read", json.string(read)),
@@ -399,6 +437,11 @@ pub fn failure_to_json(failure: Failure) -> Json {
 pub fn failure_decoder() -> Decoder(Failure) {
   use tag <- decode.field("t", decode.string)
   case tag {
+    "with_evidence" -> {
+      use failure <- decode.field("failure", failure_decoder())
+      use evidence <- decode.field("evidence", decode.list(wire.ref_decoder()))
+      decode.success(WithEvidence(failure:, evidence:))
+    }
     "not_recorded" -> {
       use read <- decode.field("read", decode.string)
       use argument <- decode.field("argument", decode.string)

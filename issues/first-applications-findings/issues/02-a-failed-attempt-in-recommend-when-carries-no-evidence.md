@@ -1,6 +1,6 @@
 # A failed attempt recorded by `recommend_when` carries no evidence
 
-Status: needs-triage
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -28,3 +28,7 @@ Changing `record_failure_with` in the core.
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. A model's failure can carry its evidence (`model.with_evidence`, `Failure.WithEvidence`), and `record_failure` stores the references on the attempt, so the isolated recommend step records them. Test: `/code/gleam-dream/decisions/integrations/decisions_otp/test/owner_round_test.gleam` (issue 02).

@@ -62,7 +62,7 @@ pub fn asking(set: String) -> Policy {
 }
 
 pub fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never))
+  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
 }
 
 /// Proceed at a score of 0.9 or above and sample `share` per cent; ask
@@ -70,7 +70,9 @@ pub fn proceeding() -> Policy {
 pub fn scoring(share: Int) -> Policy {
   Policy(
     version: 2,
-    rules: [When(policy.at_least(score(), 0.9), Proceed(PerCent(share)))],
+    rules: [
+      When(policy.at_least(score(), 0.9), Proceed(PerCent(share), hold: None)),
+    ],
     otherwise: Ask(AnyoneHolding("support")),
   )
 }

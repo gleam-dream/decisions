@@ -49,8 +49,8 @@ pub type Head {
     /// The decision point's name.
     point: String,
     subject: Subject,
-    /// Where the occurrence stands. `Attempted` while the record holds
-    /// only failed attempts. Store it with `status_name`.
+    /// Where the occurrence stands. `Pending` while the record has not
+    /// begun (expected, or holding only failed attempts). Store it with `status_name`.
     status: Status,
     /// The decision sets whose queues the occurrence waits in. Empty
     /// unless the status is `Awaiting`.
@@ -81,10 +81,12 @@ pub type Head {
 }
 
 /// Where an occurrence stands, as its head keeps it: the nine statuses of
-/// `decisions/occurrence.Status` without their payloads, and `Attempted`
-/// for a record that holds only failed attempts.
+/// `decisions/occurrence.Status` without their payloads, and `Pending` for
+/// a record that has not begun: a recommendation is expected
+/// (`decisions.expect`) or only failed attempts are recorded. A record
+/// superseded before it began is `Expired`.
 pub type Status {
-  Attempted
+  Pending
   Recommended
   Awaiting
   Accepted
@@ -98,7 +100,7 @@ pub type Status {
 
 /// Every status, in the order of `Status`.
 pub const statuses = [
-  Attempted,
+  Pending,
   Recommended,
   Awaiting,
   Accepted,
@@ -113,7 +115,7 @@ pub const statuses = [
 /// The stable name a store keeps for a status, such as `"awaiting"`.
 pub fn status_name(status: Status) -> String {
   case status {
-    Attempted -> "attempted"
+    Pending -> "pending"
     Recommended -> "recommended"
     Awaiting -> "awaiting"
     Accepted -> "accepted"
@@ -129,7 +131,7 @@ pub fn status_name(status: Status) -> String {
 /// The status a stored name stands for.
 pub fn parse_status(name: String) -> Result(Status, Nil) {
   case name {
-    "attempted" -> Ok(Attempted)
+    "pending" -> Ok(Pending)
     "recommended" -> Ok(Recommended)
     "awaiting" -> Ok(Awaiting)
     "accepted" -> Ok(Accepted)
@@ -143,19 +145,13 @@ pub fn parse_status(name: String) -> Result(Status, Nil) {
   }
 }
 
-/// Whether `waiting` returns an occurrence with this status: it is
-/// recommended or awaiting, so an event can still supersede it.
+/// Whether `waiting` returns a record with this status: it has not begun,
+/// or it is recommended, awaiting or held, so nothing has been released
+/// and an event can still supersede it.
 pub fn is_waiting(status: Status) -> Bool {
   case status {
-    Recommended | Awaiting -> True
-    Attempted
-    | Accepted
-    | Held
-    | Released
-    | Rejected
-    | Expired
-    | Withdrawn
-    | Refused -> False
+    Pending | Recommended | Awaiting | Held -> True
+    Accepted | Released | Rejected | Expired | Withdrawn | Refused -> False
   }
 }
 
@@ -199,6 +195,13 @@ pub type Port(tx) {
     /// exists too**: a second transaction that loads the same id waits
     /// until the first ends, then sees what it stored. Empty when there is
     /// none.
+    ///
+    /// The core also loads ids that never hold entries, purely as locks:
+    /// `decisions.happened` loads `decisions.subject_lock(point, subject)`
+    /// (prefix `decisions.subject-lock:`) to serialise on a subject. Loading
+    /// must not create a row, head or anything else `waiting` or an
+    /// inspection could see; the lock alone must last until the
+    /// transaction ends.
     load: fn(tx, String) -> Result(List(Stored), StoreError),
     /// Append entries after the last one and replace the head. The first
     /// entry has `seq` 1 and each next one the next number. The store
@@ -207,7 +210,9 @@ pub type Port(tx) {
     /// changed or removed.
     append: fn(tx, String, Head, List(Stored)) -> Result(Nil, StoreError),
     /// The ids of a point's occurrences about a subject whose head status
-    /// is `Recommended` or `Awaiting` (`is_waiting`), in ascending id order, so that
+    /// is `Pending`, `Recommended`, `Awaiting` or `Held` (`is_waiting`):
+    /// records that have not begun, and occurrences nothing of which has
+    /// been released. In ascending id order, so that
     /// every transaction locks several occurrences in one order. An adapter
     /// may leave out an occurrence it has set aside as poison (a record
     /// that no longer decodes), so that one bad record does not stop a

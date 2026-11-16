@@ -6,6 +6,7 @@ import decisions/occurrence
 import decisions/policy.{Ask, Never, Policy, Proceed, SomeoneElseHolding, When}
 import decisions/testing
 import decisions/vocabulary.{Approve, Person, Trigger}
+import gleam/option.{None}
 import support/refund.{Refund}
 import support/world
 
@@ -14,7 +15,7 @@ import support/world
 fn policy() {
   Policy(
     version: 2,
-    rules: [When(policy.below(refund.amount(), 100.0), Proceed(Never))],
+    rules: [When(policy.below(refund.amount(), 100.0), Proceed(Never, None))],
     otherwise: Ask(SomeoneElseHolding("finance")),
   )
 }

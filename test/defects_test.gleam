@@ -32,7 +32,7 @@ fn ask() {
 fn own_act_proceeds() {
   Policy(
     version: 1,
-    rules: [When(OwnAct, Proceed(Never))],
+    rules: [When(OwnAct, Proceed(Never, None))],
     otherwise: Ask(AnyoneHolding("finance")),
   )
 }
@@ -179,7 +179,7 @@ pub fn defect_4_one_unreadable_occurrence_does_not_stop_superseding_test() {
     reply.draft(w, "m3", "run-3", Manifest(refs: [], renderer: "reply-1"))
   memory.tamper(w.db, second.id, 1, "{\"not\":\"an entry\"}")
 
-  let assert Ok(decisions.Supersession(expired:, unreadable:)) =
+  let assert Ok(decisions.Supersession(expired:, not_begun: [], unreadable:)) =
     world.in_tx(w, decisions.happened(
       reply.desk(),
       _,
@@ -465,7 +465,7 @@ pub fn a_failed_attempt_is_on_the_record_test() {
   let assert Error(decisions.NotRecommended([_, _])) =
     world.in_tx(w, decisions.read(desk, _, occurrence: "refund-11"))
   let assert Ok(head) = list.key_find(memory.heads(w.db), "refund-11")
-  assert head.status == store.Attempted
+  assert head.status == store.Pending
 
   let assert Ok(recommended) =
     world.in_tx(w, decisions.recommend_once(

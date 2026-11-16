@@ -164,7 +164,7 @@ pub fn c2_a_consulting_step_asks_and_wake_never_loops_test() {
     Policy(
       1,
       [
-        When(policy.waited(60), Proceed(Never)),
+        When(policy.waited(60), Proceed(Never, None)),
         When(policy.waited(30), Consult("risk")),
       ],
       Ask(AnyoneHolding("finance")),
@@ -272,7 +272,7 @@ pub fn c5_a_refusal_is_recorded_only_from_its_token_test() {
   let other =
     desk_with(
       decisions.point("probe.other", wire.text()),
-      Policy(1, [], Proceed(Never)),
+      Policy(1, [], Proceed(Never, None)),
     )
   assert memory.transaction(db, decisions.record_refusal(other, _, rollback))
     |> result.replace(Nil)
@@ -429,7 +429,7 @@ pub fn c10_the_checker_sees_missing_wake_ups_and_a_wrong_head_test() {
   let p =
     Policy(
       1,
-      [When(policy.waited(60), Proceed(Never))],
+      [When(policy.waited(60), Proceed(Never, None))],
       Ask(AnyoneHolding("finance")),
     )
   let desk = desk_with(base_point(), p)
@@ -489,7 +489,7 @@ pub fn c11_each_occurrence_is_judged_once_test() {
 pub fn c12_reviews_have_an_eligibility_test() {
   let db = fresh()
   let point = base_point() |> decisions.reviewed_by("audit")
-  let desk = desk_with(point, Policy(1, [], Proceed(PerCent(100))))
+  let desk = desk_with(point, Policy(1, [], Proceed(PerCent(100), None)))
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(
       desk,
@@ -591,7 +591,7 @@ pub fn c14_interface_corrections_test() {
     |> result.replace(Nil)
     == Error(decisions.UnknownOccurrence)
 
-  let released = desk_with(base_point(), Policy(1, [], Proceed(Never)))
+  let released = desk_with(base_point(), Policy(1, [], Proceed(Never, None)))
   let assert Ok(done) =
     memory.transaction(db, decisions.recommend(released, _, proposal("1")))
   let assert Ok(last) = list.last(done.entries)
@@ -647,14 +647,14 @@ pub fn c14_interface_corrections_test() {
 /// C15. `PerCent(0)` survives storage; superseding after the deadline says
 /// the deadline ended it; a held occurrence is not superseded.
 pub fn c15_documented_behaviour_holds_test() {
-  let p = Policy(1, [], Proceed(PerCent(0)))
+  let p = Policy(1, [], Proceed(PerCent(0), None))
   assert json.parse(json.to_string(policy.to_json(p)), policy.decoder())
     == Ok(p)
   assert json.parse(
-      json.to_string(policy.to_json(Policy(1, [], Proceed(Never)))),
+      json.to_string(policy.to_json(Policy(1, [], Proceed(Never, None)))),
       policy.decoder(),
     )
-    == Ok(Policy(1, [], Proceed(Never)))
+    == Ok(Policy(1, [], Proceed(Never, None)))
 
   let db = fresh()
   let point =
@@ -680,16 +680,22 @@ pub fn c15_documented_behaviour_holds_test() {
       base_point()
         |> decisions.with_hold(duration.minutes(5))
         |> decisions.superseded_by("new"),
-      Policy(1, [], Proceed(Never)),
+      Policy(1, [], Proceed(Never, None)),
     )
   let assert Ok(held) =
     memory.transaction(db, decisions.recommend(holding, _, proposal("100")))
   let assert occurrence.Held(..) = held.status
-  assert memory.transaction(db, decisions.happened(
+  // A held occurrence has released nothing, so a newer event supersedes it.
+  let assert Ok(decisions.Supersession(
+    expired: [superseded],
+    not_begun: [],
+    unreadable: [],
+  )) =
+    memory.transaction(db, decisions.happened(
       holding,
       _,
       "new",
       about: Subject("company", "x"),
     ))
-    == Ok(decisions.Supersession(expired: [], unreadable: []))
+  assert superseded.status == occurrence.Expired(vocabulary.Superseded("new"))
 }

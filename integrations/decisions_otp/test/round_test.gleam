@@ -368,7 +368,7 @@ pub fn a_precondition_that_fails_recommends_nothing_test() {
     fn(tx) {
       case store.get(tx, "latest", "ana") {
         Ok(found) if found == key -> Ok(Nil)
-        _ -> Error("a later trigger arrived about ana")
+        _ -> Error(isolated.Skip("a later trigger arrived about ana"))
       }
     }
   }

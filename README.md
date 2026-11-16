@@ -54,8 +54,11 @@ application code.
   that compares the output with the world; record the evidence both relied on
   and what happened outside the database. A tool that could not tell says so,
   and nothing is recorded as refused.
-- Hold what the policy let through by itself for an undo window, and let a
-  named decision set withdraw it meanwhile.
+- Hold what the policy let through by itself (the hold, an undo window carried
+  by the policy's `Proceed`), and let a named decision set withdraw it
+  meanwhile.
+- Expect a trigger in the transaction that receives it, so that a newer event
+  supersedes it before the model's late recommendation arrives.
 - Tell anyone what really happened with `occurrence.account`, and who decided
   with `occurrence.decided_by`.
 - Keep failed model attempts and refused releases on the record.
@@ -63,7 +66,7 @@ application code.
   through a point's occurrences for export, and replay a candidate model, or
   ask what a candidate policy would have said, with no network.
 - Run on PostgreSQL with Grind delivering wake-ups and settlement notices and
-  a sweep that gives every pending row a job, or on a process-safe in-memory
+  a sweep that gives every pending wake-up and undelivered notice a job, or on a process-safe in-memory
   store under an OTP supervisor whose commits readers see whole.
 
 ## Install
@@ -325,7 +328,9 @@ import decisions/vocabulary.{
 }
 import decisions_usage/clinic.{type Refund, Refund}
 import gleam/json
+import gleam/option.{None, Some}
 import gleam/result
+import gleam/time/duration
 
 /// The classifier's confidence, reported beside its output.
 pub fn confidence() -> fact.Key(Float) {
@@ -346,7 +351,7 @@ pub fn point() -> decisions.Point(Refund) {
 pub fn assisted() -> Policy {
   Policy(
     version: 1,
-    rules: [When(OwnAct, Proceed(Never))],
+    rules: [When(OwnAct, Proceed(Never, None))],
     otherwise: Ask(AnyoneHolding("finance")),
   )
 }
@@ -357,13 +362,33 @@ pub fn confident() -> Policy {
   Policy(
     version: 2,
     rules: [
-      When(OwnAct, Proceed(Never)),
+      When(OwnAct, Proceed(Never, None)),
       When(
         policy.All([
           policy.at_least(confidence(), 0.95),
           policy.below(clinic.amount(), 100.0),
         ]),
-        Proceed(PerCent(10)),
+        Proceed(PerCent(10), None),
+      ),
+    ],
+    otherwise: Ask(AnyoneHolding("finance")),
+  )
+}
+
+/// Rung 3: the same refunds proceed with a thirty-minute undo window
+/// instead of a sample: each is held, and released when the window ends
+/// unless finance withdraws it first.
+pub fn undoable() -> Policy {
+  Policy(
+    version: 3,
+    rules: [
+      When(OwnAct, Proceed(Never, None)),
+      When(
+        policy.All([
+          policy.at_least(confidence(), 0.95),
+          policy.below(clinic.amount(), 100.0),
+        ]),
+        Proceed(Never, Some(duration.minutes(30))),
       ),
     ],
     otherwise: Ask(AnyoneHolding("finance")),
@@ -677,9 +702,13 @@ pub fn approve(store: Memory, id: String, by validator: Validator) -> String {
 
 ## An undo window on what the policy lets through
 
-A policy hold waits only on what the policy accepted by itself; what a person
-approved is released at once. Holders of the set named with `withdrawn_by`
-may take a held output back until the hold ends by the store clock.
+The window is part of the policy's outcome: `Proceed(sample:, hold:)` holds
+only what the policy accepted by itself, and what a person approved is released
+at once. A new policy version changes the window for new acceptances, not for
+an occurrence already held. Holders of the set named with `withdrawn_by` may
+take a held output back until the hold ends by the store clock, and a newer
+event declared with `superseded_by` ends a held occurrence with nothing
+released.
 
 <!-- prettier-ignore-start -->
 
@@ -694,13 +723,12 @@ import decisions/vocabulary.{
 }
 import decisions_usage/autonomy_ladder
 import decisions_usage/clinic.{type Refund, Refund}
+import gleam/option.{Some}
 import gleam/time/duration
 
 pub fn desk() -> decisions.Desk(Refund, Memory) {
   decisions.desk(
-    autonomy_ladder.point()
-      |> decisions.with_policy_hold(duration.minutes(30))
-      |> decisions.withdrawn_by("finance"),
+    autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
       Ok(Policy(
@@ -708,7 +736,8 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
         rules: [
           When(
             policy.at_least(autonomy_ladder.confidence(), 0.95),
-            Proceed(Never),
+            // Proceed, with a thirty-minute undo window.
+            Proceed(Never, Some(duration.minutes(30))),
           ),
         ],
         otherwise: Ask(AnyoneHolding("finance")),
@@ -729,6 +758,103 @@ pub fn take_back(
     occurrence: id,
     by: clinic.bia,
   ))
+}
+
+```
+
+<!-- prettier-ignore-end -->
+
+## Admit a trigger before the model runs
+
+A model can take a while, and a newer event about the same subject can arrive
+meanwhile. In the transaction that receives a trigger, call
+`decisions.happened` with the point's superseding event and then
+`decisions.expect` with the trigger's key, in that order. From then on a later
+`happened` supersedes the expected record before it begins, and the late
+recommendation is refused. `happened` first takes a lock per point and subject
+(the subject lock), so two triggers about one subject admitted at the same
+moment are handled one after the other and the second supersedes the first's
+expectation. In the other order two admissions can deadlock; the store refuses
+one with `Contended`, and it is delivered again.
+
+| The trigger was                            | Then                                 | Result                                                     |
+| ------------------------------------------ | ------------------------------------ | ---------------------------------------------------------- |
+| Expected, and nothing newer happened       | `recommend_once`                     | The occurrence begins as usual                             |
+| Expected, and a newer event happened first | `recommend_once` or `record_failure` | Refused with `SupersededBefore(event)`; nothing is written |
+| Never expected                             | `recommend_once` after `happened`    | The occurrence begins; nothing supersedes it               |
+
+In the example below a statement line is expected when it arrives, and a
+corrected statement for the same company later supersedes it. A record that
+has been expected and not yet recommended has the head status `pending`; `decisions_postgres/queue.pending` lists them, oldest first.
+
+<!-- prettier-ignore-start -->
+
+<!-- snips: examples/usage/src/decisions_usage/expect_then_recommend.gleam#expect-then-recommend -->
+```gleam
+import decisions
+import decisions/memory.{type Memory}
+import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/vocabulary.{
+  Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
+}
+import decisions_usage/clinic.{type Refund, Refund}
+import gleam/result
+
+pub fn desk() -> decisions.Desk(Refund, Memory) {
+  decisions.desk(
+    clinic.refund_point() |> decisions.superseded_by("statement_corrected"),
+    drives: fn(_) { clinic.refund_fee() },
+    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    over: memory.port(),
+  )
+}
+
+/// The transaction that receives a statement line: it expects the
+/// recommendation before the classifier's job is queued.
+pub fn receive(store: Memory, fee: String) -> Result(Nil, decisions.Refusal) {
+  memory.transaction(store, decisions.expect(
+    desk(),
+    _,
+    key: "refund:" <> fee,
+    trigger: Trigger(kind: "statement_line", id: fee),
+    about: clinic.clinica_x,
+  ))
+}
+
+/// The transaction that receives a corrected statement.
+pub fn correct(store: Memory) -> Result(List(String), decisions.Refusal) {
+  memory.transaction(store, decisions.happened(
+    desk(),
+    _,
+    "statement_corrected",
+    about: clinic.clinica_x,
+  ))
+  |> result.map(fn(superseded) { superseded.not_begun })
+}
+
+/// The classifier's job commits its recommendation.
+pub fn recommend(
+  store: Memory,
+  fee: String,
+) -> Result(String, decisions.Refusal) {
+  memory.transaction(store, decisions.recommend_once(
+    desk(),
+    _,
+    key: "refund:" <> fee,
+    proposal: decisions.proposal(
+      trigger: Trigger(kind: "statement_line", id: fee),
+      about: clinic.clinica_x,
+      context: Manifest(refs: [], renderer: "refund-1"),
+      recommending: Recommendation(
+        output: Refund(fee:, cents: 4000),
+        by: Classifier(name: "refund-classifier", version: "v5"),
+        explanation: Receipt(Ref("classifier", fee, "1")),
+        signals: [],
+        reads: [],
+      ),
+    ),
+  ))
+  |> result.map(fn(recorded) { recorded.id })
 }
 
 ```
@@ -1260,7 +1386,9 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
 
 <!-- prettier-ignore-end -->
 
-Run each verb in your transaction at `READ COMMITTED`, or through
+Run each verb in your transaction at `READ COMMITTED`; the port refuses another
+isolation level with `Conflict`, because the subject lock relies on each
+statement seeing what the lock's previous holder committed. Or run it through
 `decisions_postgres.transaction`, `transaction_with` (a body that also fails
 with your own error) and `decide`. The adapter's guarantees rest on the
 database: an advisory lock on an id that does not exist yet, a savepoint around
@@ -1272,7 +1400,9 @@ set aside after `with_snooze_limit`, never dropped. `deliver_due` and
 for tests and operators. Run the application as a role that does not own the
 tables, with the grants the package README lists: the append-only rule holds
 against every such role. An occurrence id and a point name are at most 255
-bytes. `decisions_postgres/queue` reads queue pages, counts, summaries and
+bytes. A wait for a contended occurrence's lock ends after 4 seconds as
+contention (`with_lock_timeout`), before `pog`'s connection checkout limit
+would report it as an unknown outcome. `decisions_postgres/queue` reads queue pages, counts, summaries and
 pages of a point's occurrences from heads alone, each on one index.
 `decisions_postgres/live` forwards `NOTIFY` hints; `subscribe` is acknowledged
 and returns the listener's process to monitor, and the listener reconnects when
@@ -1302,7 +1432,7 @@ for the schema.
 | An approval counts only for the alternative that admits it           | Each verdict records the sets its validator held; eligibility is judged per alternative                                 |
 
 `decisions/testing.check` checks the eight invariants behind this table over
-any store, and `decisions/conformance` runs twenty checks of the storage port
+any store, and `decisions/conformance` runs twenty-one checks of the storage port
 against any adapter.
 
 ## What Decisions does not do
@@ -1313,21 +1443,22 @@ against any adapter.
 - It does not deliver jobs itself: Grind or the OTP runtime does.
 - It does not stop a model from performing its own I/O; it hands out only the
   recorded path.
-- It does not close the superseding window by itself: a recommendation from
-  an older trigger can commit after `happened`. Keep the latest trigger per
-  subject in your own row and check it inside the recommending transaction.
+- It does not close the superseding window for a key you did not `expect`
+  first: a recommendation from an older trigger can then commit after
+  `happened`.
 - It does not yet offer blind verdicts, shadow recommendations, links between
   occurrences, a type-erased card for generic clients, or an eligibility that
-  needs approvals from two sets at once. These are pending.
+  needs approvals from two sets at once; the last waits for the first point that
+  needs it.
 
 ## Numbers
 
 On an Apple M2 Max with 12 schedulers, recommending and releasing 10 000
-occurrences from 16 processes ran at 48 736/s against the in-memory OTP store
-and 6 823/s against PostgreSQL 16 with fsync off. A paged export of 10 000
-occurrences from the OTP store takes about 4 ms. In PostgreSQL the savepoint
-around the gated tool costs about 0.17 ms a call and the store-clock query
-about 0.08 ms. These are observational captures with scripted models; see
+occurrences from 16 processes ran at 79 751/s against the in-memory OTP store
+and 7 152/s against PostgreSQL 16 with fsync off. A paged export of 10 000
+occurrences from the OTP store takes about 3.6 ms. In PostgreSQL the savepoint
+around the gated tool costs about 0.15 ms a call and the store-clock query
+about 0.07 ms. These are observational captures with scripted models; see
 [BENCHMARKS.md](docs/BENCHMARKS.md) for the method, every workload and the
 limits.
 

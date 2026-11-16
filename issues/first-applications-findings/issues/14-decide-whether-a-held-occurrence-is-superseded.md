@@ -1,6 +1,6 @@
 # Decide whether a held occurrence is superseded
 
-Status: ready-for-human
+Status: done
 Category: enhancement
 
 AI-assisted contribution.
@@ -26,3 +26,7 @@ Implementing the change before the ruling.
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Closed as `done` on 2026-11-16. The owner decided: a declared superseding event supersedes a held occurrence too; its wake-up is cancelled and nothing is released. Recorded in ADR 0049, which supersedes ADR 0018.

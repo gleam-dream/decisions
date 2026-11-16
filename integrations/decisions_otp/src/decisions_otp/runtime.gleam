@@ -41,7 +41,8 @@
 //// commit whose outcome is unknown, as `Redeliver`: nothing says the
 //// handler failed, so it is not counted.
 ////
-//// **Timing.** A `Redeliver` job is delivered again two looks later (about two `poll`s); a
+//// **Timing.** A `Redeliver` job (a wake-up, a notice, or a trigger, for
+//// each worker) is delivered again two looks later (about two `poll`s); a
 //// `Backoff` job after the store's backoff (`store.Config.retry_backoff`,
 //// doubled after each failure, at most 64 times). `decisions_postgres`
 //// classifies by the same `handling` with the same default of 20
@@ -121,6 +122,14 @@ pub opaque type Wired(tx) {
 /// roll the delivery back: `DeskRefused(refusal)` for a verb of a desk
 /// that refused, `ApplicationFailed(reason)` for the application's own
 /// work. See "Failure" above for what each does.
+///
+/// A record that settled before it began (expected with
+/// `decisions.expect`, then superseded) has no occurrence to hand to
+/// `settled`: its notice is dropped as done and reported by
+/// `[decisions, job, dropped]`. The same goes for a trigger whose
+/// `recommend_once` or `record_failure` meets `SupersededBefore`: return
+/// `DeskRefused(refusal)` and the trigger is dropped with the refusal as
+/// its reason.
 pub fn point(
   desk: Desk(o, tx),
   settled settled: fn(tx, Occurrence(o)) -> Result(Nil, HandlerFailure),
@@ -681,55 +690,98 @@ fn deliver_notice(config: Config(tx), pending: Pending) -> Bool {
 
 // -- A worker ----------------------------------------------------------------------------
 
+/// One look of a worker. A trigger it could not move last time
+/// (`Redeliver`) is left out for two looks, like the sweeper's and the
+/// dispatcher's jobs: the worker claims it, keeps the claim so that no
+/// claim hands it back, and goes on to the next trigger; it releases the
+/// claims it held when the look ends. A lone worker so makes progress on
+/// the other triggers, and the stuck one is delivered again two looks
+/// later, never in a loop.
 fn work(config: Config(tx), skips: Skips) -> #(Bool, Skips) {
-  #(work_one(config), skips)
+  let now = monotonic_us() / 1000
+  let skips = dict.filter(skips, fn(_, until) { until > now })
+  let #(found, held) = claim_unskipped(config, skips, dict.size(skips), [])
+  let outcome = case found {
+    None -> #(False, skips)
+    Some(submitted) ->
+      case work_one(config, submitted) {
+        True -> #(True, skips)
+        False -> #(
+          False,
+          dict.insert(
+            skips,
+            int.to_string(submitted.id),
+            now + 2 * duration.to_milliseconds(config.poll) + 1,
+          ),
+        )
+      }
+  }
+  list.each(held, config.backlog.release)
+  outcome
 }
 
-fn work_one(config: Config(tx)) -> Bool {
-  let backlog = config.backlog
-  case backlog.claim_trigger() {
-    Error(_) | Ok(None) -> False
-    Ok(Some(submitted)) -> {
-      let started = monotonic_us()
-      let worked = case attempt(fn() { config.work(submitted) }) {
-        Ok(Ok(Nil)) -> Ok(Nil)
-        Ok(Error(failure)) -> Error(from_handler(failure))
-        Error(crash) -> Error(raised(crash))
+/// Claim the oldest trigger not in `skips`. Skipped ones met on the way
+/// stay claimed by this worker (at most `left` of them) and are returned
+/// to be released after the look.
+fn claim_unskipped(
+  config: Config(tx),
+  skips: Skips,
+  left: Int,
+  held: List(Submitted),
+) -> #(Option(Submitted), List(Submitted)) {
+  case config.backlog.claim_trigger() {
+    Error(_) | Ok(None) -> #(None, held)
+    Ok(Some(submitted)) ->
+      case dict.has_key(skips, int.to_string(submitted.id)), left > 0 {
+        False, _ -> #(Some(submitted), held)
+        True, True ->
+          claim_unskipped(config, skips, left - 1, [submitted, ..held])
+        True, False -> #(None, [submitted, ..held])
       }
-      let progressed = case worked {
-        Ok(Nil) -> {
-          let finished =
-            run(config, fn(tx) {
-              backlog.finish_trigger(tx, submitted)
-              |> result.map_error(store_fault)
-              |> result.map(fn(found) {
-                case found {
-                  True -> Acted(None)
-                  False -> Gone
-                }
-              })
-            })
-          case finished {
-            Ok(Gone) -> True
-            Ok(_) -> {
-              sinal.emit(
-                telemetry.trigger_worked(),
-                telemetry.Took(monotonic_us() - started),
-                telemetry.about(config.name, "", submitted.key),
-              )
-              True
+  }
+}
+
+/// Work one claimed trigger; `True` when the backlog moved.
+fn work_one(config: Config(tx), submitted: Submitted) -> Bool {
+  let backlog = config.backlog
+  let started = monotonic_us()
+  let worked = case attempt(fn() { config.work(submitted) }) {
+    Ok(Ok(Nil)) -> Ok(Nil)
+    Ok(Error(failure)) -> Error(from_handler(failure))
+    Error(crash) -> Error(raised(crash))
+  }
+  let progressed = case worked {
+    Ok(Nil) -> {
+      let finished =
+        run(config, fn(tx) {
+          backlog.finish_trigger(tx, submitted)
+          |> result.map_error(store_fault)
+          |> result.map(fn(found) {
+            case found {
+              True -> Acted(None)
+              False -> Gone
             }
-            Error(fault) -> fail(config, TriggerJob(submitted), fault, started)
-          }
+          })
+        })
+      case finished {
+        Ok(Gone) -> True
+        Ok(_) -> {
+          sinal.emit(
+            telemetry.trigger_worked(),
+            telemetry.Took(monotonic_us() - started),
+            telemetry.about(config.name, "", submitted.key),
+          )
+          True
         }
         Error(fault) -> fail(config, TriggerJob(submitted), fault, started)
       }
-      // The trigger's fate is committed; only now may another worker
-      // claim it again.
-      backlog.release(submitted)
-      progressed
     }
+    Error(fault) -> fail(config, TriggerJob(submitted), fault, started)
   }
+  // The trigger's fate is committed; only now may another worker claim
+  // it again.
+  backlog.release(submitted)
+  progressed
 }
 
 // -- Failure ------------------------------------------------------------------------------

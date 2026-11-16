@@ -111,7 +111,11 @@ pub fn a_newer_message_supersedes_a_waiting_draft_test() {
 
   // m2 arrives: the conversation context tells reply's desk in the storing
   // transaction.
-  let assert Ok(decisions.Supersession(expired: [expired], unreadable: [])) =
+  let assert Ok(decisions.Supersession(
+    expired: [expired],
+    not_begun: [],
+    unreadable: [],
+  )) =
     world.in_tx(w, decisions.happened(
       reply.desk(),
       _,

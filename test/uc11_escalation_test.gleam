@@ -9,7 +9,7 @@ import decisions/policy.{
 import decisions/testing
 import decisions/vocabulary.{Approve, DeadlinePassed, Person, Trigger}
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/time/duration
 import gleam/time/timestamp
 import support/refund.{Refund}
@@ -139,7 +139,7 @@ pub fn silence_can_be_consent_when_the_policy_says_so_test() {
   let desk =
     desk(Policy(
       version: 5,
-      rules: [When(policy.waited(60), Proceed(Never))],
+      rules: [When(policy.waited(60), Proceed(Never, None))],
       otherwise: Ask(AnyoneHolding("finance")),
     ))
   let waiting = ask(w, desk, "fee-3")

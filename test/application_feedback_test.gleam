@@ -145,11 +145,15 @@ pub fn b_finance_may_withdraw_what_the_policy_let_proceed_test() {
     desk(
       base_point()
         |> decisions.signal(fact_small())
-        |> decisions.with_policy_hold(duration.minutes(30))
         |> decisions.withdrawn_by("finance"),
       Policy(
         1,
-        [When(policy.known(fact_small()), Proceed(Never))],
+        [
+          When(
+            policy.known(fact_small()),
+            Proceed(Never, Some(duration.minutes(30))),
+          ),
+        ],
         Ask(AnyoneHolding("finance")),
       ),
     )
@@ -212,26 +216,34 @@ pub fn b_without_withdrawn_by_only_the_decider_may_test() {
     ))
 }
 
-pub fn c_a_policy_hold_holds_only_what_the_policy_accepted_test() {
+pub fn c_a_proceed_hold_takes_the_place_of_the_points_hold_test() {
   let db = world.new().db
   let d =
     desk(
       base_point()
         |> decisions.signal(fact_small())
-        |> decisions.with_policy_hold(duration.minutes(30)),
+        |> decisions.with_hold(duration.minutes(5)),
       Policy(
         1,
-        [When(policy.known(fact_small()), Proceed(Never))],
+        [
+          When(
+            policy.known(fact_small()),
+            Proceed(Never, Some(duration.minutes(30))),
+          ),
+        ],
         Ask(AnyoneHolding("finance")),
       ),
     )
+  // The policy's own hold wins for what it lets proceed ...
   let assert Ok(by_policy) =
     memory.transaction(db, decisions.recommend(d, _, small("80")))
-  let assert occurrence.Held(..) = by_policy.status
+  let assert occurrence.Held(until:, ..) = by_policy.status
+  assert until == timestamp.add(world.t0(), duration.minutes(30))
+  // ... and the point's hold applies to what a person accepted.
   let w = recommend(db, d, "900")
   let assert Ok(by_person) = decide(db, d, w.id, felipe, Approve)
-  let assert occurrence.Released(..) = by_person.status
-  assert world.all(db, "paid") == ["900"]
+  let assert occurrence.Held(until: person_until, ..) = by_person.status
+  assert person_until == timestamp.add(world.t0(), duration.minutes(5))
 }
 
 fn fact_small() {
@@ -404,7 +416,7 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
           Error(decisions.Refuse("account closed"))
         })
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(Never))) },
+      under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
       over: memory.port(),
     )
   // Waiting.
@@ -456,7 +468,7 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
   let assert Ok(decisions.Woken(released)) =
     memory.transaction(db, decisions.wake(d, _, occurrence: held.id))
   assert occurrence.account(released)
-    == occurrence.Done(final: "b", effect: None)
+    == occurrence.Done(final: "b", key: "release:" <> held.id, effect: None)
   let assert Ok(uncertain) =
     memory.transaction(db, decisions.report(
       d,
@@ -465,7 +477,7 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
       effect: vocabulary.Uncertain("timeout"),
     ))
   assert occurrence.account(uncertain)
-    == occurrence.Done(final: "b", effect: None)
+    == occurrence.Done(final: "b", key: "release:" <> held.id, effect: None)
   let receipt = vocabulary.Performed(Ref("bank", "tx-1", "1"))
   let assert Ok(known) =
     memory.transaction(db, decisions.report(
@@ -475,7 +487,11 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
       effect: receipt,
     ))
   assert occurrence.account(known)
-    == occurrence.Done(final: "b", effect: Some(receipt))
+    == occurrence.Done(
+      final: "b",
+      key: "release:" <> held.id,
+      effect: Some(receipt),
+    )
   // Expired.
   memory.set_clock(db, timestamp.add(memory.now(db), duration.hours(2)))
   let assert Ok(decisions.Woken(expired)) =
@@ -491,7 +507,7 @@ pub fn i_a_release_check_records_its_evidence_test() {
   let db = world.new().db
   let balance = Ref("balance", "clinica-x", "r7")
   let d =
-    desk(base_point(), Policy(1, [], Proceed(Never)))
+    desk(base_point(), Policy(1, [], Proceed(Never, None)))
     |> decisions.checking(with: fn(_tx, release: decisions.ToRelease(String)) {
       case release.output {
         "too much" -> Error(decisions.Refuse("the balance does not cover it"))
@@ -554,7 +570,7 @@ pub fn k_sampling_is_uniform_over_sequential_and_random_keys_test() {
   })
   // The desk samples by the same rule.
   let db = world.new().db
-  let d = desk(base_point(), Policy(1, [], Proceed(policy.PerCent(50))))
+  let d = desk(base_point(), Policy(1, [], Proceed(policy.PerCent(50), None)))
   list.each(list.take(sequential, 40), fn(id) {
     let assert Ok(made) =
       memory.transaction(db, decisions.recommend_once(
@@ -583,7 +599,7 @@ pub fn l_open_refuses_a_card_nobody_can_use_test() {
     ))
     |> result.replace(Nil)
     == Error(decisions.AlreadyDecided("felipe"))
-  let proceeding = desk(base_point(), Policy(1, [], Proceed(Never)))
+  let proceeding = desk(base_point(), Policy(1, [], Proceed(Never, None)))
   let p = recommend(db, proceeding, "b")
   assert memory.transaction(db, decisions.open(
       proceeding,
@@ -605,7 +621,7 @@ fn superseded_desk() {
   )
 }
 
-pub fn m_a_late_recommendation_escapes_superseding_test() {
+pub fn m_a_key_never_expected_still_escapes_superseding_test() {
   let db = world.new().db
   let d = superseded_desk()
   // m2 arrives and supersedes what waits: nothing yet.
@@ -621,38 +637,43 @@ pub fn m_a_late_recommendation_escapes_superseding_test() {
   let assert occurrence.Awaiting(_) = late.status
 }
 
-pub fn m_the_recipe_closes_the_window_test() {
+pub fn m_an_expected_key_closes_the_window_test() {
   let db = world.new().db
   let d = superseded_desk()
   let subject = Subject("company", "clinica-x")
-  // The application's own row: the latest trigger per subject.
-  let message_arrives = fn(trigger: String) {
+  // Trigger m1 is received: the record expects a recommendation for it.
+  let receive = fn(trigger: String) {
     memory.transaction(db, fn(tx) {
-      memory.put(tx, "latest:" <> subject.id, trigger)
-      decisions.happened(d, tx, "newer_message", about: subject)
+      use _ <- result.try(decisions.happened(
+        d,
+        tx,
+        "newer_message",
+        about: subject,
+      ))
+      decisions.expect(
+        d,
+        tx,
+        key: "reply:" <> trigger,
+        trigger: Trigger("message", trigger),
+        about: subject,
+      )
     })
   }
   let worker_commits = fn(trigger: String) {
-    memory.transaction(db, fn(tx) {
-      // Locked with the subject's row in a real database; here one process.
-      case memory.get(tx, "latest:" <> subject.id) {
-        Ok(latest) if latest != trigger -> Ok(None)
-        _ ->
-          decisions.recommend_once(
-            d,
-            tx,
-            key: "reply:" <> trigger,
-            proposal: proposal("reply to " <> trigger, Agent("reply", "7")),
-          )
-          |> result.map(Some)
-      }
-    })
+    memory.transaction(db, decisions.recommend_once(
+      d,
+      _,
+      key: "reply:" <> trigger,
+      proposal: proposal("reply to " <> trigger, Agent("reply", "7")),
+    ))
   }
-  let assert Ok(_) = message_arrives("m1")
-  let assert Ok(_) = message_arrives("m2")
-  assert worker_commits("m1") == Ok(None)
-  let assert Ok(Some(current)) = worker_commits("m2")
+  let assert Ok(Nil) = receive("m1")
+  let assert Ok(Nil) = receive("m2")
+  assert worker_commits("m1") |> result.replace(Nil)
+    == Error(decisions.SupersededBefore("newer_message"))
+  let assert Ok(current) = worker_commits("m2")
   let assert occurrence.Awaiting(_) = current.status
+  assert memory.queue(db, "finance") == [current.id]
 }
 
 // -- N. Helpers applications wrote themselves -------------------------------------------------
@@ -711,11 +732,11 @@ pub fn n_what_a_candidate_policy_would_do_with_an_example_test() {
   let candidate =
     Policy(
       2,
-      [When(policy.below(amount, 100.0), Proceed(Never))],
+      [When(policy.below(amount, 100.0), Proceed(Never, None))],
       Ask(AnyoneHolding("finance")),
     )
   assert learning.answer_under(example, policy: candidate, point:)
-    == Proceed(Never)
+    == Proceed(Never, None)
 }
 
 // -- O. The release sees the occurrence's context -------------------------------------------
@@ -723,7 +744,7 @@ pub fn n_what_a_candidate_policy_would_do_with_an_example_test() {
 pub fn o_a_release_check_reads_the_context_test() {
   let db = world.new().db
   let d =
-    desk(base_point(), Policy(1, [], Proceed(Never)))
+    desk(base_point(), Policy(1, [], Proceed(Never, None)))
     |> decisions.checking(with: fn(_, release: decisions.ToRelease(String)) {
       case release.context.refs {
         [Ref(kind: "request", revision: "1", ..)] -> Ok([])

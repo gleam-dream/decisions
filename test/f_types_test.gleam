@@ -19,7 +19,7 @@ pub fn a_policy_that_reads_an_undeclared_fact_is_not_publishable_test() {
   let sound =
     Policy(
       version: 2,
-      rules: [When(policy.below(payout.amount(), 100.0), Proceed(Never))],
+      rules: [When(policy.below(payout.amount(), 100.0), Proceed(Never, None))],
       otherwise: Ask(AnyoneHolding("finance")),
     )
   assert decisions.publishable(payout.point(), sound) == Ok(Nil)
@@ -33,8 +33,8 @@ pub fn a_policy_that_reads_an_undeclared_fact_is_not_publishable_test() {
     == Policy(
       version: 3,
       rules: [
-        When(AtLeast("ammount", 100.0), Proceed(Never)),
-        When(Is("amount", Text("high")), Proceed(Never)),
+        When(AtLeast("ammount", 100.0), Proceed(Never, None)),
+        When(Is("amount", Text("high")), Proceed(Never, None)),
       ],
       otherwise: Ask(Several(0, AnyoneHolding("finance"))),
     )
@@ -61,8 +61,8 @@ pub fn a_desk_refuses_to_use_an_unpublishable_policy_test() {
   let typo =
     Policy(
       version: 9,
-      rules: [When(AtLeast("ammount", 1.0), Proceed(Never))],
-      otherwise: Proceed(Never),
+      rules: [When(AtLeast("ammount", 1.0), Proceed(Never, None))],
+      otherwise: Proceed(Never, None),
     )
   assert world.in_tx(w, refund.request(
       refund.desk(typo),

@@ -4,9 +4,11 @@
 //// T, and `decisions/occurrence.fold` turns entries into where the
 //// occurrence stands.
 ////
-//// A record may begin with failed attempts (`AttemptFailed`) before its
-//// recommendation, when a recommender failed under the occurrence's key.
-//// Every other record begins with `Recommended`.
+//// A record may begin, before its recommendation, with an expectation
+//// (`Expected`: a trigger was received and work is in flight) and failed
+//// attempts (`AttemptFailed`), in any order, and with the `Expired` entry
+//// of a newer event that superseded it before it began. Otherwise a
+//// record begins with `Recommended`.
 ////
 //// `to_stored` and `from_stored` are the only translation between an entry
 //// and the text a store keeps, so an adapter never parses an entry.
@@ -51,6 +53,12 @@ pub type Event(output) {
     /// exchange that did not decode.
     evidence: List(Ref),
   )
+  /// A recommendation is expected under this key, about this subject: the
+  /// trigger was received and the model is at work. Appended by
+  /// `decisions.expect`, in the transaction that received the trigger, so
+  /// that `happened` can supersede the work in flight before it is
+  /// recommended.
+  Expected(point: String, trigger: Trigger, subject: Subject)
   /// The recommendation the occurrence began with.
   Recommended(
     /// The decision point this is an occurrence of.
@@ -120,6 +128,7 @@ pub type Event(output) {
 pub fn kind(event: Event(output)) -> String {
   case event {
     AttemptFailed(..) -> "attempt_failed"
+    Expected(..) -> "expected"
     Recommended(..) -> "recommended"
     Informed(..) -> "informed"
     PolicyApplied(..) -> "policy_applied"
@@ -141,9 +150,9 @@ pub fn kind(event: Event(output)) -> String {
 
 /// Every kind name, in the order of `Event`.
 pub const kinds = [
-  "attempt_failed", "recommended", "informed", "policy_applied", "opened",
-  "expanded", "noted", "decided", "verdict_refused", "reviewed", "held",
-  "withdrawn", "released", "effected", "refused", "expired", "assessed",
+  "attempt_failed", "expected", "recommended", "informed", "policy_applied",
+  "opened", "expanded", "noted", "decided", "verdict_refused", "reviewed",
+  "held", "withdrawn", "released", "effected", "refused", "expired", "assessed",
 ]
 
 /// The entry as a store keeps it. An error means the point's codec cannot
@@ -190,6 +199,14 @@ fn event_to_json(event: Event(o), output: Codec(o)) -> Result(Json, String) {
           #("subject", wire.subject(subject)),
           #("failure", model.failure_to_json(failure)),
           #("evidence", json.array(evidence, wire.ref)),
+        ]),
+      )
+    Expected(point:, trigger:, subject:) ->
+      Ok(
+        json.object([
+          #("point", json.string(point)),
+          #("trigger", wire.trigger(trigger)),
+          #("subject", wire.subject(subject)),
         ]),
       )
     Recommended(
@@ -311,6 +328,12 @@ fn event_decoder(kind: String, output: Codec(o)) -> Decoder(Event(o)) {
         failure:,
         evidence:,
       ))
+    }
+    "expected" -> {
+      use point <- decode.field("point", decode.string)
+      use trigger <- decode.field("trigger", wire.trigger_decoder())
+      use subject <- decode.field("subject", wire.subject_decoder())
+      decode.success(Expected(point:, trigger:, subject:))
     }
     "recommended" -> {
       use point <- decode.field("point", decode.string)

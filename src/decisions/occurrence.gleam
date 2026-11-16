@@ -73,8 +73,8 @@ pub type Status(output) {
   Released(final: output, key: String, by: Decider)
   /// A validator rejected it, for `reason`. Nothing is released.
   Rejected(reason: Reason)
-  /// It can no longer be decided: its validity passed, or an event
-  /// superseded it.
+  /// It can no longer be decided or released: its validity passed while it
+  /// waited, or an event superseded it, while it waited or was held.
   Expired(cause: ExpiryCause)
   /// The decider, or a holder of the point's `withdrawn_by` set, took the
   /// held output back.
@@ -124,39 +124,58 @@ pub type Occurrence(output) {
   )
 }
 
+/// A record that has not begun: no recommendation yet. A trigger was
+/// received (`expected`), or a recommender failed under the key
+/// (`attempts`), or both; `superseded` names the event that superseded it
+/// before it began, after which it never will.
+pub type Pending {
+  Pending(
+    id: String,
+    point: String,
+    subject: Subject,
+    /// When the record was first written.
+    since: Timestamp,
+    /// `decisions.expect` recorded that a recommendation is expected.
+    expected: Bool,
+    attempts: List(Attempt),
+    superseded: Option(ExpiryCause),
+  )
+}
+
 /// Why entries do not fold into an occurrence.
 pub type NotBegun {
   /// There are no entries.
   NoEntries
-  /// Only failed attempts so far: the key was tried and nothing was
-  /// recommended.
-  OnlyAttempts(point: String, subject: Subject, attempts: List(Attempt))
-  /// The first entry after any failed attempts is not a recommendation.
-  /// A store holding this was written by something other than the desk.
+  /// The record has not begun: it is expected, holds failed attempts, or
+  /// was superseded before it began.
+  NotYet(pending: Pending)
+  /// The entries before the recommendation are not an expectation, a
+  /// failed attempt or a supersession, or no recommendation follows the
+  /// supersession. A store holding this was written by something other
+  /// than the desk.
   NoRecommendation
 }
 
-/// Fold a record. Failed attempts may come first; the recommendation must
-/// follow them.
+/// Fold a record. An expectation, failed attempts and a supersession may
+/// come first; the recommendation, when there is one, follows them.
 pub fn fold(
   id: String,
   entries: List(Entry(o)),
 ) -> Result(Occurrence(o), NotBegun) {
-  let #(tried, rest) =
+  let #(prefix, rest) =
     list.split_while(entries, fn(entry) {
       case entry.event {
-        entry.AttemptFailed(..) -> True
+        entry.AttemptFailed(..) | entry.Expected(..) | entry.Expired(..) -> True
         _ -> False
       }
     })
-  let attempts = list.filter_map(tried, attempt)
-  case rest, tried {
+  let attempts = list.filter_map(prefix, attempt)
+  case rest, prefix {
     [], [] -> Error(NoEntries)
     [], [first, ..] ->
-      case first.event {
-        entry.AttemptFailed(point:, subject:, ..) ->
-          Error(OnlyAttempts(point:, subject:, attempts:))
-        _ -> Error(NoRecommendation)
+      case pending(id, first, prefix, attempts) {
+        Ok(found) -> Error(NotYet(found))
+        Error(Nil) -> Error(NoRecommendation)
       }
     [
       entry.Entry(
@@ -176,30 +195,106 @@ pub fn fold(
     ],
       _
     ->
-      Ok(list.fold(
-        later,
-        Occurrence(
-          id:,
-          point:,
-          entries: list.append(tried, [first]),
-          attempts:,
-          trigger:,
-          parent:,
-          subject:,
-          requester:,
-          context:,
-          recommendation:,
-          valid_until:,
-          informed: [],
-          policy_version: None,
-          later: [],
-          sampled: False,
-          status: Recommended(consulting: None),
-        ),
-        apply,
-      ))
+      case list.any(prefix, is_expiry) {
+        // Nothing is recommended after a supersession.
+        True -> Error(NoRecommendation)
+        False ->
+          Ok(list.fold(
+            later,
+            Occurrence(
+              id:,
+              point:,
+              entries: list.append(prefix, [first]),
+              attempts:,
+              trigger:,
+              parent:,
+              subject:,
+              requester:,
+              context:,
+              recommendation:,
+              valid_until:,
+              informed: [],
+              policy_version: None,
+              later: [],
+              sampled: False,
+              status: Recommended(consulting: None),
+            ),
+            apply,
+          ))
+      }
     _, _ -> Error(NoRecommendation)
   }
+}
+
+fn is_expiry(entry: Entry(o)) -> Bool {
+  case entry.event {
+    entry.Expired(..) -> True
+    _ -> False
+  }
+}
+
+fn pending(
+  id: String,
+  first: Entry(o),
+  prefix: List(Entry(o)),
+  attempts: List(Attempt),
+) -> Result(Pending, Nil) {
+  let names = case first.event {
+    entry.AttemptFailed(point:, subject:, ..)
+    | entry.Expected(point:, subject:, ..) -> Ok(#(point, subject))
+    _ -> Error(Nil)
+  }
+  use #(point, subject) <- result.map(names)
+  Pending(
+    id:,
+    point:,
+    subject:,
+    since: first.at,
+    expected: list.any(prefix, fn(entry) {
+      case entry.event {
+        entry.Expected(..) -> True
+        _ -> False
+      }
+    }),
+    attempts:,
+    superseded: list.find_map(prefix, fn(entry) {
+      case entry.event {
+        entry.Expired(cause:) -> Ok(cause)
+        _ -> Error(Nil)
+      }
+    })
+      |> option.from_result,
+  )
+}
+
+/// The head a store keeps beside a record that has not begun: `Pending`
+/// while it may still be recommended, `Expired` once a newer event
+/// superseded it.
+pub fn pending_head(pending: Pending) -> store.Head {
+  store.Head(
+    point: pending.point,
+    subject: pending.subject,
+    status: case pending.superseded {
+      Some(_) -> store.Expired
+      None -> store.Pending
+    },
+    awaiting: [],
+    due: None,
+    arrived: pending.since,
+    approved: [],
+    may_not_decide: [],
+    review_pending: False,
+  )
+}
+
+/// Whether the recommendation was expected first (`decisions.expect`).
+pub fn was_expected(occurrence: Occurrence(o)) -> Bool {
+  list.any(occurrence.entries, fn(entry) {
+    case entry.event {
+      entry.Expected(..) -> True
+      _ -> False
+    }
+  })
 }
 
 fn attempt(entry: Entry(o)) -> Result(Attempt, Nil) {
@@ -232,7 +327,7 @@ pub fn apply(occurrence: Occurrence(o), entry: Entry(o)) -> Occurrence(o) {
         later:,
         sampled: sampled || occurrence.sampled,
         status: case outcome {
-          policy.Proceed(_) ->
+          policy.Proceed(..) ->
             Accepted(standing(occurrence).0, ByPolicy(version))
           // A later answer that asks may already be met by the approvals
           // given under the earlier one.
@@ -268,6 +363,7 @@ pub fn apply(occurrence: Occurrence(o), entry: Entry(o)) -> Occurrence(o) {
       Occurrence(..occurrence, status: Refused(reason:))
     entry.Expired(cause:), Recommended(_)
     | entry.Expired(cause:), Awaiting(_)
+    | entry.Expired(cause:), Held(..)
     -> Occurrence(..occurrence, status: Expired(cause:))
     _, _ -> occurrence
   }
@@ -687,10 +783,11 @@ pub type Account(output) {
   /// Nothing final yet: it waits for the policy, a consulted point or
   /// verdicts, or it is accepted and held, and can still be withdrawn.
   Undecided
-  /// Released with this final output. `effect` is the latest report of
-  /// what happened outside the database, `None` while nothing is known: no
+  /// Released with this final output under the release `key` (the key an
+  /// outside effect is sent under). `effect` is the latest report of what
+  /// happened outside the database, `None` while nothing is known: no
   /// report yet, or the latest one is `Uncertain`.
-  Done(final: output, effect: Option(Effect))
+  Done(final: output, key: String, effect: Option(Effect))
   /// A validator rejected it.
   TurnedDown(by: String, reason: Reason)
   /// It can no longer be decided: the validity passed or an event
@@ -706,8 +803,8 @@ pub type Account(output) {
 pub fn account(occurrence: Occurrence(o)) -> Account(o) {
   case occurrence.status {
     Recommended(_) | Awaiting(_) | Accepted(..) | Held(..) -> Undecided
-    Released(final:, ..) ->
-      Done(final:, effect: case effect(occurrence) {
+    Released(final:, key:, ..) ->
+      Done(final:, key:, effect: case effect(occurrence) {
         Some(vocabulary.Uncertain(_)) | None -> None
         Some(known) -> Some(known)
       })

@@ -52,6 +52,18 @@ pub fn a4_test() {
   run("A4 ")
 }
 
+pub fn held_superseded_test() {
+  run("a held occurrence superseded")
+}
+
+pub fn expect_closes_the_window_test() {
+  run("expect closes the superseding window")
+}
+
+pub fn admissions_about_one_subject_test() {
+  run("concurrent admissions about one subject")
+}
+
 pub fn one_key_test() {
   run("recommend_once on one key")
 }
@@ -124,5 +136,5 @@ pub fn b7_test() {
 
 /// Every scenario has a test above.
 pub fn every_scenario_is_run_test() {
-  assert list.length(stress.names()) == 20
+  assert list.length(stress.names()) == 23
 }

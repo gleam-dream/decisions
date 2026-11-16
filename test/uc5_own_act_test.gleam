@@ -88,7 +88,7 @@ pub fn an_own_act_is_recorded_and_regated_by_the_policy_alone_test() {
     w,
     Policy(
       version: 1,
-      rules: [When(OwnAct, Proceed(Never))],
+      rules: [When(OwnAct, Proceed(Never, None))],
       otherwise: Ask(AnyoneHolding("operators")),
     ),
   )

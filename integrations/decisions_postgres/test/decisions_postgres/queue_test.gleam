@@ -124,7 +124,11 @@ pub fn counts_subjects_reviews_and_positions_test() {
   let sampled =
     kit.Spec(
       ..kit.spec("sampled"),
-      policy: Policy(version: 1, rules: [], otherwise: Proceed(PerCent(100))),
+      policy: Policy(
+        version: 1,
+        rules: [],
+        otherwise: Proceed(sample: PerCent(100), hold: None),
+      ),
     )
   let waiting = kit.spec("counted")
   let sampled_desk = kit.desk(store, sampled)
@@ -182,7 +186,11 @@ pub fn point_pages_reviews_and_exports_test() {
   let sampled =
     kit.Spec(
       ..kit.spec("sampled_all"),
-      policy: Policy(version: 1, rules: [], otherwise: Proceed(PerCent(100))),
+      policy: Policy(
+        version: 1,
+        rules: [],
+        otherwise: Proceed(sample: PerCent(100), hold: None),
+      ),
     )
   let one_desk = kit.desk(store, one)
   let other_desk = kit.desk(store, other)
@@ -276,7 +284,8 @@ pub fn every_query_is_served_by_its_index_at_volume_test() {
          (id, point, subject_kind, subject_id, status, awaiting, approved,
           may_not_decide, due, arrived, review_pending, last_seq)
        SELECT $1 || '-' || n, $1 || '-p' || (n % 20), 'person', 's' || (n % 500),
-              CASE WHEN n % 3 = 0 THEN 'released' ELSE 'awaiting' END,
+              CASE WHEN n % 3 = 0 THEN 'released'
+                   WHEN n % 7 = 0 THEN 'pending' ELSE 'awaiting' END,
               ARRAY['set' || (n % 10)], ARRAY[]::text[], ARRAY[]::text[],
               clock_timestamp() + (n % 97) * interval '1 minute',
               clock_timestamp() - n * interval '1 second', n % 50 = 0, 2
@@ -376,6 +385,16 @@ pub fn every_query_is_served_by_its_index_at_volume_test() {
   )
   served_by(
     plan(
+      "SELECT id FROM decisions_occurrences
+       WHERE point = $1 AND status = 'pending'
+         AND (arrived, id) > ('-infinity'::timestamptz, '' COLLATE \"C\")
+       ORDER BY arrived, id LIMIT 100",
+      [pog.text(tag <> "-p1")],
+    ),
+    "decisions_occurrences_pending",
+  )
+  served_by(
+    plan(
       "SELECT status, count(*) FROM decisions_occurrences WHERE point = $1 GROUP BY status",
       [pog.text(tag <> "-p3")],
     ),
@@ -401,7 +420,8 @@ pub fn every_query_is_served_by_its_index_at_volume_test() {
     plan(
       "SELECT id FROM decisions_occurrences
        WHERE point = $1 AND subject_kind = $2 AND subject_id = $3
-         AND status IN ('recommended', 'awaiting') AND set_aside_at IS NULL
+         AND status IN ('pending', 'recommended', 'awaiting', 'held')
+       AND set_aside_at IS NULL
        ORDER BY id",
       [pog.text(tag <> "-p1"), pog.text("person"), pog.text("s1")],
     ),

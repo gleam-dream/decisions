@@ -10,11 +10,15 @@
 //// back alone (whether its body returns an error or raises) and keeps the
 //// transaction usable, a savepoint's writes go with a transaction that
 //// rolls back, the head comes back as written, `waiting` returns only
-//// recommended and awaiting occurrences in id order, wake-ups are replaced
+//// the records still waiting (pending, recommended, awaiting or held) in
+//// id order, wake-ups are replaced
 //// and cancelled, settlement notices are admitted once, entries come back
 //// in order and byte for byte, and a desk driven over the adapter
 //// schedules its hold, deadline and policy steps, cancels them when it
-//// settles, and keeps every invariant of `decisions/testing`. This
+//// settles, and keeps every invariant of `decisions/testing`. Loading
+//// a subject lock (`decisions.subject_lock`) stores nothing and changes
+//// no `waiting` answer, and two admissions about one subject, one after
+//// the other, see each other. This
 //// package's own tests break an in-memory adapter in each of these clauses
 //// in turn and show that the check naming it fails.
 ////
@@ -132,6 +136,10 @@ pub fn checks() -> List(Check(tx)) {
     Check(
       "a desk schedules its deadline and policy steps and cancels them",
       desk_wakes,
+    ),
+    Check(
+      "a subject lock stores nothing and orders two admissions",
+      subject_lock,
     ),
   ]
 }
@@ -858,6 +866,85 @@ fn desk_wakes(adapter: Adapter(tx)) -> Result(Nil, String) {
   invariants(adapter, desk)
 }
 
+fn subject_lock(adapter: Adapter(tx)) -> Result(Nil, String) {
+  let name = fresh_id(adapter, "conformance.point")
+  let ana = Subject("person", fresh_id(adapter, "ana"))
+  let lock = decisions.subject_lock(point: name, subject: ana)
+  let desk =
+    decisions.desk(
+      decisions.point(name, wire.text())
+        |> decisions.superseded_by("newer_message"),
+      drives: fn(_) {
+        Gated(
+          name: "conformance_tool",
+          guard: fn(_, _) { Ok([]) },
+          execute: fn(_, _) { Ok(Nil) },
+        )
+      },
+      under: fn(_) { Ok(ask()) },
+      over: adapter.port,
+    )
+  // Each admission runs `happened` and then `expect`, and returns the keys
+  // its `happened` superseded before they began.
+  let admit = fn(key, superseding) {
+    adapter.transaction(fn(tx) {
+      {
+        use done <- result.try(decisions.happened(
+          desk,
+          tx,
+          "newer_message",
+          about: ana,
+        ))
+        use Nil <- result.map(decisions.expect(
+          desk,
+          tx,
+          key:,
+          trigger: Trigger("message", key),
+          about: ana,
+        ))
+        done.not_begun
+      }
+      |> result.map_error(decisions.describe)
+      |> result.try(fn(not_begun) {
+        expect(
+          not_begun == superseding,
+          "happened superseded before they began " <> string.inspect(not_begun),
+        )
+      })
+    })
+  }
+  let waiting = fn() {
+    adapter.port.waiting(adapter.handle, name, ana)
+    |> result.map_error(store.describe)
+  }
+  let first = fresh_id(adapter, "first")
+  use Nil <- result.try(admit(first, []))
+  use before <- result.try(waiting())
+  // Loading the lock id, alone in a transaction that commits.
+  use Nil <- result.try(
+    adapter.transaction(fn(tx) {
+      use found <- result.try(load(adapter, tx, lock))
+      expect(found == [], "the subject lock loaded entries")
+    }),
+  )
+  use found <- result.try(load(adapter, adapter.handle, lock))
+  use Nil <- result.try(expect(found == [], "the subject lock holds entries"))
+  use after <- result.try(waiting())
+  use Nil <- result.try(expect(
+    before == [first] && after == before,
+    "waiting returned "
+      <> string.inspect(before)
+      <> " before loading the subject lock and "
+      <> string.inspect(after)
+      <> " after",
+  ))
+  // A second admission, after the first committed, supersedes it.
+  use Nil <- result.try(admit(fresh_id(adapter, "second"), [first]))
+  use found <- result.try(load(adapter, adapter.handle, lock))
+  use Nil <- result.try(expect(found == [], "the subject lock holds entries"))
+  invariants(adapter, desk)
+}
+
 fn invariants(
   adapter: Adapter(tx),
   desk: Desk(String, tx),
@@ -907,8 +994,8 @@ fn ask() -> policy.Policy {
 fn proceed() -> policy.Policy {
   Policy(
     version: 1,
-    rules: [policy.When(policy.OwnAct, Proceed(Never))],
-    otherwise: Proceed(Never),
+    rules: [policy.When(policy.OwnAct, Proceed(Never, None))],
+    otherwise: Proceed(Never, None),
   )
 }
 
