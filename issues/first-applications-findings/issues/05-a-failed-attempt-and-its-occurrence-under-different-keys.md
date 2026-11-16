@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk/src/payout_desk/jobs.gleam`: a stopped run is recorded under `"payout:" <> run id` while the occurrence is admitted under `call_key` (run and action).
+`gleam-dream/oversight/apps/payout_desk/src/payout_desk/jobs.gleam`: a stopped run is recorded under `"payout:" <> run id` while the occurrence is admitted under `call_key` (run and action).
 
 ## Done when
 

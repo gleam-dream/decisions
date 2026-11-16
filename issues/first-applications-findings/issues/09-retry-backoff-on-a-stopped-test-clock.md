@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/app.gleam` sets `retry_backoff` to 20 ms for its tests; `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/test/cascade_test.gleam`, `a_raising_classifier_is_set_aside_after_three_attempts_test`.
+`gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/app.gleam` sets `retry_backoff` to 20 ms for its tests; `gleam-dream/oversight/apps/moderation_desk/test/cascade_test.gleam`, `a_raising_classifier_is_set_aside_after_three_attempts_test`.
 
 ## Done when
 

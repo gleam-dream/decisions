@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk/src/payout_desk/jobs.gleam`: on `None` it uses `"decisions:" <> occurrence.status_name(known.status)`.
+`gleam-dream/oversight/apps/payout_desk/src/payout_desk/jobs.gleam`: on `None` it uses `"decisions:" <> occurrence.status_name(known.status)`.
 
 ## Done when
 

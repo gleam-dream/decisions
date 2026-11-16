@@ -13,7 +13,7 @@ A point whose policy consults another point needs a consult handler that recomme
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk/src/payout_desk/desks.gleam`: `payout` builds the `risk` assessment through `consulting`, and `risk`'s gated tool (`inform_payout`) builds the payout desk again.
+`gleam-dream/oversight/apps/payout_desk/src/payout_desk/desks.gleam`: `payout` builds the `risk` assessment through `consulting`, and `risk`'s gated tool (`inform_payout`) builds the payout desk again.
 
 ## Done when
 

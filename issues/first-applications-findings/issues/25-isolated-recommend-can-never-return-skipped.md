@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/decisions/integrations/decisions_otp/src/decisions_otp/isolated.gleam`, `Attempted` and `recommend`; `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/models.gleam` matches `Superseded(_) | Skipped(_)` together.
+`/code/gleam-dream/decisions/integrations/decisions_otp/src/decisions_otp/isolated.gleam`, `Attempted` and `recommend`; `gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/models.gleam` matches `Superseded(_) | Skipped(_)` together.
 
 ## Done when
 

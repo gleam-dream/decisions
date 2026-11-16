@@ -13,7 +13,7 @@ Under a supervisor, a restarted `decisions_otp/store` owner starts empty. An app
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/app.gleam`, the `platform` child, and `src/moderation_desk/intake.gleam`, `seed`. Test: `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/test/supervision_test.gleam`, `the_store_owner_killed_restarts_the_tree_on_an_empty_store_test`.
+`gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/app.gleam`, the `platform` child, and `src/moderation_desk/intake.gleam`, `seed`. Test: `gleam-dream/oversight/apps/moderation_desk/test/supervision_test.gleam`, `the_store_owner_killed_restarts_the_tree_on_an_empty_store_test`.
 
 ## Done when
 

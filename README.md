@@ -1474,8 +1474,7 @@ limits.
   `clinic_registration` (patient registration from a conversation on
   PostgreSQL), `payout_desk` (a Fabric agent's payout call decided by finance,
   released through Saga) and `moderation_desk` (moderation at volume on the
-  OTP runtime with no database). They are on Oversight's branch
-  `decisions-examples`, not yet merged, and recorded in Oversight's design
-  layer with its ADRs 0033 to 0036. They resolve `decisions` by a local path
-  that works only from that worktree's depth until this repository is pushed.
+  OTP runtime with no database). They are in
+  [gleam-dream/oversight](https://github.com/gleam-dream/oversight/tree/main/apps)
+  under `apps/`, recorded in Oversight's design layer with its ADRs 0033 to 0038. Each pins this repository to one commit as Git+path dependencies.
 - See [AGENTS.md](AGENTS.md) for development and validation commands.

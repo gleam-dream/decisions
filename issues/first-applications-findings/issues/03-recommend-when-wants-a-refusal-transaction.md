@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `in_transaction` (14 lines).
+`gleam-dream/oversight/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `in_transaction` (14 lines).
 
 ## Done when
 

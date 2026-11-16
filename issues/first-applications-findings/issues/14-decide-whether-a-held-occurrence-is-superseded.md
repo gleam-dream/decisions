@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` and `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` both supersede waiting recommendations when a newer message or an edit arrives (`delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`; `followers_test.gleam`, `an_edit_supersedes_a_waiting_recommendation_test`); neither holds and supersedes at once today.
+`gleam-dream/oversight/apps/clinic_registration` and `gleam-dream/oversight/apps/moderation_desk` both supersede waiting recommendations when a newer message or an edit arrives (`delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`; `followers_test.gleam`, `an_edit_supersedes_a_waiting_recommendation_test`); neither holds and supersedes at once today.
 
 ## Done when
 

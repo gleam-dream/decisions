@@ -4,8 +4,7 @@ AI-assisted contribution.
 
 Three Oversight applications use `decisions`, `decisions_otp` and
 `decisions_postgres` end to end: `clinic_registration`, `payout_desk` and
-`moderation_desk`, under `/code/gleam-dream/worktrees/oversight-decisions/apps/`
-on Oversight's branch `decisions-examples` (not yet merged). Their friction
+`moderation_desk`, under `apps/` in `gleam-dream/oversight`. Their friction
 drove the application round (ADR 0036). This feature collects what they still
 work around after that round, what the two final independent reviews and the
 last rounds left open (ADR 0047), and the decisions the owner still has to

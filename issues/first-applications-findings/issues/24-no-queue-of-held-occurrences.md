@@ -13,7 +13,7 @@ A point with an undo window lets holders of the `withdrawn_by` set take a held o
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/src/clinic_registration/web.gleam`: `POST /cards/:occurrence/withdraw` takes an id; the desk has queues for verdicts (`/queue`), reviews (`/reviews`) and pending messages (`/pending`), and none for held registrations. `/code/gleam-dream/decisions/integrations/decisions_postgres/src/decisions_postgres/queue.gleam` has `page`, `page_at`, `review_queue`, `pending`, and no read of held occurrences.
+`gleam-dream/oversight/apps/clinic_registration/src/clinic_registration/web.gleam`: `POST /cards/:occurrence/withdraw` takes an id; the desk has queues for verdicts (`/queue`), reviews (`/reviews`) and pending messages (`/pending`), and none for held registrations. `/code/gleam-dream/decisions/integrations/decisions_postgres/src/decisions_postgres/queue.gleam` has `page`, `page_at`, `review_queue`, `pending`, and no read of held occurrences.
 
 ## Done when
 

@@ -19,7 +19,7 @@ Recorded on 2026-11-16. Settles the open question of [ADR-0034](0034-the-superse
 ## Evidence and history
 
 - The owner's ruling, 2026-11-15 and 2026-11-16. `src/decisions.gleam`, `expect`, `happened`, `subject_lock`, `SupersededBefore`; the conformance check "a subject lock stores nothing and orders two admissions"; the stress scenario "expect", which shows the same sequence without `expect` leaving a stale occurrence; `examples/usage/src/decisions_usage/expect_then_recommend.gleam` (region `expect-then-recommend`).
-- `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` expects each message in the transaction that receives it and lists pending messages at `/pending`.
+- `gleam-dream/oversight/apps/clinic_registration` expects each message in the transaction that receives it and lists pending messages at `/pending`.
 
 ## Note, 2026-11-16
 

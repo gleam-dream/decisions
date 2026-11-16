@@ -13,7 +13,7 @@ Both runtimes name themselves in every event with `source`. An application that 
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/telemetry.gleam` and `src/moderation_desk/desk.gleam`, which threads `source` through its state; `src/moderation_desk/app.gleam` makes the name.
+`gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/telemetry.gleam` and `src/moderation_desk/desk.gleam`, which threads `source` through its state; `src/moderation_desk/app.gleam` makes the name.
 
 ## Done when
 

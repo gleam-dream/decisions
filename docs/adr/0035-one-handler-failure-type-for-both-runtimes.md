@@ -15,7 +15,7 @@
 
 ## Evidence and history
 
-- Application round, 2026-11-15. Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` (`test/clinic_registration/confirmation_test.gleam`) and `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` (`test/supervision_test.gleam`, `the_dispatcher_killed_mid_handler_loses_nothing_test`).
+- Application round, 2026-11-15. Driven by `gleam-dream/oversight/apps/clinic_registration` (`test/clinic_registration/confirmation_test.gleam`) and `gleam-dream/oversight/apps/moderation_desk` (`test/supervision_test.gleam`, `the_dispatcher_killed_mid_handler_loses_nothing_test`).
 - `src/decisions.gleam`, `HandlerFailure` and `handling`; `integrations/decisions_otp/test/round_test.gleam`, `a_handler_failure_is_acted_on_by_kind_test`; `integrations/decisions_postgres/src/decisions_postgres.gleam`, `settlement_worker`. This refines ADR 0021.
 
 ## Later the same day

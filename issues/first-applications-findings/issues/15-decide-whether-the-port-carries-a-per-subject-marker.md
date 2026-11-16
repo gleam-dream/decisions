@@ -13,7 +13,7 @@ The superseding window is closed today by an application recipe and the `recomme
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/src/clinic_registration/jobs.gleam`, `still_latest`, keeps and locks the latest message per contact in its own row.
+`gleam-dream/oversight/apps/clinic_registration/src/clinic_registration/jobs.gleam`, `still_latest`, keeps and locks the latest message per contact in its own row.
 
 ## Done when
 

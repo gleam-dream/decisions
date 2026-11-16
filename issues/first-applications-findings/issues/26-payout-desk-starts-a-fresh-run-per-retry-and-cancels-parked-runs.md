@@ -13,7 +13,7 @@ The payout desk drives a new Fabric run for each failed attempt of a request, an
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk/src/payout_desk/jobs.gleam`: `payout_agent.run_id(request.id, failed)` names a new run per attempt; on `SupersededBefore` the handler calls `cancel_run`. The request to Fabric's maintainers is `/code/gleam-dream/decisions/docs/requests/fabric-tool-outcome-that-ends-a-run.md`.
+`gleam-dream/oversight/apps/payout_desk/src/payout_desk/jobs.gleam`: `payout_agent.run_id(request.id, failed)` names a new run per attempt; on `SupersededBefore` the handler calls `cancel_run`. The request to Fabric's maintainers is `/code/gleam-dream/decisions/docs/requests/fabric-tool-outcome-that-ends-a-run.md`.
 
 ## Done when
 

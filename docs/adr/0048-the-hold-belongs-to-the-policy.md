@@ -19,4 +19,4 @@ Recorded on 2026-11-16. Settles the open point of [ADR-0030](0030-who-may-withdr
 ## Evidence and history
 
 - The owner's ruling, 2026-11-16, on the recommendation recorded in ADR 0030 and tracker issue 13. `src/decisions/policy.gleam`, `Outcome`, `Fault.NonPositiveHold`; `examples/usage/src/decisions_usage/undo_window.gleam` (region `undo-window`) and `autonomy_ladder.gleam`.
-- Applications that followed: `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` (a ten-minute hold in policy version 2) and `/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk`.
+- Applications that followed: `gleam-dream/oversight/apps/clinic_registration` (a ten-minute hold in policy version 2) and `gleam-dream/oversight/apps/payout_desk`.

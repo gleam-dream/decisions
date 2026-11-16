@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `attempt`: on `Skipped` the job re-reads the store (`store.is_latest`) to find out whether the skip was real or a store failure, and the precondition `still_latest` folds a store error into its `Error(String)`. Test: `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/test/clinic_registration/delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`.
+`gleam-dream/oversight/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `attempt`: on `Skipped` the job re-reads the store (`store.is_latest`) to find out whether the skip was real or a store failure, and the precondition `still_latest` folds a store error into its `Error(String)`. Test: `gleam-dream/oversight/apps/clinic_registration/test/clinic_registration/delivery_test.gleam`, `a_newer_message_supersedes_the_waiting_recommendation_test`.
 
 ## Done when
 

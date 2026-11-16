@@ -13,7 +13,7 @@ An eligibility cannot require approvals from two sets at once (two moderators, o
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/point.gleam`: seniors hold `moderators` too, so a senior counts as a moderator, and the classifier's identity reaches the policy only as a signal the model reports.
+`gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/point.gleam`: seniors hold `moderators` too, so a senior counts as a moderator, and the classifier's identity reaches the policy only as a signal the model reports.
 
 ## Done when
 

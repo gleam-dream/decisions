@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `follower`: it matches `occurrence.Released(final:, key:, ..)` to build the confirmation job.
+`gleam-dream/oversight/apps/clinic_registration/src/clinic_registration/jobs.gleam`, function `follower`: it matches `occurrence.Released(final:, key:, ..)` to build the confirmation job.
 
 ## Done when
 

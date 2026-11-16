@@ -18,4 +18,4 @@ Recorded on 2026-11-16. Supersedes [ADR-0018](0018-whether-a-held-occurrence-is-
 ## Evidence and history
 
 - The owner's ruling, 2026-11-16, on ADR 0018 and tracker issue 14. `src/decisions.gleam`, `happened`; `src/decisions/store.gleam`, `is_waiting`; the stress scenario "held superseded" in `integrations/decisions_otp/src/decisions_otp/stress.gleam`, run against both stores.
-- `/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk`: a seller's suspension supersedes pending payouts, held or waiting.
+- `gleam-dream/oversight/apps/payout_desk`: a seller's suspension supersedes pending payouts, held or waiting.

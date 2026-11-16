@@ -14,5 +14,5 @@
 
 ## Evidence and history
 
-- Application round, 2026-11-15 (`core-review/PUBLIC-CHANGES.md`). Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` (`test/desk_test.gleam`, `a_reviewer_works_the_sampled_queue_test`) and the moderation workload of `decisions_otp/scale`.
+- Application round, 2026-11-15 (`core-review/PUBLIC-CHANGES.md`). Driven by `gleam-dream/oversight/apps/moderation_desk` (`test/desk_test.gleam`, `a_reviewer_works_the_sampled_queue_test`) and the moderation workload of `decisions_otp/scale`.
 - `src/decisions/policy.gleam`, `is_sampled`; `src/decisions/model.gleam`, `digest`.

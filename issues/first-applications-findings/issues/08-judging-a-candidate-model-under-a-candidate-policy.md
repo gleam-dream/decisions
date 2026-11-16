@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/src/moderation_desk/gate.gleam`, function `would_proceed`. Tests: `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk/test/gate_test.gleam`, `a_candidate_that_lets_abuse_through_is_held_test`.
+`gleam-dream/oversight/apps/moderation_desk/src/moderation_desk/gate.gleam`, function `would_proceed`. Tests: `gleam-dream/oversight/apps/moderation_desk/test/gate_test.gleam`, `a_candidate_that_lets_abuse_through_is_held_test`.
 
 ## Done when
 

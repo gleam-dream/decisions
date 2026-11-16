@@ -13,7 +13,7 @@ AI-assisted contribution.
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk` holds policy acceptances for an undo window (`test/payout_desk/robustness_test.gleam`, `withdraw_during_the_hold_and_after_it_test`).
+`gleam-dream/oversight/apps/payout_desk` holds policy acceptances for an undo window (`test/payout_desk/robustness_test.gleam`, `withdraw_during_the_hold_and_after_it_test`).
 
 ## Done when
 

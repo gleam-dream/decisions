@@ -15,5 +15,5 @@
 
 ## Evidence and history
 
-- Application round, 2026-11-15. Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/moderation_desk` (`test/desk_test.gleam`, `two_moderators_work_one_queue_without_colliding_test`) and `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` (`test/clinic_registration/desk_test.gleam`).
+- Application round, 2026-11-15. Driven by `gleam-dream/oversight/apps/moderation_desk` (`test/desk_test.gleam`, `two_moderators_work_one_queue_without_colliding_test`) and `gleam-dream/oversight/apps/clinic_registration` (`test/clinic_registration/desk_test.gleam`).
 - `src/decisions.gleam`, `open`.

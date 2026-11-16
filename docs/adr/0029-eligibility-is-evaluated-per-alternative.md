@@ -17,5 +17,5 @@
 
 ## Evidence and history
 
-- Application round, 2026-11-15 (`core-review/PUBLIC-CHANGES.md`, "The application round"). Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk` (`test/payout_desk/robustness_test.gleam`, `a_restart_with_an_escalation_pending_lets_the_head_of_finance_decide_test`).
+- Application round, 2026-11-15 (`core-review/PUBLIC-CHANGES.md`, "The application round"). Driven by `gleam-dream/oversight/apps/payout_desk` (`test/payout_desk/robustness_test.gleam`, `a_restart_with_an_escalation_pending_lets_the_head_of_finance_decide_test`).
 - `src/decisions/occurrence.gleam`, `admits`, `is_met`, `approvals`; `examples/usage/src/decisions_usage/two_or_one_senior.gleam` (region `either-several`) and its test.

@@ -13,7 +13,7 @@ When the model fails inside `isolated.recommend` or `recommend_when`, the attemp
 
 ## Evidence
 
-`/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration` keeps each provider exchange as evidence (`src/clinic_registration/llm.gleam`, `capture`) and its tests `/code/gleam-dream/worktrees/oversight-decisions/apps/clinic_registration/test/clinic_registration/model_failure_test.gleam`, `an_undecodable_answer_is_an_attempt_with_its_exchange_kept_test`, show the exchange kept beside an attempt that does not reference it.
+`gleam-dream/oversight/apps/clinic_registration` keeps each provider exchange as evidence (`src/clinic_registration/llm.gleam`, `capture`) and its tests `gleam-dream/oversight/apps/clinic_registration/test/clinic_registration/model_failure_test.gleam`, `an_undecodable_answer_is_an_attempt_with_its_exchange_kept_test`, show the exchange kept beside an attempt that does not reference it.
 
 ## Done when
 

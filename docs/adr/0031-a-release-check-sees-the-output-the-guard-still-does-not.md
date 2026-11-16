@@ -15,7 +15,7 @@
 
 ## Evidence and history
 
-- Application round, 2026-11-15. Driven by `/code/gleam-dream/worktrees/oversight-decisions/apps/payout_desk` (`test/payout_desk/policy_test.gleam`, `a_release_the_balance_does_not_cover_is_refused_and_kept_test`, `a_release_refused_after_the_hold_is_told_as_refused_test`).
+- Application round, 2026-11-15. Driven by `gleam-dream/oversight/apps/payout_desk` (`test/payout_desk/policy_test.gleam`, `a_release_the_balance_does_not_cover_is_refused_and_kept_test`, `a_release_refused_after_the_hold_is_told_as_refused_test`).
 - `src/decisions.gleam`, `checking`, `context_of` and the release; the fixture `fixtures/negative/a_guard_that_reads_the_output.gleam` still fails to compile.
 
 ## Note, 2026-11-15
