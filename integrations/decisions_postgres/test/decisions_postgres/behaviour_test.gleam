@@ -161,7 +161,7 @@ pub fn a_verdict_after_the_deadline_is_refused_before_any_wake_up_test() {
 
 /// Two keys expected with their own deadline (`expect_until`) an hour
 /// ahead, one whose model failed: the pending queue shows the deadline, a
-/// wake-up before it is not due (`NotDue`, which the worker snoozes on), and
+/// wake-up before it is not due (`wake` answers `NotDue`), and
 /// a store whose clock stands past the deadline expires both through the
 /// wake worker's code path. A late recommendation commits expired after the
 /// expiry, with the one notice the expiry admitted, and a late failure is
@@ -179,8 +179,8 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
   let late = kit.tag("late")
   let assert Ok(Nil) =
     kit.tx(env, fn(tx) {
-      use Nil <- result.try(expect_hour(desk, tx, failing, deadline))
-      expect_hour(desk, tx, late, deadline)
+      use Nil <- result.try(expect_by(desk, tx, failing, deadline))
+      expect_by(desk, tx, late, deadline)
     })
   let fail = fn(desk, tx) {
     decisions.record_failure(
@@ -224,13 +224,18 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
   assert recorded.status == occurrence.Expired(vocabulary.DeadlinePassed)
   assert recorded.valid_until == Some(deadline)
   assert kinds(recorded) == ["expected", "expired", "recommended"]
-  let before = decisions_postgres.inspection().head(env.db, failing)
-  let assert Error(Refused(decisions.DeadlinePassedBefore(at))) =
-    kit.tx(env, fail(late_desk, _))
+  // Refused in a transaction that commits anyway, as a caller that treats
+  // the refusal as done would run it: nothing is written.
+  let read = fn() {
+    kit.tx(env, decisions.read_record(late_desk, _, key: failing))
+  }
+  let before = read()
+  let assert Ok(Error(decisions.DeadlinePassedBefore(at))) =
+    kit.tx(env, fn(tx) { Ok(fail(late_desk, tx)) })
   assert at == deadline
-  assert decisions_postgres.inspection().head(env.db, failing) == before
+  assert read() == before
   assert kit.effects_of(env.db, late) == 0
-  kit.check(env, [desk])
+  kit.check(env, [late_desk])
 }
 
 /// Grind itself delivers a record's own deadline: the job admitted with the
@@ -246,7 +251,7 @@ pub fn grind_delivers_a_record_s_own_deadline_test() {
     |> wire.milliseconds
     |> wire.from_milliseconds
   let key = kit.tag("grind")
-  let assert Ok(Nil) = kit.tx(env, expect_hour(desk, _, key, deadline))
+  let assert Ok(Nil) = kit.tx(env, expect_by(desk, _, key, deadline))
   let assert [#("succeeded", 1)] = kit.finished_jobs(env, "decisions.wake")
   let assert Ok(decisions.NotBegun(pending)) =
     kit.tx(env, decisions.read_record(desk, _, key:))
@@ -271,7 +276,7 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
       kit.tag("race") <> "-" <> int.to_string(n)
     })
   list.each(keys, fn(key) {
-    let assert Ok(Nil) = kit.tx(env, expect_hour(desk, _, key, deadline))
+    let assert Ok(Nil) = kit.tx(env, expect_by(desk, _, key, deadline))
   })
   // Every key waits for its wake-up before the race.
   let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
@@ -310,7 +315,7 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
     assert kinds(known) == ["expected", "expired", "recommended"]
     assert list.count(notices, fn(notice) { notice.occurrence == key }) == 1
   })
-  kit.check(env, [desk])
+  kit.check(env, [late_desk])
 }
 
 /// An hour after the store's clock, in whole milliseconds.
@@ -323,7 +328,7 @@ fn hour_ahead(
   |> wire.from_milliseconds
 }
 
-fn expect_hour(desk, tx, key: String, deadline: timestamp.Timestamp) {
+fn expect_by(desk, tx, key: String, deadline: timestamp.Timestamp) {
   decisions.expect_until(
     desk,
     tx,

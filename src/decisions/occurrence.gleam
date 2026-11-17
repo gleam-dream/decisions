@@ -201,11 +201,12 @@ pub fn fold(
     ],
       _
     ->
-      case list.filter_map(prefix, expiry) {
+      case list.filter_map(prefix, expiry), prefix_deadline(prefix) {
         // Nothing is recommended after a supersession. After the record's
         // own deadline passed, a late recommendation is kept on the record
-        // and the occurrence starts expired.
-        [vocabulary.DeadlinePassed] ->
+        // and the occurrence starts expired. A record that ended by a
+        // deadline it never had was not written by the desk.
+        [vocabulary.DeadlinePassed], Some(_) ->
           Ok(list.fold(
             later,
             Occurrence(
@@ -228,8 +229,8 @@ pub fn fold(
             ),
             apply,
           ))
-        [_, ..] -> Error(NoRecommendation)
-        [] ->
+        [_, ..], _ -> Error(NoRecommendation)
+        [], _ ->
           Ok(list.fold(
             later,
             Occurrence(
@@ -289,14 +290,7 @@ fn pending(
         }
       }),
       attempts:,
-      valid_until: earliest(
-        list.filter_map(prefix, fn(entry) {
-          case entry.event {
-            entry.Expected(valid_until: Some(at), ..) -> Ok(at)
-            _ -> Error(Nil)
-          }
-        }),
-      ),
+      valid_until: prefix_deadline(prefix),
       ended: list.find_map(prefix, expiry) |> option.from_result,
     )
   // A record ends by its deadline only when it has one; one that says
@@ -305,6 +299,18 @@ fn pending(
     Some(vocabulary.DeadlinePassed), None -> Error(Nil)
     _, _ -> Ok(found)
   }
+}
+
+/// The record's own deadline: the earliest its expectations carry.
+fn prefix_deadline(prefix: List(Entry(o))) -> Option(Timestamp) {
+  earliest(
+    list.filter_map(prefix, fn(entry) {
+      case entry.event {
+        entry.Expected(valid_until: Some(at), ..) -> Ok(at)
+        _ -> Error(Nil)
+      }
+    }),
+  )
 }
 
 /// The earliest of some times, `None` when there are none.

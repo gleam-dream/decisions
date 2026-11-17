@@ -626,3 +626,122 @@ pub fn a_hold_accepted_before_the_deadline_is_released_after_it_test() {
   let assert occurrence.Released(..) = released.status
   assert world.count(w.db, "sent") == 1
 }
+
+/// A refused verb, in a transaction that commits anyway, as a caller that
+/// treats `DeadlinePassedBefore` as done would run it.
+fn committed(w: World, body) {
+  let assert Ok(answer) = world.in_tx(w, fn(tx) { Ok(body(tx)) })
+  answer
+}
+
+pub fn a_refused_late_verb_writes_nothing_even_when_committed_test() {
+  let w = world.new()
+  let assert Ok(Nil) = expect_until(w, closes())
+  at_seconds(w, day)
+  let before = memory.entries(w.db, key)
+  assert committed(w, decisions.expect_until(
+      desk(),
+      _,
+      key:,
+      trigger: Trigger("message", "m1"),
+      about: ana,
+      valid_until: closes(),
+    ))
+    == Error(decisions.DeadlinePassedBefore(closes()))
+  assert committed(w, decisions.expect(
+      desk(),
+      _,
+      key:,
+      trigger: Trigger("message", "m1"),
+      about: ana,
+    ))
+    == Error(decisions.DeadlinePassedBefore(closes()))
+  assert committed(w, decisions.record_failure(
+      desk(),
+      _,
+      key:,
+      trigger: Trigger("message", "m1"),
+      about: ana,
+      failure: model.Raised("down"),
+    ))
+    == Error(decisions.DeadlinePassedBefore(closes()))
+  assert committed(
+      w,
+      decisions.record_failure_with(
+        desk(),
+        _,
+        key:,
+        trigger: Trigger("message", "m1"),
+        about: ana,
+        failure: model.Raised("down"),
+        evidence: [],
+      ),
+    )
+    == Error(decisions.DeadlinePassedBefore(closes()))
+  assert memory.entries(w.db, key) == before
+  assert wake_times(w) == [closes()]
+}
+
+pub fn a_key_superseded_before_its_deadline_stays_refused_after_it_test() {
+  let w = world.new()
+  let assert Ok(Nil) = expect_until(w, closes())
+  let assert Ok(_) = newer_message(w)
+  at_seconds(w, day + 5)
+  let before = memory.entries(w.db, key)
+  assert committed(w, decisions.recommend_once(
+      desk(),
+      _,
+      key:,
+      proposal: proposal(),
+    ))
+    |> fn(answer) {
+      answer == Error(decisions.SupersededBefore("newer_message"))
+    }
+  assert memory.entries(w.db, key) == before
+}
+
+pub fn a_late_recommendation_after_the_expiry_is_lapsed_test() {
+  let w = world.new()
+  let assert Ok(Nil) = expect_until(w, closes())
+  at_seconds(w, day + 5)
+  let assert Ok(late) = recommend(w, proposal())
+  assert occurrence.account(late) == occurrence.Lapsed(DeadlinePassed)
+}
+
+pub fn a_recommendation_after_a_deadline_never_had_is_unreadable_test() {
+  let at = world.t0()
+  let entries = [
+    entry.Entry(
+      seq: 1,
+      at:,
+      event: entry.Expected(
+        point: "deadline.reply",
+        trigger: Trigger("message", "m1"),
+        subject: ana,
+        valid_until: None,
+      ),
+    ),
+    entry.Entry(seq: 2, at:, event: entry.Expired(DeadlinePassed)),
+    entry.Entry(
+      seq: 3,
+      at:,
+      event: entry.Recommended(
+        point: "deadline.reply",
+        trigger: Trigger("message", "m1"),
+        parent: None,
+        subject: ana,
+        requester: None,
+        context: Manifest([], "r"),
+        recommendation: Recommendation(
+          "Olá",
+          Agent("reply", "1"),
+          RuleFired("r"),
+          [],
+          [],
+        ),
+        valid_until: None,
+      ),
+    ),
+  ]
+  assert occurrence.fold(key, entries) == Error(occurrence.NoRecommendation)
+}

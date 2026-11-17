@@ -83,7 +83,8 @@ pub fn draft(
 
 /// The whole topic: the message at Monday 09:00, the draft at 09:01:30,
 /// nobody reviews it, and the wake-up at Tuesday 09:00 expires it. Returns
-/// the draft's deadline and its status after the wake-up.
+/// whether the draft kept the window's close as its deadline, and its
+/// status after the wake-up.
 pub fn run() -> #(Bool, String) {
   let store = memory.new()
   let monday = wire.from_milliseconds(1_800_000_000_000)

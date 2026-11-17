@@ -860,7 +860,8 @@ pub fn expect(
 /// At or after the deadline by the store clock the record is lapsed,
 /// whether or not that wake-up was delivered: `wake` expires it with
 /// `DeadlinePassed` and admits its settlement notice, and `expect`,
-/// `expect_until`, `record_failure` and `read` on the key are refused with
+/// `expect_until`, `record_failure`, `record_failure_with`, `read` and
+/// every verb that needs an occurrence are refused with
 /// `DeadlinePassedBefore` and write nothing. A recommendation that comes
 /// after is still recorded, and starts expired (`recommend_once`). The
 /// deadline the recommendation carries is the earliest of this one, the
@@ -1110,7 +1111,8 @@ pub fn record_failure_with(
 
 /// Begin an occurrence under `id` with the proposal, after what the record
 /// already holds (`prior`, a record not begun when `pending` is given).
-/// The recommendation carries the effective deadline. When it has passed,
+/// The recommendation carries the effective deadline. When the
+/// occurrence's own deadline (the record's or the proposal's) has passed,
 /// the occurrence is recorded expired and no policy runs; a record not
 /// begun that lapsed and was not yet expired is expired first, so a late
 /// recommendation always follows the expiry.

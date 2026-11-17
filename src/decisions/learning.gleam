@@ -390,10 +390,12 @@ pub fn candidate_under(
 }
 
 /// How triggers fared before a recommendation, for coverage: of the
-/// records read, how many began with an expectation (`decisions.expect`),
-/// how many of those a newer event superseded before anything was
-/// recommended, how many reached their own deadline (`expect_until`)
-/// before anything was recommended, and how many are still expected with
+/// records read, how many began with an expectation (`decisions.expect` or
+/// `decisions.expect_until`), how many of those a newer event superseded
+/// before anything was recommended, how many expired at their own
+/// deadline before anything was recommended (the expiry written: a record
+/// lapsed by the clock whose wake-up has not run yet still counts as
+/// expected), and how many are still expected with
 /// nothing recommended (work in flight, or a worker that died for good). A
 /// recommendation recorded after the deadline began the record, so it
 /// counts only as expected.
