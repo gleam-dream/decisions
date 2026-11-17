@@ -1432,7 +1432,7 @@ for the schema.
 | An approval counts only for the alternative that admits it           | Each verdict records the sets its validator held; eligibility is judged per alternative                                 |
 
 `decisions/testing.check` checks the eight invariants behind this table over
-any store, and `decisions/conformance` runs twenty-one checks of the storage port
+any store, and `decisions/conformance` runs twenty-two checks of the storage port
 against any adapter.
 
 ## What Decisions does not do

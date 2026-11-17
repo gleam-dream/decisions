@@ -429,7 +429,7 @@ pub fn point_of(desk: Desk(o, tx)) -> Point(o) {
 }
 
 /// What a recommender proposes, and about whom. Build one with `proposal`
-/// and add what applies with `asked_by` and `hanging_from`.
+/// and add what applies with `asked_by`, `hanging_from` and `valid_until`.
 pub opaque type Proposal(output) {
   Proposal(
     trigger: Trigger,
@@ -438,6 +438,7 @@ pub opaque type Proposal(output) {
     recommendation: Recommendation(output),
     parent: Option(Parent),
     requester: Option(String),
+    valid_until: Option(Timestamp),
   )
 }
 
@@ -455,6 +456,7 @@ pub fn proposal(
     recommendation:,
     parent: None,
     requester: None,
+    valid_until: None,
   )
 }
 
@@ -468,6 +470,20 @@ pub fn asked_by(proposal: Proposal(o), requester: String) -> Proposal(o) {
 /// What the occurrence hangs from, so settling it can start what follows.
 pub fn hanging_from(proposal: Proposal(o), parent: Parent) -> Proposal(o) {
   Proposal(..proposal, parent: Some(parent))
+}
+
+/// The occurrence's own deadline, an instant the application knows, such
+/// as the end of a service window. The deadline written on the
+/// recommendation is the earliest of this, the point's validity counted
+/// from the recommendation, and the deadline the key's expectation carries
+/// (`expect_until`): a proposal brings a deadline earlier, never later.
+/// When it has already passed, the recommendation is recorded and expires
+/// at once. The instant is kept in whole milliseconds, rounded down.
+pub fn valid_until(
+  proposal: Proposal(o),
+  at deadline: Timestamp,
+) -> Proposal(o) {
+  Proposal(..proposal, valid_until: Some(whole_milliseconds(deadline)))
 }
 
 /// Why a verb did not do what was asked. Every refusal leaves nothing the
@@ -534,6 +550,13 @@ pub type Refusal {
   /// recommended under it: the trigger's work is moot. Nothing was written,
   /// shown or released. A runtime drops the job as done.
   SupersededBefore(event: String)
+  /// The key's own deadline (`expect_until`) passed by the store clock
+  /// before anything was recommended under it: nothing can be decided any
+  /// more. Nothing was written. `expect`, `expect_until`, `record_failure`,
+  /// `read` and every verb that needs an occurrence refuse such a key this
+  /// way; `recommend_once` does not, it records the late recommendation
+  /// expired. A runtime drops the job as done.
+  DeadlinePassedBefore(deadline: Timestamp)
   /// `recommend_once` or `record_failure` was given a key that an
   /// occurrence of another point already holds. Keys are one namespace
   /// across every point of a store.
@@ -671,6 +694,7 @@ pub fn disposition(refusal: Refusal) -> Disposition {
     | NotSettled
     | NotConsulting
     | SupersededBefore(_)
+    | DeadlinePassedBefore(_)
     | ToolRefused(..) -> Final
   }
 }
@@ -711,6 +735,10 @@ pub fn describe(refusal: Refusal) -> String {
     KeyTaken(point:) -> "the key is taken by an occurrence of " <> point
     SupersededBefore(event:) ->
       "superseded by " <> event <> " before it was recommended"
+    DeadlinePassedBefore(deadline:) ->
+      "its deadline, "
+      <> timestamp.to_rfc3339(deadline, duration.seconds(0))
+      <> ", passed before it was recommended"
     NoPolicy(reason:) -> "the policy could not be read: " <> reason
     Unpublishable(faults:) ->
       "the policy cannot be used: "
@@ -725,14 +753,16 @@ pub fn describe(refusal: Refusal) -> String {
 
 /// Record a recommendation under a new id and apply the policy. When the
 /// policy proceeds and the point has no hold, the gated tool runs here,
-/// once; when it refuses, the occurrence ends `Refused`.
+/// once; when it refuses, the occurrence ends `Refused`. When the
+/// proposal's own deadline (`valid_until`) has already passed, the
+/// recommendation is recorded and expires at once, and no policy runs.
 pub fn recommend(
   desk: Desk(o, tx),
   tx: tx,
   proposal: Proposal(o),
 ) -> Result(Occurrence(o), Refusal) {
   let id = desk.port.new_id(tx)
-  begin(desk, tx, id, proposal, [], clock(desk, tx))
+  begin(desk, tx, id, proposal, [], None, clock(desk, tx))
 }
 
 /// `recommend`, at most once per `key`, which becomes the occurrence's id.
@@ -747,6 +777,17 @@ pub fn recommend(
 /// before it was recommended is refused with `SupersededBefore(event)`, and
 /// nothing is written, shown or released: the work in flight is moot.
 ///
+/// **Deadlines.** The deadline written on the recommendation is the
+/// earliest of the point's validity counted from now, the deadline the
+/// key's expectations carry (`expect_until`) and the proposal's
+/// (`valid_until`). When it has already passed by the store clock, the
+/// recommendation is recorded and the occurrence expires at once with
+/// `DeadlinePassed`: no policy runs and nothing is shown or released, and
+/// the expired occurrence is returned, so the late output stays on the
+/// record. That holds whether or not the wake-up that expires the key was
+/// delivered first; when it was not, the expiry is written before the
+/// recommendation, so the record has one shape either way.
+///
 /// **The superseding window.** `happened` supersedes what the record holds
 /// when it runs. Call `expect` with this key in the transaction that
 /// receives the trigger, and the record holds it while the model works;
@@ -760,11 +801,12 @@ pub fn recommend_once(
   use #(entries, now) <- result.try(fetch(desk, tx, key))
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found)
-    Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], now)
+    Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], None, now)
     Error(occurrence.NotYet(pending)) ->
-      case pending.superseded {
-        Some(cause) -> Error(superseded_before(cause))
-        None -> begin(desk, tx, key, proposal, entries, now)
+      case pending.ended {
+        Some(Superseded(event:)) -> Error(SupersededBefore(event:))
+        Some(vocabulary.DeadlinePassed) | None ->
+          begin(desk, tx, key, proposal, entries, Some(pending), now)
       }
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
   }
@@ -790,10 +832,11 @@ pub fn recommend_once(
 /// Safe to repeat: an expected key is recorded once. On a key that already
 /// holds a recommendation it does nothing; on a key another point holds it
 /// is refused with `KeyTaken`; on a key already superseded it is refused
-/// with `SupersededBefore`. An expectation has no deadline: a record that
-/// stays expected (its worker died for good) keeps the head status
-/// `Pending` and its arrival time, which a queue or an operator can ask
-/// for.
+/// with `SupersededBefore`, and on one whose own deadline passed with
+/// `DeadlinePassedBefore`. An expectation made with `expect` has no
+/// deadline: a record that stays expected (its worker died for good) keeps
+/// the head status `Pending` and its arrival time, which a queue or an
+/// operator can ask for. To give it one, use `expect_until`.
 pub fn expect(
   desk: Desk(o, tx),
   tx: tx,
@@ -801,54 +844,185 @@ pub fn expect(
   trigger trigger: Trigger,
   about subject: Subject,
 ) -> Result(Nil, Refusal) {
+  expect_with(desk, tx, key, trigger, subject, None)
+}
+
+/// `expect`, with the occurrence's own deadline: an instant the
+/// application knows when it admits the trigger, such as the end of a
+/// service window. It is written on the `expected` entry, in whole
+/// milliseconds rounded down, and the record is due at it: its head's due
+/// time is the deadline and a wake-up is scheduled for it.
+///
+/// At or after the deadline by the store clock the record is lapsed,
+/// whether or not that wake-up was delivered: `wake` expires it with
+/// `DeadlinePassed` and admits its settlement notice, and `expect`,
+/// `expect_until`, `record_failure` and `read` on the key are refused with
+/// `DeadlinePassedBefore` and write nothing. A recommendation that comes
+/// after is still recorded, and starts expired (`recommend_once`). The
+/// deadline the recommendation carries is the earliest of this one, the
+/// point's validity and the proposal's.
+///
+/// Repeated with an earlier deadline, it appends another expectation and
+/// the earliest counts; with an equal or later one it writes nothing: a
+/// deadline never moves later. On a key that already holds a
+/// recommendation it does nothing. When the deadline has already passed,
+/// the expectation is written with its expiry at once, so the transaction
+/// that received the trigger can still commit.
+pub fn expect_until(
+  desk: Desk(o, tx),
+  tx: tx,
+  key key: String,
+  trigger trigger: Trigger,
+  about subject: Subject,
+  valid_until deadline: Timestamp,
+) -> Result(Nil, Refusal) {
+  expect_with(
+    desk,
+    tx,
+    key,
+    trigger,
+    subject,
+    Some(whole_milliseconds(deadline)),
+  )
+}
+
+fn expect_with(
+  desk: Desk(o, tx),
+  tx: tx,
+  key: String,
+  trigger: Trigger,
+  subject: Subject,
+  deadline: Option(Timestamp),
+) -> Result(Nil, Refusal) {
   use #(entries, now) <- result.try(fetch(desk, tx, key))
-  let expected = entry.Expected(point: desk.point.name, trigger:, subject:)
+  let expected =
+    entry.Expected(
+      point: desk.point.name,
+      trigger:,
+      subject:,
+      valid_until: deadline,
+    )
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found) |> result.replace(Nil)
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
-    Error(occurrence.NotYet(pending)) ->
-      case pending.superseded, pending.expected {
-        Some(cause), _ -> Error(superseded_before(cause))
-        None, True -> Ok(Nil)
-        None, False ->
-          append_pending(desk, tx, key, entries, expected, now)
+    Error(occurrence.NotYet(pending)) -> {
+      use Nil <- result.try(still_open(pending, now))
+      let earlier = case deadline, pending.valid_until {
+        Some(new), Some(old) -> timestamp.compare(new, old) == order.Lt
+        Some(_), None -> True
+        None, _ -> False
+      }
+      case pending.expected && !earlier {
+        True -> Ok(Nil)
+        False ->
+          write_pending(desk, tx, key, entries, Some(pending), expected, now)
           |> result.replace(Nil)
       }
+    }
     Error(occurrence.NoEntries) ->
-      append_pending(desk, tx, key, entries, expected, now)
+      write_pending(desk, tx, key, entries, None, expected, now)
       |> result.replace(Nil)
   }
 }
 
-/// Append one entry to a record that has not begun, with its head.
-fn append_pending(
+/// A record that has not begun may still be expected or attempted: it has
+/// not ended, and its own deadline has not passed by the store clock.
+fn still_open(
+  pending: occurrence.Pending,
+  now: Timestamp,
+) -> Result(Nil, Refusal) {
+  case pending.ended, occurrence.pending_has_lapsed(pending, now) {
+    Some(cause), _ -> Error(ended_before(pending, cause))
+    None, True -> Error(deadline_passed_before(pending))
+    None, False -> Ok(Nil)
+  }
+}
+
+fn ended_before(
+  pending: occurrence.Pending,
+  cause: vocabulary.ExpiryCause,
+) -> Refusal {
+  case cause {
+    Superseded(event:) -> SupersededBefore(event:)
+    vocabulary.DeadlinePassed -> deadline_passed_before(pending)
+  }
+}
+
+fn deadline_passed_before(pending: occurrence.Pending) -> Refusal {
+  // A record ends by its deadline only when it has one.
+  DeadlinePassedBefore(deadline: option.unwrap(
+    pending.valid_until,
+    timestamp.unix_epoch,
+  ))
+}
+
+/// Append one entry to a record that has not begun, with its head. When
+/// the entry leaves the record lapsed (an expectation whose deadline has
+/// already passed), its expiry is appended with it. The record's wake-up
+/// follows its deadline, and its settlement notice is admitted when it
+/// ends now.
+fn write_pending(
   desk: Desk(o, tx),
   tx: tx,
   key: String,
   entries: List(Entry(o)),
+  before: Option(occurrence.Pending),
   event: Event(o),
   now: Timestamp,
 ) -> Result(occurrence.Pending, Refusal) {
-  let added = entry.Entry(seq: list.length(entries) + 1, at: now, event:)
-  let all = list.append(entries, [added])
-  case occurrence.fold(key, all) {
+  let added = pending_entries(entries, [event], now)
+  let added = case occurrence.fold(key, list.append(entries, added)) {
+    Error(occurrence.NotYet(pending)) ->
+      case occurrence.pending_has_lapsed(pending, now) {
+        True ->
+          pending_entries(
+            entries,
+            [event, entry.Expired(vocabulary.DeadlinePassed)],
+            now,
+          )
+        False -> added
+      }
+    _ -> added
+  }
+  case occurrence.fold(key, list.append(entries, added)) {
     Error(occurrence.NotYet(pending)) -> {
-      use stored <- result.try(encode([added], desk.point.output))
-      use Nil <- result.try(
-        desk.port.append(tx, key, occurrence.pending_head(pending), stored)
-        |> result.map_error(StoreFailed),
-      )
-      Ok(pending)
+      use stored <- result.try(encode(added, desk.point.output))
+      let was = option.map(before, occurrence.pending_wake_times)
+      let wakes = occurrence.pending_wake_times(pending)
+      let ends =
+        pending.ended != None && option.then(before, fn(b) { b.ended }) == None
+      {
+        use Nil <- result.try(desk.port.append(
+          tx,
+          key,
+          occurrence.pending_head(pending),
+          stored,
+        ))
+        use Nil <- result.try(case option.unwrap(was, []) == wakes {
+          True -> Ok(Nil)
+          False -> desk.port.schedule(tx, desk.point.name, key, wakes)
+        })
+        case ends {
+          True -> desk.port.settled(tx, desk.point.name, key)
+          False -> Ok(Nil)
+        }
+      }
+      |> result.map_error(StoreFailed)
+      |> result.replace(pending)
     }
     _ -> Error(not_a_record())
   }
 }
 
-fn superseded_before(cause: vocabulary.ExpiryCause) -> Refusal {
-  case cause {
-    Superseded(event:) -> SupersededBefore(event:)
-    vocabulary.DeadlinePassed -> SupersededBefore(event: "")
-  }
+fn pending_entries(
+  entries: List(Entry(o)),
+  events: List(Event(o)),
+  now: Timestamp,
+) -> List(Entry(o)) {
+  let first = list.length(entries) + 1
+  list.index_map(events, fn(event, index) {
+    entry.Entry(seq: first + index, at: now, event:)
+  })
 }
 
 /// Record that a recommender failed under `key` before anything was
@@ -859,7 +1033,9 @@ fn superseded_before(cause: vocabulary.ExpiryCause) -> Refusal {
 /// the key already holds a recommendation, nothing is written. When a
 /// newer event superseded the key before it was recommended, nothing is
 /// written and the result is `Error(SupersededBefore(event))`: do not try
-/// again.
+/// again. When the key's own deadline (`expect_until`) has passed by the
+/// store clock, nothing is written and the result is
+/// `Error(DeadlinePassedBefore(deadline))`: do not try again either.
 ///
 /// Each call records one attempt, so repeating a call records the attempt
 /// again: two attempts that failed alike look the same, and the desk
@@ -916,25 +1092,59 @@ pub fn record_failure_with(
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found) |> result.map(fn(found) { found.attempts })
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
-    Error(occurrence.NotYet(occurrence.Pending(superseded: Some(cause), ..))) ->
-      Error(superseded_before(cause))
-    Error(occurrence.NotYet(_)) | Error(occurrence.NoEntries) ->
-      append_pending(desk, tx, key, entries, attempt, now)
+    Error(occurrence.NotYet(pending)) -> {
+      use Nil <- result.try(still_open(pending, now))
+      write_pending(desk, tx, key, entries, Some(pending), attempt, now)
+      |> result.map(fn(pending) { pending.attempts })
+    }
+    Error(occurrence.NoEntries) ->
+      write_pending(desk, tx, key, entries, None, attempt, now)
       |> result.map(fn(pending) { pending.attempts })
   }
 }
 
+/// Begin an occurrence under `id` with the proposal, after what the record
+/// already holds (`prior`, a record not begun when `pending` is given).
+/// The recommendation carries the effective deadline. When it has passed,
+/// the occurrence is recorded expired and no policy runs; a record not
+/// begun that lapsed and was not yet expired is expired first, so a late
+/// recommendation always follows the expiry.
 fn begin(
   desk: Desk(o, tx),
   tx: tx,
   id: String,
   proposal: Proposal(o),
   prior: List(Entry(o)),
+  pending: Option(occurrence.Pending),
   now: Timestamp,
 ) -> Result(Occurrence(o), Refusal) {
+  let own = option.then(pending, fn(pending) { pending.valid_until })
+  let deadline =
+    occurrence.earliest(
+      option.values([
+        option.map(desk.point.validity, timestamp.add(now, _)),
+        own,
+        proposal.valid_until,
+      ]),
+    )
+  let lapsed_first = case pending {
+    Some(pending) -> occurrence.pending_has_lapsed(pending, now)
+    None -> False
+  }
+  let expiry = case lapsed_first {
+    True -> [
+      entry.Entry(
+        seq: list.length(prior) + 1,
+        at: now,
+        event: entry.Expired(vocabulary.DeadlinePassed),
+      ),
+    ]
+    False -> []
+  }
+  let prior_written = list.append(prior, expiry)
   let first =
     entry.Entry(
-      seq: list.length(prior) + 1,
+      seq: list.length(prior_written) + 1,
       at: now,
       event: entry.Recommended(
         point: desk.point.name,
@@ -948,22 +1158,32 @@ fn begin(
         },
         context: proposal.context,
         recommendation: proposal.recommendation,
-        valid_until: option.map(desk.point.validity, timestamp.add(now, _)),
+        valid_until: deadline,
       ),
     )
-  case occurrence.fold(id, list.append(prior, [first])) {
-    Ok(recommended) ->
-      settle(
-        desk,
-        tx,
+  case occurrence.fold(id, list.append(prior_written, [first])) {
+    Ok(recommended) -> {
+      let draft =
         Draft(
           occurrence: recommended,
           saved: list.length(prior),
           now:,
-          wakes: [],
-          settled: False,
-        ),
-      )
+          // What the record not begun had pending, so saving replaces it.
+          wakes: option.map(pending, occurrence.pending_wake_times)
+            |> option.unwrap([]),
+          // A record that ended by its deadline already admitted its notice.
+          settled: option.then(pending, fn(pending) { pending.ended }) != None,
+        )
+      case recommended.status, occurrence.has_lapsed(recommended, now) {
+        // Expired before it began: kept on the record, nothing more runs.
+        occurrence.Expired(_), _ -> save(desk, tx, draft)
+        // Its deadline has passed already: expired at once, no policy.
+        _, True ->
+          add(draft, entry.Expired(vocabulary.DeadlinePassed))
+          |> save(desk, tx, _)
+        _, False -> settle(desk, tx, draft)
+      }
+    }
     Error(_) -> Error(not_a_record())
   }
 }
@@ -1610,20 +1830,22 @@ fn supersede(
   )
   let folded = occurrence.fold(id, entries)
   case folded {
-    Error(occurrence.NotYet(occurrence.Pending(superseded: None, ..))) -> {
-      use _ <- result.try(append_pending(
+    Error(occurrence.NotYet(occurrence.Pending(ended: None, ..) as pending)) -> {
+      // A record whose own deadline had already passed ended by it.
+      let cause = case occurrence.pending_has_lapsed(pending, now) {
+        True -> vocabulary.DeadlinePassed
+        False -> Superseded(event:)
+      }
+      write_pending(
         desk,
         tx,
         id,
         entries,
-        entry.Expired(Superseded(event:)),
+        Some(pending),
+        entry.Expired(cause),
         now,
-      ))
-      use Nil <- result.map(
-        desk.port.settled(tx, desk.point.name, id)
-        |> result.map_error(StoreFailed),
       )
-      SupersededRecord
+      |> result.replace(SupersededRecord)
     }
     Error(occurrence.NotYet(_)) -> Ok(NothingSuperseded)
     _ -> {
@@ -1699,10 +1921,15 @@ pub type Woken(output) {
   /// Nothing is pending: the occurrence settled, or it waits for no time.
   /// A wake-up delivered again is harmless.
   NothingDue
+  /// A record that had not begun reached its own deadline (`expect_until`)
+  /// and expired with `DeadlinePassed`; this is the record now.
+  LapsedBefore(pending: occurrence.Pending)
 }
 
 /// A wake-up for an occurrence: a hold ended, the validity passed, or
-/// waiting changed what the policy says. A release checks the guard, the
+/// waiting changed what the policy says; or for a record not begun whose
+/// own deadline (`expect_until`) passed, which then expires
+/// (`LapsedBefore`). A release checks the guard, the
 /// release check and the tool again against the world as it is now; a
 /// `Refuse` ends the occurrence `Refused`, an `Unsure` fails the wake-up
 /// with `ToolUnsure` and records nothing, so it is delivered again.
@@ -1721,7 +1948,54 @@ pub fn wake(
   tx: tx,
   occurrence id: String,
 ) -> Result(Woken(o), Refusal) {
-  use draft <- result.try(load(desk, tx, id))
+  use #(entries, now) <- result.try(
+    fetch(desk, tx, id) |> result.map_error(by_id),
+  )
+  case occurrence.fold(id, entries) {
+    Error(occurrence.NotYet(pending)) if pending.point == desk.point.name ->
+      wake_pending(desk, tx, id, entries, pending, now)
+    folded -> {
+      use draft <- result.try(drafted(desk, entries, now, folded))
+      wake_occurrence(desk, tx, draft)
+    }
+  }
+}
+
+/// A record not begun is due only at its own deadline.
+fn wake_pending(
+  desk: Desk(o, tx),
+  tx: tx,
+  id: String,
+  entries: List(Entry(o)),
+  pending: occurrence.Pending,
+  now: Timestamp,
+) -> Result(Woken(o), Refusal) {
+  case occurrence.pending_has_lapsed(pending, now), pending.ended {
+    True, _ ->
+      write_pending(
+        desk,
+        tx,
+        id,
+        entries,
+        Some(pending),
+        entry.Expired(vocabulary.DeadlinePassed),
+        now,
+      )
+      |> result.map(LapsedBefore)
+    False, None ->
+      case pending.valid_until {
+        Some(until) -> Ok(NotDue(until))
+        None -> Ok(NothingDue)
+      }
+    False, Some(_) -> Ok(NothingDue)
+  }
+}
+
+fn wake_occurrence(
+  desk: Desk(o, tx),
+  tx: tx,
+  draft: Draft(o),
+) -> Result(Woken(o), Refusal) {
   let now = draft.now
   let waiting = draft.occurrence
   let is_due = fn(at) { timestamp.compare(now, at) != order.Lt }
@@ -1819,7 +2093,7 @@ pub fn waker(
     |> result.map(fn(woken) {
       case woken {
         NotDue(until:) -> Some(until)
-        Woken(_) | NothingDue -> None
+        Woken(_) | NothingDue | LapsedBefore(_) -> None
       }
     })
   })
@@ -1955,21 +2229,28 @@ fn fetch(
 /// time. The desk reduces it here, so an adapter with a finer clock cannot
 /// store a time a wake-up or a head would not match exactly.
 fn clock(desk: Desk(o, tx), tx: tx) -> Timestamp {
-  desk.port.now(tx) |> wire.milliseconds |> wire.from_milliseconds
+  desk.port.now(tx) |> whole_milliseconds
+}
+
+/// A time in whole milliseconds, rounded down: the resolution of every
+/// time the desk stores, schedules or puts on a head.
+fn whole_milliseconds(at: Timestamp) -> Timestamp {
+  at |> wire.milliseconds |> wire.from_milliseconds
 }
 
 fn load(desk: Desk(o, tx), tx: tx, id: String) -> Result(Draft(o), Refusal) {
   use #(entries, now) <- result.try(
-    fetch(desk, tx, id)
-    |> result.map_error(fn(refusal) {
-      case refusal {
-        // By id, another point's occurrence is simply not this desk's.
-        KeyTaken(_) -> UnknownOccurrence
-        _ -> refusal
-      }
-    }),
+    fetch(desk, tx, id) |> result.map_error(by_id),
   )
   drafted(desk, entries, now, occurrence.fold(id, entries))
+}
+
+/// By id, another point's occurrence is simply not this desk's.
+fn by_id(refusal: Refusal) -> Refusal {
+  case refusal {
+    KeyTaken(_) -> UnknownOccurrence
+    _ -> refusal
+  }
 }
 
 /// The draft of entries already fetched and folded, so a verb that read
@@ -1993,10 +2274,12 @@ fn drafted(
     }
     Error(occurrence.NoEntries) -> Error(UnknownOccurrence)
     Error(occurrence.NotYet(pending)) ->
-      case pending.point == desk.point.name, pending.superseded {
-        False, _ -> Error(UnknownOccurrence)
-        True, Some(cause) -> Error(superseded_before(cause))
-        True, None -> Error(NotRecommended(attempts: pending.attempts))
+      case pending.point == desk.point.name {
+        False -> Error(UnknownOccurrence)
+        True -> {
+          use Nil <- result.try(still_open(pending, now))
+          Error(NotRecommended(attempts: pending.attempts))
+        }
       }
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
   }

@@ -28,7 +28,7 @@
     (id: "mem", label: "Memory store", sub: "decisions/memory", kind: "database", tint: "teal"),
     (id: "otp", label: "OTP store", sub: "decisions_otp/store", kind: "database", tint: "teal"),
     (id: "pg", label: "PostgreSQL adapter", sub: "decisions_postgres", kind: "database", tint: "teal"),
-    (id: "suite", label: "Conformance suite", sub: "twenty-one checks", kind: "component", tint: "teal"),
+    (id: "suite", label: "Conformance suite", sub: "twenty-two checks", kind: "component", tint: "teal"),
   ), edges: (
     (from: "desk", to: "port", relation: "call", label: "load, append, schedule, settled, ..."),
     (from: "mem", to: "port", relation: "dependency", label: "implements"),
@@ -72,8 +72,8 @@
   )
 ])
 
-#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-one checks for one process, and a stress suite for the clauses that need several.", body: [
-  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-one named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
+#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-two checks for one process, and a stress suite for the clauses that need several.", body: [
+  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-two named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
   #md-table(2, (
     [*Check*], [*Clause*],
     [an absent id loads empty; an absent id takes its first entry once], [`load`],

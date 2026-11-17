@@ -18,7 +18,7 @@ Recorded on 2026-11-17. Extends [ADR-0008](0008-time-and-the-record-decide-never
 ## What changes for consumers
 
 - New: `decisions.expect_until`, `decisions.valid_until`, `decisions.DeadlinePassedBefore`, `occurrence.pending_wake_times`, `occurrence.pending_has_lapsed`, `isolated.Lapsed`.
-- Source changes: `entry.Expected` and `occurrence.Pending` gain a `valid_until` field, so a pattern that names every field, or a constructor, must add it. `Pending.superseded` is renamed `ended`. `learning.Coverage` gains `lapsed_before`. `isolated.Attempted` gains `Lapsed(deadline)`, returned when `record_failure` is refused as lapsed, and is documented, like `Refusal`, as growing in a minor release.
+- Source changes: `entry.Expected` and `occurrence.Pending` gain a `valid_until` field, so a pattern that names every field, or a constructor, must add it. `Pending.superseded` is renamed `ended`. `learning.Coverage` gains `lapsed_before`. `decisions.Woken` gains `LapsedBefore(pending)`, the answer of `wake` that expired a record not begun; `waker` treats it as done. `isolated.Attempted` gains `Lapsed(deadline)`, returned when `record_failure` is refused as lapsed, and is documented, like `Refusal`, as growing in a minor release.
 - Behaviour: none for a key without a deadline; its stored entries are the same bytes as before. With one, `recommend_once` and `isolated.recommend` may return an occurrence already expired, as a redelivery could before, and a follower may be handed a record lapsed before it began, which it reads as `DeadlinePassedBefore` and drops like a superseded one.
 
 ## Rationale and alternatives

@@ -141,6 +141,19 @@ pub fn each_check_catches_its_broken_adapter_test() {
       }),
     ),
     #(
+      "a pending head keeps its due time and its wake-up",
+      port(fn(p) {
+        store.Port(..p, append: fn(tx, id, head: store.Head, entries) {
+          // An adapter that keeps a due time only for an occurrence.
+          let head = case head.status {
+            store.Pending -> store.Head(..head, due: option.None)
+            _ -> head
+          }
+          p.append(tx, id, head, entries)
+        })
+      }),
+    ),
+    #(
       "waiting filters by point, subject and status, in id order",
       port(fn(p) {
         store.Port(..p, waiting: fn(tx, point, subject) {

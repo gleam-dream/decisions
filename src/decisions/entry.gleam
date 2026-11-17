@@ -4,11 +4,13 @@
 //// T, and `decisions/occurrence.fold` turns entries into where the
 //// occurrence stands.
 ////
-//// A record may begin, before its recommendation, with an expectation
+//// A record may begin, before its recommendation, with expectations
 //// (`Expected`: a trigger was received and work is in flight) and failed
 //// attempts (`AttemptFailed`), in any order, and with the `Expired` entry
-//// of a newer event that superseded it before it began. Otherwise a
-//// record begins with `Recommended`.
+//// that ended it before it began: a newer event superseded it, or its own
+//// deadline passed. After an expiry by deadline a `Recommended` entry may
+//// still follow, and the occurrence starts expired. Otherwise a record
+//// begins with `Recommended`.
 ////
 //// `to_stored` and `from_stored` are the only translation between an entry
 //// and the text a store keeps, so an adapter never parses an entry.
@@ -29,7 +31,8 @@ import decisions/vocabulary.{
 import decisions/wire.{type Codec}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/json.{type Json}
-import gleam/option.{type Option}
+import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 
@@ -57,8 +60,15 @@ pub type Event(output) {
   /// trigger was received and the model is at work. Appended by
   /// `decisions.expect`, in the transaction that received the trigger, so
   /// that `happened` can supersede the work in flight before it is
-  /// recommended.
-  Expected(point: String, trigger: Trigger, subject: Subject)
+  /// recommended. `valid_until` is the occurrence's own deadline, when the
+  /// application gave one (`decisions.expect_until`); a later expectation
+  /// may only bring it earlier.
+  Expected(
+    point: String,
+    trigger: Trigger,
+    subject: Subject,
+    valid_until: Option(Timestamp),
+  )
   /// The recommendation the occurrence began with.
   Recommended(
     /// The decision point this is an occurrence of.
@@ -201,13 +211,21 @@ fn event_to_json(event: Event(o), output: Codec(o)) -> Result(Json, String) {
           #("evidence", json.array(evidence, wire.ref)),
         ]),
       )
-    Expected(point:, trigger:, subject:) ->
+    Expected(point:, trigger:, subject:, valid_until:) ->
       Ok(
-        json.object([
-          #("point", json.string(point)),
-          #("trigger", wire.trigger(trigger)),
-          #("subject", wire.subject(subject)),
-        ]),
+        json.object(list.append(
+          [
+            #("point", json.string(point)),
+            #("trigger", wire.trigger(trigger)),
+            #("subject", wire.subject(subject)),
+          ],
+          // Left out when there is none, so such an entry is stored as
+          // before deadlines per occurrence existed.
+          case valid_until {
+            Some(at) -> [#("valid_until", wire.time(at))]
+            None -> []
+          },
+        )),
       )
     Recommended(
       point:,
@@ -333,7 +351,12 @@ fn event_decoder(kind: String, output: Codec(o)) -> Decoder(Event(o)) {
       use point <- decode.field("point", decode.string)
       use trigger <- decode.field("trigger", wire.trigger_decoder())
       use subject <- decode.field("subject", wire.subject_decoder())
-      decode.success(Expected(point:, trigger:, subject:))
+      use valid_until <- decode.optional_field(
+        "valid_until",
+        None,
+        decode.optional(wire.time_decoder()),
+      )
+      decode.success(Expected(point:, trigger:, subject:, valid_until:))
     }
     "recommended" -> {
       use point <- decode.field("point", decode.string)
