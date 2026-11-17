@@ -137,7 +137,8 @@ pub type Pending {
     subject: Subject,
     /// When the record was first written.
     since: Timestamp,
-    /// `decisions.expect` recorded that a recommendation is expected.
+    /// `decisions.expect` or `decisions.expect_until` recorded that a
+    /// recommendation is expected.
     expected: Bool,
     attempts: List(Attempt),
     /// The record's own deadline: the earliest its expectations carry
@@ -274,29 +275,36 @@ fn pending(
     | entry.Expected(point:, subject:, ..) -> Ok(#(point, subject))
     _ -> Error(Nil)
   }
-  use #(point, subject) <- result.map(names)
-  Pending(
-    id:,
-    point:,
-    subject:,
-    since: first.at,
-    expected: list.any(prefix, fn(entry) {
-      case entry.event {
-        entry.Expected(..) -> True
-        _ -> False
-      }
-    }),
-    attempts:,
-    valid_until: earliest(
-      list.filter_map(prefix, fn(entry) {
+  use #(point, subject) <- result.try(names)
+  let found =
+    Pending(
+      id:,
+      point:,
+      subject:,
+      since: first.at,
+      expected: list.any(prefix, fn(entry) {
         case entry.event {
-          entry.Expected(valid_until: Some(at), ..) -> Ok(at)
-          _ -> Error(Nil)
+          entry.Expected(..) -> True
+          _ -> False
         }
       }),
-    ),
-    ended: list.find_map(prefix, expiry) |> option.from_result,
-  )
+      attempts:,
+      valid_until: earliest(
+        list.filter_map(prefix, fn(entry) {
+          case entry.event {
+            entry.Expected(valid_until: Some(at), ..) -> Ok(at)
+            _ -> Error(Nil)
+          }
+        }),
+      ),
+      ended: list.find_map(prefix, expiry) |> option.from_result,
+    )
+  // A record ends by its deadline only when it has one; one that says
+  // otherwise was not written by the desk.
+  case found.ended, found.valid_until {
+    Some(vocabulary.DeadlinePassed), None -> Error(Nil)
+    _, _ -> Ok(found)
+  }
 }
 
 /// The earliest of some times, `None` when there are none.
@@ -350,7 +358,8 @@ pub fn pending_head(pending: Pending) -> store.Head {
   )
 }
 
-/// Whether the recommendation was expected first (`decisions.expect`).
+/// Whether the recommendation was expected first (`decisions.expect` or
+/// `decisions.expect_until`).
 pub fn was_expected(occurrence: Occurrence(o)) -> Bool {
   list.any(occurrence.entries, fn(entry) {
     case entry.event {

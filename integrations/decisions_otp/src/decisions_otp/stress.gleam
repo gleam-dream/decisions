@@ -38,6 +38,7 @@
 
 import decisions.{type Desk, type Refusal, Gated}
 import decisions/conformance.{type Adapter}
+import decisions/entry
 import decisions/fact.{type Key}
 import decisions/model
 import decisions/occurrence
@@ -2376,7 +2377,8 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   )
   use Nil <- result.try(expect(
     first.status == occurrence.Expired(vocabulary.DeadlinePassed)
-      && first.policy_version == None,
+      && first.policy_version == None
+      && kinds(first) == ["expected", "expired", "recommended"],
     "the recommendation before the wake-up is " <> string.inspect(first.status),
   ))
   let config =
@@ -2404,7 +2406,7 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   use Nil <- result.try(expect(
     expired,
     "after the deadline: "
-      <> string.inspect(list.map([failing, waiting, late], status)),
+      <> string.inspect(list.map([failing, waiting, late, late_first], status)),
   ))
   use known <- result.try(read(again, replies, waiting))
   use Nil <- result.try(expect(
@@ -2445,7 +2447,8 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   )
   use Nil <- result.try(expect(
     recorded.status == occurrence.Expired(vocabulary.DeadlinePassed)
-      && recorded.policy_version == None,
+      && recorded.policy_version == None
+      && kinds(recorded) == ["expected", "expired", "recommended"],
     "the late recommendation is " <> string.inspect(recorded.status),
   ))
   use rows <- result.try(effects(again, replies))
@@ -2468,6 +2471,10 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let result = invariants(again, [replies])
   again.adapter.cleanup()
   result
+}
+
+fn kinds(known: occurrence.Occurrence(o)) -> List(String) {
+  list.map(known.entries, fn(e) { entry.kind(e.event) })
 }
 
 /// The same asking desk over the restarted target.

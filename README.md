@@ -873,26 +873,27 @@ expectation's deadline and the proposal's; a deadline never moves later. One
 wake-up expires the occurrence at it, with cause `DeadlinePassed`, decided by
 the store clock whether or not the wake-up was delivered on time.
 
-| At or after the deadline                    | Result                                                                                                                        |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| A verdict, a showing, a note                | Refused with `NotAwaiting`, as for a point's validity                                                                         |
-| The wake-up, nothing recommended yet        | The record expires with `DeadlinePassed`; one settlement notice; `wake` answers `LapsedBefore(pending)`                       |
-| `record_failure`, `expect`, `expect_until`  | Refused with `DeadlinePassedBefore(deadline)`; nothing written                                                                |
-| `expect_until` with a deadline already past | `Ok(Nil)` the first time, the record written expired; `DeadlinePassedBefore` on a redelivery: treat it as done, not a failure |
-| `recommend_once`                            | Recorded and expired at once; no policy runs, nothing is shown                                                                |
-| A key expected with `expect` alone          | No deadline until it is recommended                                                                                           |
+| At or after the deadline                                                                                                                 | Result                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Once recommended: a verdict, a showing, a note                                                                                           | Refused with `NotAwaiting`, as for a point's validity                                                                         |
+| The wake-up, nothing recommended yet                                                                                                     | The record expires with `DeadlinePassed`; one settlement notice; `wake` answers `LapsedBefore(pending)`                       |
+| `record_failure(_with)`, `expect`, `expect_until`, `read`, `open` and the other verbs that need an occurrence, before any recommendation | Refused with `DeadlinePassedBefore(deadline)`; nothing written                                                                |
+| `expect_until` with a deadline already past                                                                                              | `Ok(Nil)` the first time, the record written expired; `DeadlinePassedBefore` on a redelivery: treat it as done, not a failure |
+| `recommend_once`                                                                                                                         | Recorded and expired at once; no policy runs, nothing is shown                                                                |
+| A key expected with `expect` alone                                                                                                       | No deadline until it is recommended                                                                                           |
 
 A deadline ends the wait for a decision, not a hold: an output accepted
 before the deadline and held is still released when its hold ends, as with a
 point's validity. If nothing may happen after the deadline, check it in the
 gated tool's guard or the release check.
 
-What a settlement follower is handed for a late recommendation depends on
-which came first. When the expiry wake-up came first, the follower is handed
-the record not begun (`decisions.read` answers `DeadlinePassedBefore`), and
-the recommendation that follows admits no second notice. When the
-recommendation came first, the follower is handed the expired occurrence.
-Read late outputs from the records, not from the notices.
+A record admits one settlement notice, from whichever write ended it. What
+a follower reads for it depends on when the notice is delivered: before a
+late recommendation commits, `decisions.read` answers
+`DeadlinePassedBefore`; after, it returns the expired occurrence. A later
+recommendation admits no second notice. PostgreSQL hands such a notice to
+the point's follower; the OTP runtime drops a notice whose record has not
+begun as done. Read late outputs from the records, not from the notices.
 
 The record not begun is due at its deadline: `decisions_postgres/queue.pending`
 reports it in `due`.
@@ -918,8 +919,6 @@ import decisions/vocabulary.{
   Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
 }
 import decisions/wire
-import gleam/option.{Some}
-import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 

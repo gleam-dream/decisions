@@ -2,8 +2,12 @@
 //// only until 24 hours after the customer's message, so each draft's
 //// deadline is an instant the application knows when the message arrives.
 //// The message's transaction expects the draft with that deadline; the
-//// draft recommended 90 seconds later keeps it, and at the end of the
-//// window the draft expires, reviewed or not.
+//// draft recommended 90 seconds later keeps it, and if nobody has decided
+//// it when the window closes, it expires.
+
+// Used by `run` below, outside the README region.
+import gleam/option.{Some}
+import gleam/result
 
 // snips-start: deadline-per-occurrence
 import decisions
@@ -14,8 +18,6 @@ import decisions/vocabulary.{
   Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
 }
 import decisions/wire
-import gleam/option.{Some}
-import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 

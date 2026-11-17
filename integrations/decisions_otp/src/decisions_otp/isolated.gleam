@@ -228,6 +228,10 @@ pub type Unmet {
 /// reported as `[decisions, model, failed]`. The caller isolates the model
 /// with `model` first; `recommend` runs whatever it is given.
 ///
+/// After the key's own deadline (`decisions.expect_until`), a failed
+/// model is `Lapsed(deadline)` and nothing is written, and a model that
+/// answered is `Recommended` with an occurrence that is already expired.
+///
 /// `transaction` runs its body in one transaction and commits on `Ok`,
 /// such as `store.transaction(s, _)`. Safe to repeat: a key already
 /// recommended is found, not recommended again.

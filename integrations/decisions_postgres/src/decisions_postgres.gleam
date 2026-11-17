@@ -1590,7 +1590,9 @@ pub type Follower =
 /// Reading it (`decisions.read`) is refused with `SupersededBefore` or
 /// `DeadlinePassedBefore`, whose handling is `Drop`: return that refusal
 /// and the notice ends delivered; `decisions.read_record` tells such a
-/// record apart as `NotBegun`.
+/// record apart as `NotBegun`. When a late recommendation was recorded
+/// before the notice is delivered, `read` returns the expired occurrence
+/// instead.
 pub fn settlement_worker(
   store: Store,
   followers: List(Follower),

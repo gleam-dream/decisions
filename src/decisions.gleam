@@ -43,7 +43,8 @@
 //// The verbs, grouped by who calls them:
 ////
 //// - Whoever admits a trigger: `happened` for what the trigger reports,
-////   then `expect`, in the transaction that receives it, before the
+////   then `expect` (or `expect_until`, with the occurrence's own
+////   deadline), in the transaction that receives it, before the
 ////   recommender runs. `happened` locks the point and subject first, so
 ////   two admissions about one subject run one after the other.
 //// - A recommender: `recommend`, `recommend_once`, `record_failure`.
@@ -58,8 +59,9 @@
 //// `released`, `rejected`, `expired` or `withdrawn`. `happened` ends every
 //// record of its subject that has not been released yet: a pending record
 //// is reported in `not_begun` and its later recommendation is refused with
-//// `SupersededBefore`; an undecided or held one expires and nothing is
-//// released. Only a key never expected can still
+//// `SupersededBefore` (unless its own deadline had already passed: it then
+//// expires as deadline passed, and a later recommendation is recorded
+//// expired); an undecided or held one expires and nothing is released. Only a key never expected can still
 //// be recommended after the event that should have superseded it.
 ////
 //// Every verb loads the occurrence first, which locks it, then reads the
@@ -496,8 +498,8 @@ pub type Refusal {
   /// The key was tried and nothing was recommended yet; these are the
   /// failed attempts.
   NotRecommended(attempts: List(Attempt))
-  /// The occurrence is not waiting for this: it settled, or its validity
-  /// ended, or it waits for a consulted point.
+  /// The occurrence is not waiting for this: it settled, or its deadline
+  /// passed, or it waits for a consulted point.
   NotAwaiting
   /// The occurrence no longer waits because `by`'s verdict settled it:
   /// accepted it (held or released after) or rejected it. Only a verdict
@@ -553,7 +555,8 @@ pub type Refusal {
   /// The key's own deadline (`expect_until`) passed by the store clock
   /// before anything was recommended under it: nothing can be decided any
   /// more. Nothing was written. `expect`, `expect_until`, `record_failure`,
-  /// `read` and every verb that needs an occurrence refuse such a key this
+  /// `record_failure_with`, `read` and every verb that needs an occurrence
+  /// refuse such a key this
   /// way; `recommend_once` does not, it records the late recommendation
   /// expired. A runtime drops the job as done.
   DeadlinePassedBefore(deadline: Timestamp)
@@ -780,8 +783,9 @@ pub fn recommend(
 /// **Deadlines.** The deadline written on the recommendation is the
 /// earliest of the point's validity counted from now, the deadline the
 /// key's expectations carry (`expect_until`) and the proposal's
-/// (`valid_until`). When it has already passed by the store clock, the
-/// recommendation is recorded and the occurrence expires at once with
+/// (`valid_until`). When the occurrence's own deadline (the key's or the
+/// proposal's) has already passed by the store clock, the recommendation
+/// is recorded and the occurrence expires at once with
 /// `DeadlinePassed`: no policy runs and nothing is shown or released, and
 /// the expired occurrence is returned, so the late output stays on the
 /// record. That holds whether or not the wake-up that expires the key was
@@ -949,7 +953,8 @@ fn ended_before(
 }
 
 fn deadline_passed_before(pending: occurrence.Pending) -> Refusal {
-  // A record ends by its deadline only when it has one.
+  // `fold` reads a record that ended by a deadline it never had as
+  // unreadable, so a pending record here always has one.
   DeadlinePassedBefore(deadline: option.unwrap(
     pending.valid_until,
     timestamp.unix_epoch,
@@ -1118,15 +1123,29 @@ fn begin(
   pending: Option(occurrence.Pending),
   now: Timestamp,
 ) -> Result(Occurrence(o), Refusal) {
-  let own = option.then(pending, fn(pending) { pending.valid_until })
+  // The deadline the occurrence was given itself, on its expectation or
+  // its proposal; the point's validity bounds it further.
+  let own =
+    occurrence.earliest(
+      option.values([
+        option.then(pending, fn(pending) { pending.valid_until }),
+        proposal.valid_until,
+      ]),
+    )
   let deadline =
     occurrence.earliest(
       option.values([
         option.map(desk.point.validity, timestamp.add(now, _)),
         own,
-        proposal.valid_until,
       ]),
     )
+  // Only the occurrence's own deadline can have passed before it is
+  // recommended; a point's validity, counted from now, is applied by the
+  // policy and the wake-ups as it always was.
+  let own_passed = case own {
+    Some(at) -> timestamp.compare(now, at) != order.Lt
+    None -> False
+  }
   let lapsed_first = case pending {
     Some(pending) -> occurrence.pending_has_lapsed(pending, now)
     None -> False
@@ -1174,10 +1193,10 @@ fn begin(
           // A record that ended by its deadline already admitted its notice.
           settled: option.then(pending, fn(pending) { pending.ended }) != None,
         )
-      case recommended.status, occurrence.has_lapsed(recommended, now) {
+      case recommended.status, own_passed {
         // Expired before it began: kept on the record, nothing more runs.
         occurrence.Expired(_), _ -> save(desk, tx, draft)
-        // Its deadline has passed already: expired at once, no policy.
+        // Its own deadline has passed already: expired at once, no policy.
         _, True ->
           add(draft, entry.Expired(vocabulary.DeadlinePassed))
           |> save(desk, tx, _)
@@ -1683,9 +1702,11 @@ pub type Supersession(output) {
     /// The occurrences it expired: undecided or held ones, which had a
     /// recommendation.
     expired: List(Occurrence(output)),
-    /// The keys of records it superseded before they began: expected, or
+    /// The keys of records it ended before they began: expected, or
     /// holding only failed attempts. Their `recommend_once` will be
-    /// refused with `SupersededBefore`.
+    /// refused with `SupersededBefore`, except for a record whose own
+    /// deadline had already passed: it expired as `DeadlinePassed`, and a
+    /// later recommendation is recorded expired.
     not_begun: List(String),
     /// The occurrences about the subject that could not be read, with why.
     /// The others were still superseded.
@@ -1699,7 +1720,9 @@ pub type Supersession(output) {
 ///
 /// - a record that has not begun (`expect`ed, or holding only failed
 ///   attempts): its `recommend_once` is then refused, so the work in
-///   flight for an older trigger never shows or releases anything;
+///   flight for an older trigger never shows or releases anything; one
+///   whose own deadline (`expect_until`) had already passed expires as
+///   `DeadlinePassed` instead, and its wake-up is cancelled;
 /// - an undecided occurrence; one whose validity had already passed
 ///   expires as `DeadlinePassed`, which is what ended it;
 /// - a held occurrence: its hold's wake-up is cancelled and its output is
@@ -1820,13 +1843,7 @@ fn supersede(
   event: String,
 ) -> Result(Superseding(o), Refusal) {
   use #(entries, now) <- result.try(
-    fetch(desk, tx, id)
-    |> result.map_error(fn(refusal) {
-      case refusal {
-        KeyTaken(_) -> UnknownOccurrence
-        _ -> refusal
-      }
-    }),
+    fetch(desk, tx, id) |> result.map_error(by_id),
   )
   let folded = occurrence.fold(id, entries)
   case folded {
@@ -2136,8 +2153,8 @@ pub fn assess(
 }
 
 /// What a key's record holds: an occurrence, or a record that has not
-/// begun (expected, holding failed attempts, or superseded before it
-/// began).
+/// begun (expected, holding failed attempts, or superseded or lapsed at
+/// its own deadline before it began).
 pub type Record(output) {
   Begun(occurrence: Occurrence(output))
   NotBegun(pending: occurrence.Pending)
@@ -2151,13 +2168,7 @@ pub fn read_record(
   key key: String,
 ) -> Result(Record(o), Refusal) {
   use #(entries, _) <- result.try(
-    fetch(desk, tx, key)
-    |> result.map_error(fn(refusal) {
-      case refusal {
-        KeyTaken(_) -> UnknownOccurrence
-        _ -> refusal
-      }
-    }),
+    fetch(desk, tx, key) |> result.map_error(by_id),
   )
   case occurrence.fold(key, entries) {
     Ok(found) -> mine(desk, found) |> result.map(Begun)

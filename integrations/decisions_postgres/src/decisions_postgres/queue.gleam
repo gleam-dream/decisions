@@ -281,10 +281,11 @@ pub fn occurrences_of(
 }
 
 /// The records of `point` that have stayed pending: a trigger was
-/// expected (`decisions.expect`) or only failed attempts are recorded, and
-/// no recommendation has arrived. The oldest first, so "which triggers are
-/// still expected, and since when" is this one query: each `Summary`'s
-/// `arrived` is when the record began. `after` is the last record of the
+/// expected (`decisions.expect` or `decisions.expect_until`) or only failed
+/// attempts are recorded, and no recommendation has arrived. The oldest
+/// first, so "which triggers are still expected, and since when" is this
+/// one query: each `Summary`'s `arrived` is when the record began, and its
+/// `due` the record's own deadline, when it has one. `after` is the last record of the
 /// previous page, or `None` for the first. A pending record is never in a
 /// validator's queue (`page`, `page_at`): it waits for no verdict.
 /// `counts` reports them under `store.Pending`.

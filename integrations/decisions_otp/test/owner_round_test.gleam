@@ -218,6 +218,7 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
       ))
   })
   store.advance(s, duration.minutes(2))
+  let before = decisions.read_record(desk, store.handle(s), key: "od-1")
   let failing = model.new(fn(_, _) { Error(model.Raised("down")) })
   let assert Ok(isolated.Lapsed(deadline: at)) =
     isolated.recommend(
@@ -227,6 +228,8 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
       model: failing,
     )
   assert at == deadline
+  // Nothing was written for the late failure.
+  assert decisions.read_record(desk, store.handle(s), key: "od-1") == before
   let assert Ok(isolated.Recommended(late)) =
     isolated.recommend(
       desk,

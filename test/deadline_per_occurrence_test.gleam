@@ -3,6 +3,7 @@
 //// wake-up and decided by the store clock as a point's validity.
 
 import decisions.{Gated}
+import decisions/entry
 import decisions/learning
 import decisions/memory
 import decisions/model
@@ -17,7 +18,6 @@ import decisions/vocabulary.{
 import decisions/wire
 import gleam/list
 import gleam/option.{None, Some}
-import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import support/world.{type World}
@@ -231,6 +231,7 @@ pub fn a_recommendation_after_the_expiry_is_recorded_expired_test() {
   at_seconds(w, day + 5)
   let assert Ok(late) = recommend(w, proposal())
   assert late.status == occurrence.Expired(DeadlinePassed)
+  assert kinds(late) == ["expected", "expired", "recommended"]
   assert late.policy_version == None
   assert notices(w) == 1
   assert wake_times(w) == []
@@ -246,6 +247,7 @@ pub fn a_recommendation_after_the_deadline_before_the_wake_up_is_the_same_test()
   at_seconds(w, day + 5)
   let assert Ok(late) = recommend(w, proposal())
   assert late.status == occurrence.Expired(DeadlinePassed)
+  assert kinds(late) == ["expected", "expired", "recommended"]
   assert late.policy_version == None
   assert notices(w) == 1
   assert wake_times(w) == []
@@ -363,7 +365,9 @@ pub fn an_expectation_without_a_deadline_is_stored_as_before_test() {
       about: ana,
     ))
   let assert [stored] = memory.entries(w.db, key)
-  assert !string.contains(stored.event, "valid_until")
+  // The same text an expectation was stored as before deadlines existed.
+  assert stored.event
+    == "{\"point\":\"deadline.reply\",\"trigger\":{\"kind\":\"message\",\"id\":\"m1\"},\"subject\":{\"kind\":\"party\",\"id\":\"ana\"}}"
   assert head(w).due == None
   assert wake_times(w) == []
   at_seconds(w, 10 * day)
@@ -473,4 +477,152 @@ pub fn the_lapsed_record_is_counted_in_coverage_test() {
       lapsed_before: 1,
       still_expected: 0,
     )
+}
+
+fn kinds(known: occurrence.Occurrence(o)) -> List(String) {
+  list.map(known.entries, fn(e) { entry.kind(e.event) })
+}
+
+fn proceeding_desk(point) {
+  decisions.desk(
+    point,
+    drives: fn(_) {
+      Gated(name: "send", guard: fn(_, _) { Ok([]) }, execute: fn(tx, _) {
+        world.bump(tx, "sent")
+        Ok(Nil)
+      })
+    },
+    under: fn(_) {
+      Ok(Policy(
+        1,
+        [],
+        policy.Proceed(policy.Never, hold: Some(duration.hours(1))),
+      ))
+    },
+    over: memory.port(),
+  )
+}
+
+pub fn a_point_validity_of_zero_still_runs_the_policy_as_before_test() {
+  let w = world.new()
+  let zero =
+    decisions.desk(
+      point() |> decisions.valid_for(duration.seconds(0)),
+      drives: fn(_) {
+        Gated(name: "send", guard: fn(_, _) { Ok([]) }, execute: fn(_, _) {
+          Ok(Nil)
+        })
+      },
+      under: fn(_) {
+        Ok(Policy(1, [], policy.Proceed(policy.Never, hold: None)))
+      },
+      over: memory.port(),
+    )
+  let assert Ok(known) =
+    world.in_tx(w, decisions.recommend_once(zero, _, key:, proposal: proposal()))
+  let assert occurrence.Released(..) = known.status
+}
+
+pub fn a_record_ended_by_a_deadline_it_never_had_is_unreadable_test() {
+  let at = world.t0()
+  let entries = [
+    entry.Entry(
+      seq: 1,
+      at:,
+      event: entry.Expected(
+        point: "deadline.reply",
+        trigger: Trigger("message", "m1"),
+        subject: ana,
+        valid_until: None,
+      ),
+    ),
+    entry.Entry(seq: 2, at:, event: entry.Expired(DeadlinePassed)),
+  ]
+  assert occurrence.fold(key, entries) == Error(occurrence.NoRecommendation)
+}
+
+pub fn an_equal_or_absent_deadline_writes_nothing_test() {
+  let w = world.new()
+  let assert Ok(Nil) = expect_until(w, closes())
+  let assert Ok(Nil) = expect_until(w, closes())
+  let assert Ok(Nil) =
+    world.in_tx(w, decisions.expect(
+      desk(),
+      _,
+      key:,
+      trigger: Trigger("message", "m1"),
+      about: ana,
+    ))
+  assert list.length(memory.entries(w.db, key)) == 1
+}
+
+pub fn recommend_with_a_passed_proposal_deadline_is_expired_test() {
+  let w = world.new()
+  at_seconds(w, 10)
+  let assert Ok(late) =
+    world.in_tx(w, decisions.recommend(
+      desk(),
+      _,
+      decisions.valid_until(proposal(), at: world.t0()),
+    ))
+  assert late.status == occurrence.Expired(DeadlinePassed)
+  assert occurrence.account(late) == occurrence.Lapsed(DeadlinePassed)
+  assert kinds(late) == ["recommended", "expired"]
+}
+
+pub fn a_proposal_deadline_is_kept_in_whole_milliseconds_test() {
+  let w = world.new()
+  let precise = timestamp.add(closes(), duration.nanoseconds(999_999))
+  let assert Ok(known) =
+    recommend(w, decisions.valid_until(proposal(), at: precise))
+  assert known.valid_until == Some(closes())
+}
+
+pub fn an_expectation_already_past_refuses_its_redelivery_test() {
+  let w = world.new()
+  at_seconds(w, day + 10)
+  let assert Ok(Nil) = expect_until(w, closes())
+  let before = memory.entries(w.db, key)
+  assert expect_until(w, closes())
+    == Error(decisions.DeadlinePassedBefore(closes()))
+  assert memory.entries(w.db, key) == before
+}
+
+pub fn a_card_cannot_open_on_a_record_lapsed_before_it_began_test() {
+  let w = world.new()
+  let assert Ok(Nil) = expect_until(w, closes())
+  at_seconds(w, day)
+  assert world.in_tx(
+      w,
+      decisions.open(desk(), _, occurrence: key, by: agent, latest: fn(ref) {
+        ref.revision
+      }),
+    )
+    == Error(decisions.DeadlinePassedBefore(closes()))
+}
+
+pub fn a_hold_accepted_before_the_deadline_is_released_after_it_test() {
+  let w = world.new()
+  let held = proceeding_desk(point())
+  let assert Ok(Nil) =
+    world.in_tx(w, decisions.expect_until(
+      held,
+      _,
+      key:,
+      trigger: Trigger("message", "m1"),
+      about: ana,
+      valid_until: closes(),
+    ))
+  at_seconds(w, day - 600)
+  let assert Ok(known) =
+    world.in_tx(w, decisions.recommend_once(held, _, key:, proposal: proposal()))
+  let assert occurrence.Held(..) = known.status
+  // The hold ends 50 minutes after the deadline; the deadline does not
+  // stop it.
+  at_seconds(w, day + 3000)
+  assert world.deliver_due(w, [decisions.waker(held)]) == 1
+  let assert Ok(released) =
+    world.in_tx(w, decisions.read(held, _, occurrence: key))
+  let assert occurrence.Released(..) = released.status
+  assert world.count(w.db, "sent") == 1
 }
