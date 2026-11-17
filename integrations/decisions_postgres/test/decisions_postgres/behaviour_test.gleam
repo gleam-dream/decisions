@@ -17,6 +17,7 @@ import decisions_postgres/queue
 import decisions_postgres/telemetry
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/order
@@ -233,6 +234,73 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
     kit.tx(env, fail)
   assert at == deadline
   assert kit.effects_of(env.db, late) == 0
+  kit.check(env, [desk])
+}
+
+/// The wake-up and a late recommendation for one lapsed key, in two
+/// concurrent transactions: whichever takes the key's lock first, the
+/// occurrence ends expired with one settlement notice, and every invariant
+/// holds.
+pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
+  let #(name, pg) = kit.store()
+  let spec = kit.spec("own-deadline-race")
+  let desk = kit.desk(pg, spec)
+  let wakers = [decisions.waker(desk)]
+  use env <- kit.run(name, pg, kit.options(), wakers, [])
+  let port = decisions_postgres.port(pg)
+  let deadline =
+    timestamp.add(port.now(env.db), duration.milliseconds(300))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  let keys =
+    list.map([1, 2, 3, 4, 5, 6], fn(n) {
+      kit.tag("race") <> "-" <> int.to_string(n)
+    })
+  list.each(keys, fn(key) {
+    let assert Ok(Nil) =
+      kit.tx(env, decisions.expect_until(
+        desk,
+        _,
+        key:,
+        trigger: vocabulary.Trigger("test", key),
+        about: kit.ana,
+        valid_until: deadline,
+      ))
+  })
+  kit.wait_for_store_clock(env, deadline)
+  let done = process.new_subject()
+  process.spawn(fn() {
+    process.send(
+      done,
+      decisions_postgres.deliver_due(pg, env.db, wakers, limit: 10)
+        |> result.replace(Nil)
+        |> result.map_error(string.inspect),
+    )
+  })
+  list.each(keys, fn(key) {
+    process.spawn(fn() {
+      process.send(
+        done,
+        kit.tx(env, decisions.recommend_once(
+          desk,
+          _,
+          key:,
+          proposal: kit.proposal(spec.name, kit.ana),
+        ))
+          |> result.replace(Nil)
+          |> result.map_error(string.inspect),
+      )
+    })
+  })
+  list.each([Nil, ..list.map(keys, fn(_) { Nil })], fn(_) {
+    let assert Ok(Ok(Nil)) = process.receive(done, 10_000)
+  })
+  let assert Ok(notices) = decisions_postgres.inspection().notices(env.db)
+  list.each(keys, fn(key) {
+    let assert Ok(known) = kit.tx(env, decisions.read(desk, _, occurrence: key))
+    assert known.status == occurrence.Expired(vocabulary.DeadlinePassed)
+    assert list.count(notices, fn(notice) { notice.occurrence == key }) == 1
+  })
   kit.check(env, [desk])
 }
 

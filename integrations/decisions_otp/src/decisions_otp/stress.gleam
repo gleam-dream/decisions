@@ -2299,19 +2299,21 @@ fn b4(target: Target(tx), load: Load) -> Result(Nil, String) {
   invariants(target, [replies, refunds])
 }
 
-/// Three keys expected with one deadline of their own (`expect_until`): one
+/// Four keys expected with one deadline of their own (`expect_until`): one
 /// whose model keeps failing, one recommended and waiting for a verdict,
-/// one whose model answers only after the deadline. The store restarts
-/// before the deadline, time passes it, and the runtime started over the
-/// restarted store expires the first two by their wake-ups. The late
-/// recommendation is recorded expired, a late failure is refused, and a
-/// verdict is refused.
+/// one whose model answers after the deadline but before any wake-up is
+/// delivered, and one whose model answers only after its wake-up expired
+/// it. The store restarts before the deadline, time passes it, and the
+/// runtime started over the restarted store expires what is still pending.
+/// Both late recommendations are recorded expired, each record has one
+/// settlement notice, a late failure is refused, and a verdict is refused.
 fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let replies =
     desk(target, point(unique(target, "own-deadline"), None), asking("finance"))
   let failing = unique(target, "failing")
   let waiting = unique(target, "waiting")
   let late = unique(target, "late")
+  let late_first = unique(target, "late-first")
   let deadline =
     timestamp.add(target.backlog.now(), duration.minutes(1))
     |> wire.milliseconds
@@ -2341,6 +2343,7 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
       use Nil <- result.try(expect_until(replies, tx, failing))
       use Nil <- result.try(expect_until(replies, tx, waiting))
       use Nil <- result.try(expect_until(replies, tx, late))
+      use Nil <- result.try(expect_until(replies, tx, late_first))
       use _ <- result.try(fail(replies, tx, failing))
       recommend(
         replies,
@@ -2358,6 +2361,24 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   use again <- result.try(target.restart())
   let replies = rebuilt_asking(again, replies)
   again.advance(duration.minutes(2))
+  // Past the deadline, before any runtime delivers a wake-up.
+  use first <- result.try(
+    within(again, recommend(
+      replies,
+      _,
+      late_first,
+      about: ana,
+      output: "tarde",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  use Nil <- result.try(expect(
+    first.status == occurrence.Expired(vocabulary.DeadlinePassed)
+      && first.policy_version == None,
+    "the recommendation before the wake-up is " <> string.inspect(first.status),
+  ))
   let config =
     runtime.config(
       again.backlog,
@@ -2373,7 +2394,7 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let expired =
     wait_until(
       fn() {
-        list.all([failing, waiting, late], fn(id) {
+        list.all([failing, waiting, late, late_first], fn(id) {
           status(id) == Ok(Some(store.Expired))
         })
       },
@@ -2429,6 +2450,21 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   ))
   use rows <- result.try(effects(again, replies))
   use Nil <- result.try(expect(rows == [], "something was released"))
+  use notices <- result.try(
+    again.adapter.inspect.notices(again.adapter.handle) |> store_text,
+  )
+  let noticed = fn(id) {
+    list.count(notices, fn(notice: store.Notice) { notice.occurrence == id })
+  }
+  use Nil <- result.try(expect(
+    list.all([failing, waiting, late, late_first], fn(id) { noticed(id) == 1 }),
+    "settlement notices: "
+      <> string.inspect(
+      list.map([failing, waiting, late, late_first], fn(id) {
+        #(id, noticed(id))
+      }),
+    ),
+  ))
   let result = invariants(again, [replies])
   again.adapter.cleanup()
   result

@@ -873,16 +873,38 @@ expectation's deadline and the proposal's; a deadline never moves later. One
 wake-up expires the occurrence at it, with cause `DeadlinePassed`, decided by
 the store clock whether or not the wake-up was delivered on time.
 
-| At or after the deadline                   | Result                                                          |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| A verdict, a showing, a note               | Refused with `NotAwaiting`, as for a point's validity           |
-| The wake-up, nothing recommended yet       | The record expires with `DeadlinePassed`; one settlement notice |
-| `record_failure`, `expect`, `expect_until` | Refused with `DeadlinePassedBefore(deadline)`; nothing written  |
-| `recommend_once`                           | Recorded and expired at once; no policy runs, nothing is shown  |
-| A key expected with `expect` alone         | No deadline until it is recommended, as before                  |
+| At or after the deadline                    | Result                                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| A verdict, a showing, a note                | Refused with `NotAwaiting`, as for a point's validity                                                                         |
+| The wake-up, nothing recommended yet        | The record expires with `DeadlinePassed`; one settlement notice; `wake` answers `LapsedBefore(pending)`                       |
+| `record_failure`, `expect`, `expect_until`  | Refused with `DeadlinePassedBefore(deadline)`; nothing written                                                                |
+| `expect_until` with a deadline already past | `Ok(Nil)` the first time, the record written expired; `DeadlinePassedBefore` on a redelivery: treat it as done, not a failure |
+| `recommend_once`                            | Recorded and expired at once; no policy runs, nothing is shown                                                                |
+| A key expected with `expect` alone          | No deadline until it is recommended                                                                                           |
+
+A deadline ends the wait for a decision, not a hold: an output accepted
+before the deadline and held is still released when its hold ends, as with a
+point's validity. If nothing may happen after the deadline, check it in the
+gated tool's guard or the release check.
+
+What a settlement follower is handed for a late recommendation depends on
+which came first. When the expiry wake-up came first, the follower is handed
+the record not begun (`decisions.read` answers `DeadlinePassedBefore`), and
+the recommendation that follows admits no second notice. When the
+recommendation came first, the follower is handed the expired occurrence.
+Read late outputs from the records, not from the notices.
 
 The record not begun is due at its deadline: `decisions_postgres/queue.pending`
 reports it in `due`.
+
+**Upgrading.** `entry.Expected` and `occurrence.Pending` gain `valid_until`,
+`Pending.superseded` is now `ended`, and `learning.Coverage` gains
+`lapsed_before`: patterns that name every field, and constructors, add them.
+`decisions.Woken` gains `LapsedBefore` and `isolated.Attempted` gains
+`Lapsed`: exhaustive matches add a branch. `wake` on a record not begun now
+answers `NothingDue` or `NotDue` where it was refused with `NotRecommended`
+or `SupersededBefore`; `waker` already treats these as done or "deliver
+again". See [ADR 0054](docs/adr/0054-an-occurrence-may-carry-its-own-deadline.md#adr-0054).
 
 <!-- prettier-ignore-start -->
 

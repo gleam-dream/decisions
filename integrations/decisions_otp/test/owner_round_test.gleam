@@ -3,6 +3,8 @@
 //// not loop on a redelivered trigger.
 
 import decisions
+import decisions/entry
+import decisions/learning
 import decisions/model
 import decisions/occurrence
 import decisions/store as port_types
@@ -12,6 +14,7 @@ import decisions/vocabulary.{
 import decisions/wire
 import decisions_otp/backlog
 import decisions_otp/isolated
+import decisions_otp/replay
 import decisions_otp/runtime
 import decisions_otp/store
 import decisions_otp/telemetry
@@ -233,6 +236,55 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
     )
   assert late.status == occurrence.Expired(vocabulary.DeadlinePassed)
   assert store.queue(store.handle(s), "finance") == []
+}
+
+/// A record shaped expected, expired, recommended (the wake-up came before
+/// the late model) exports as an example and replays in parallel: it
+/// starts expired, so nothing was let through and it is not judged.
+pub fn a_late_recommendation_replays_as_unjudged_test() {
+  let s = lab.start()
+  let desk =
+    lab.desk(lab.point("owner.late-replay", None), lab.asking("finance"))
+  let deadline =
+    timestamp.add(store.now(s), duration.minutes(1))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  let assert Ok(Nil) =
+    store.transaction(s, decisions.expect_until(
+      desk,
+      _,
+      key: "lr-1",
+      trigger: Trigger("lab", "lr-1"),
+      about: Subject("person", "lr-1"),
+      valid_until: deadline,
+    ))
+  store.advance(s, duration.minutes(2))
+  let assert Ok(decisions.LapsedBefore(_)) =
+    store.transaction(s, decisions.wake(desk, _, occurrence: "lr-1"))
+  let assert Ok(isolated.Recommended(late)) =
+    isolated.recommend(
+      desk,
+      in: store.transaction(s, _),
+      request: request("lr-1"),
+      model: sound(),
+    )
+  let assert ["expected", "expired", "recommended"] =
+    list.map(late.entries, fn(e) { entry.kind(e.event) })
+  let archive =
+    learning.Archive(
+      render: fn(_) { Ok("prompt") },
+      reads: fn(_) { [] },
+      content: fn(_) { Ok("") },
+    )
+  let assert Ok(example) =
+    learning.example(late, as_of: store.now(s), from: archive)
+  assert replay.replay(
+      [example, example],
+      sound(),
+      same: fn(a, b) { a == b },
+      across: 2,
+    )
+    == learning.Replay(tally: learning.nothing, unanswered: [])
 }
 
 /// A worker whose `recommend_once` meets `SupersededBefore` drops the
