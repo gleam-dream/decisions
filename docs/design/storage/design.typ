@@ -41,7 +41,7 @@
     #attribute(name: "Point and subject", type: "Name and subject", provenance: "derived")[What superseding filters on.]
     #attribute(name: "Status", type: "Pending or one of the nine statuses", provenance: "derived")[Stored by `store.status_name`; `pending` while the record has not begun: it holds an expectation or only failed attempts.]
     #attribute(name: "Awaiting", type: "Decision sets", provenance: "derived")[The queues the occurrence waits in; empty unless it awaits.]
-    #attribute(name: "Due", type: "Optional time", provenance: "derived")[The deadline while it waits, the hold's end while it is held.]
+    #attribute(name: "Due", type: "Optional time", provenance: "derived")[The effective deadline while it waits, the hold's end while it is held, the occurrence's own deadline while it has not begun (#adr(54)). The conformance suite checks that a pending head keeps it and that a record not begun can hold a wake-up.]
     #attribute(name: "Arrived", type: "Time", provenance: "derived")[The recommendation's time, or the first attempt's when there is none.]
     #attribute(name: "Approved", type: "Validators", provenance: "derived")[Who approved the standing output, so a queue leaves the card out for them.]
     #attribute(name: "May not decide", type: "Validators", provenance: "derived")[Who may not decide the occurrence whatever sets they hold: under `SomeoneElseHolding`, the requester and a person who recommended as their own act; under `Several`, whoever already approved the standing output; under `Either`, only who every alternative excludes. Empty unless it awaits. A queue leaves the card out for them (#adr(23)).]
