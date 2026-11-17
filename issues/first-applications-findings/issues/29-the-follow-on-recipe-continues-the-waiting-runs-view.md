@@ -1,6 +1,6 @@
 # Does a follow-on run start from the world as it is, or from the handed-over run's history?
 
-Status: needs-triage
+Status: done
 Category: bug
 
 AI-assisted contribution.
@@ -37,3 +37,7 @@ Whether the follow-on is a run at all; the handover itself.
 ## Blocked by
 
 None.
+
+## Comments
+
+AI-assisted contribution. Resolved by ADR 0053: the follow-on run starts fresh from the world as it is, and the recipe in the root design says so. `payout_desk` in Oversight still continues the history and needs its own change.

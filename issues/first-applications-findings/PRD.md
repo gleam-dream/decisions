@@ -44,4 +44,4 @@ Twenty-eight issues: 10 done, 17 needs-triage, 1 wontfix.
 | [26. The payout desk starts a fresh Fabric run per retry and cancels a parked run itself](issues/26-payout-desk-starts-a-fresh-run-per-retry-and-cancels-parked-runs.md)                                   | done         |
 | [27. The in-memory runtime drops a notice for a record superseded before it began; PostgreSQL hands it to the follower](issues/27-the-two-runtimes-treat-a-notice-for-a-record-never-begun-differently.md) | needs-triage |
 | [28. Do two expectations about one subject need an order when no `happened` runs?](issues/28-admission-order-for-points-that-only-expect.md)                                                               | needs-triage |
-| [29. Does a follow-on run start from the world as it is, or from the handed-over run's history?](issues/29-the-follow-on-recipe-continues-the-waiting-runs-view.md)                                        | needs-triage |
+| [29. Does a follow-on run start from the world as it is, or from the handed-over run's history?](issues/29-the-follow-on-recipe-continues-the-waiting-runs-view.md)                                        | done         |
