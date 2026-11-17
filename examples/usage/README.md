@@ -11,20 +11,21 @@ the build here. Each topic has a `run` function, and
 [README](../../README.md) quotes the regions between `snips-start` and
 `snips-end` markers.
 
-| Module                  | Region                  | Shows                                                                                                                                            |
-| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `clinic`                | `refund-point`          | The cast every topic shares, the refund point's declaration with its one fact, and the gated tool whose executor accepts only a released refund. |
-| `first_point`           | `first-point`           | A recommendation admitted once per key, a policy that asks `finance`, and a verdict that releases the refund once in its own transaction.        |
-| `autonomy_ladder`       | `autonomy-ladder`       | Two policy versions published as data and checked with `publishable`; the same code path files every refund.                                     |
-| `ticket`                | `ticket`                | A card opened in one request and decided in another from its ticket; a ticket shown to someone else is refused.                                  |
-| `four_eyes`             | `four-eyes`             | Two different approvers, neither the person who asked; escalation to managers after four hours; expiry after a day, applied by wake-ups.         |
-| `two_or_one_senior`     | `either-several`        | An eligibility with alternatives: two approvals from finance, or one from the head of finance, each alternative judged on the approvals so far.  |
-| `undo_window`           | `undo-window`           | An undo window carried by the policy's `Proceed`, and finance withdrawing during the hold; what a person approved is released at once.           |
-| `provider_effect`       | `provider-effect`       | An instruction written beside the release, performed under the release key, and the effect recorded with `report`.                               |
-| `same_context`          | `same-context`          | One reader for the model and the card, reads captured as evidence, and the card flagging a read that changed.                                    |
-| `card_document`         | `card-document`         | The card served as a typed document with the card codec and its JSON Schema, and read back typed by a client with the same codec.                |
-| `expect_then_recommend` | `expect-then-recommend` | A trigger expected in the transaction that receives it; a newer event supersedes it before the model's late recommendation, which is refused.    |
-| `replay`                | `replay`                | Recorded occurrences exported as examples and a candidate model scored on them with no network.                                                  |
+| Module                    | Region                    | Shows                                                                                                                                            |
+| ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `clinic`                  | `refund-point`            | The cast every topic shares, the refund point's declaration with its one fact, and the gated tool whose executor accepts only a released refund. |
+| `first_point`             | `first-point`             | A recommendation admitted once per key, a policy that asks `finance`, and a verdict that releases the refund once in its own transaction.        |
+| `autonomy_ladder`         | `autonomy-ladder`         | Two policy versions published as data and checked with `publishable`; the same code path files every refund.                                     |
+| `ticket`                  | `ticket`                  | A card opened in one request and decided in another from its ticket; a ticket shown to someone else is refused.                                  |
+| `four_eyes`               | `four-eyes`               | Two different approvers, neither the person who asked; escalation to managers after four hours; expiry after a day, applied by wake-ups.         |
+| `two_or_one_senior`       | `either-several`          | An eligibility with alternatives: two approvals from finance, or one from the head of finance, each alternative judged on the approvals so far.  |
+| `undo_window`             | `undo-window`             | An undo window carried by the policy's `Proceed`, and finance withdrawing during the hold; what a person approved is released at once.           |
+| `provider_effect`         | `provider-effect`         | An instruction written beside the release, performed under the release key, and the effect recorded with `report`.                               |
+| `same_context`            | `same-context`            | One reader for the model and the card, reads captured as evidence, and the card flagging a read that changed.                                    |
+| `card_document`           | `card-document`           | The card served as a typed document with the card codec and its JSON Schema, and read back typed by a client with the same codec.                |
+| `expect_then_recommend`   | `expect-then-recommend`   | A trigger expected in the transaction that receives it; a newer event supersedes it before the model's late recommendation, which is refused.    |
+| `deadline_per_occurrence` | `deadline-per-occurrence` | A deadline of the occurrence's own, given on the expectation; the draft recommended later keeps it and expires when the window closes.           |
+| `replay`                  | `replay`                  | Recorded occurrences exported as examples and a candidate model scored on them with no network.                                                  |
 
 Every topic runs over `decisions/memory`, the single-process store for tests
 and examples.

@@ -41,3 +41,5 @@ None.
 ## Comments
 
 AI-assisted contribution. Review of the design and this plan, 2026-11-17: simplicity, inventive, comprehension, critic, structure and style, readiness and code-match reviewers. The owner ruled on a late recommendation (recorded and expired). Findings settled in the design and this plan; the proposal deadline is kept because dash-crm's request names it.
+
+AI-assisted contribution. Built on branch `claude/deadline-per-occurrence-74ebb9`, 2026-11-17, as local commits awaiting the owner. `scripts/test.sh --require-all`, `nix flake check`, the design gate and the snips check pass. Beyond the plan, `wake` answers `LapsedBefore(pending)` when it expires a record not begun (ADR 0054 lists it for consumers). The in-memory runtime drops a lapsed record's notice while PostgreSQL hands it to the follower, the same split as issue 27.

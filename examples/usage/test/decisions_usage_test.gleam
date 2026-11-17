@@ -4,6 +4,7 @@ import decisions/view.{Item}
 import decisions/vocabulary.{Ref}
 import decisions_usage/autonomy_ladder
 import decisions_usage/card_document
+import decisions_usage/deadline_per_occurrence
 import decisions_usage/expect_then_recommend
 import decisions_usage/first_point
 import decisions_usage/four_eyes
@@ -83,6 +84,10 @@ pub fn either_alternatives_are_judged_on_the_approvals_test() {
 
 pub fn a_late_recommendation_for_a_superseded_line_is_dropped_test() {
   assert expect_then_recommend.run() == #(Ok(["refund:fee-7"]), decisions.Drop)
+}
+
+pub fn a_draft_expires_when_its_own_window_closes_test() {
+  assert deadline_per_occurrence.run() == #(True, "expired")
 }
 
 pub fn finance_may_take_back_what_the_policy_let_proceed_test() {

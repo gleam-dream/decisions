@@ -101,7 +101,7 @@
   #md-table(3, (
     [*Evidence*], [*Guarantee checked*], [*Boundary*],
     [Root package tests (126)], [Every use case, every designed-out defect and every correction, as scenarios over the memory store; the conformance suite against the memory store and against a broken adapter for each clause.], [One process; the memory store serialises nothing.],
-    [`examples/usage`], [Eleven usage topics as compiled modules, each asserting what it shows (#adr(16)); the OTP and PostgreSQL wiring as compiled test modules of their packages.], [A separate package that imports only public modules.],
+    [`examples/usage`], [Twelve usage topics as compiled modules, each asserting what it shows (#adr(16)); the OTP and PostgreSQL wiring as compiled test modules of their packages.], [A separate package that imports only public modules.],
     [`fixtures/negative` with positive controls], [Thirteen shapes the compiler refuses, from a bare output handed to an executor to a number rule on a text fact.], [Actual compiler failures with expected diagnostic fragments; each control compiles.],
     [`scripts/check_javascript.sh`], [Every public core module builds for JavaScript and one scenario runs there.], [Node.js; one scenario.],
     [`integrations/decisions_otp` tests (86)], [The OTP store passes the conformance suite with a stopped and a moving clock and the twenty-three stress scenarios; the runtime's kills; isolated calls; live hints; moderation at volume.], [Real processes against a real transaction boundary; one VM.],

@@ -861,6 +861,108 @@ pub fn recommend(
 
 <!-- prettier-ignore-end -->
 
+## A deadline of the occurrence's own
+
+A point's `valid_for` counts from the recommendation. When an occurrence must
+end at an instant the application knows when it admits the trigger, such as
+the close of a customer's 24-hour service window, give that instant to the
+occurrence itself: `decisions.expect_until(.., valid_until:)` on the
+expectation, or `decisions.valid_until(proposal, at:)` on the proposal. The
+recommendation carries the earliest of the point's validity, the
+expectation's deadline and the proposal's; a deadline never moves later. One
+wake-up expires the occurrence at it, with cause `DeadlinePassed`, decided by
+the store clock whether or not the wake-up was delivered on time.
+
+| At or after the deadline                   | Result                                                          |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| A verdict, a showing, a note               | Refused with `NotAwaiting`, as for a point's validity           |
+| The wake-up, nothing recommended yet       | The record expires with `DeadlinePassed`; one settlement notice |
+| `record_failure`, `expect`, `expect_until` | Refused with `DeadlinePassedBefore(deadline)`; nothing written  |
+| `recommend_once`                           | Recorded and expired at once; no policy runs, nothing is shown  |
+| A key expected with `expect` alone         | No deadline until it is recommended, as before                  |
+
+The record not begun is due at its deadline: `decisions_postgres/queue.pending`
+reports it in `due`.
+
+<!-- prettier-ignore-start -->
+
+<!-- snips: examples/usage/src/decisions_usage/deadline_per_occurrence.gleam#deadline-per-occurrence -->
+```gleam
+import decisions
+import decisions/memory.{type Memory}
+import decisions/occurrence
+import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/vocabulary.{
+  Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
+}
+import decisions/wire
+import gleam/option.{Some}
+import gleam/result
+import gleam/time/duration
+import gleam/time/timestamp.{type Timestamp}
+
+pub fn desk() -> decisions.Desk(String, Memory) {
+  decisions.desk(
+    // No validity of its own: each draft carries its window.
+    decisions.point("reply.draft", wire.text()),
+    drives: fn(_) {
+      decisions.Gated(
+        name: "send",
+        guard: fn(_, _) { Ok([]) },
+        execute: fn(_, _) { Ok(Nil) },
+      )
+    },
+    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    over: memory.port(),
+  )
+}
+
+/// The transaction that stores the customer's message expects the draft,
+/// due when the service window closes.
+pub fn receive(
+  store: Memory,
+  message: String,
+  written_at: Timestamp,
+) -> Result(Nil, decisions.Refusal) {
+  memory.transaction(store, decisions.expect_until(
+    desk(),
+    _,
+    key: "reply:" <> message,
+    trigger: Trigger(kind: "message", id: message),
+    about: Subject("party", "ana"),
+    valid_until: timestamp.add(written_at, duration.hours(24)),
+  ))
+}
+
+/// The model's draft keeps the deadline the expectation carries.
+pub fn draft(
+  store: Memory,
+  message: String,
+  text: String,
+) -> Result(occurrence.Occurrence(String), decisions.Refusal) {
+  memory.transaction(store, decisions.recommend_once(
+    desk(),
+    _,
+    key: "reply:" <> message,
+    proposal: decisions.proposal(
+      trigger: Trigger(kind: "message", id: message),
+      about: Subject("party", "ana"),
+      context: Manifest(refs: [], renderer: "reply-1"),
+      recommending: Recommendation(
+        output: text,
+        by: Agent(kind: "reply", version: "1"),
+        explanation: RuleFired("draft"),
+        signals: [],
+        reads: [],
+      ),
+    ),
+  ))
+}
+
+```
+
+<!-- prettier-ignore-end -->
+
 ## An effect outside the database
 
 The gated tool never calls the provider. It writes an instruction beside the

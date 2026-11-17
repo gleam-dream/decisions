@@ -7,11 +7,13 @@
 
 import decisions
 import decisions/entry
+import decisions/model
 import decisions/occurrence
 import decisions/store
 import decisions/vocabulary.{Approve}
 import decisions/wire
 import decisions_postgres.{Conflict, Contended, Refused}
+import decisions_postgres/queue
 import decisions_postgres/telemetry
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -153,6 +155,84 @@ pub fn a_verdict_after_the_deadline_is_refused_before_any_wake_up_test() {
   let assert Ok(decisions.Woken(expired)) =
     kit.tx(env, decisions.wake(desk, _, occurrence: waiting.id))
   let assert occurrence.Expired(_) = expired.status
+  kit.check(env, [desk])
+}
+
+/// Two keys expected with their own deadline (`expect_until`), one whose
+/// model failed: the pending queue shows the deadline, the wake-ups are not
+/// due before it, the wake worker's code path expires both at it, a late
+/// recommendation commits expired with the one notice the expiry admitted,
+/// and a late failure is refused.
+pub fn an_expected_record_expires_at_its_own_deadline_test() {
+  let #(name, pg) = kit.store()
+  let spec = kit.spec("own-deadline")
+  let desk = kit.desk(pg, spec)
+  let wakers = [decisions.waker(desk)]
+  use env <- kit.run(name, pg, kit.options(), wakers, [])
+  let port = decisions_postgres.port(pg)
+  let deadline =
+    timestamp.add(port.now(env.db), duration.milliseconds(400))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  let trigger = fn(key) { vocabulary.Trigger("test", key) }
+  let failing = kit.tag("failing")
+  let late = kit.tag("late")
+  let assert Ok(Nil) =
+    kit.tx(env, fn(tx) {
+      use Nil <- result.try(decisions.expect_until(
+        desk,
+        tx,
+        key: failing,
+        trigger: trigger(failing),
+        about: kit.ana,
+        valid_until: deadline,
+      ))
+      decisions.expect_until(
+        desk,
+        tx,
+        key: late,
+        trigger: trigger(late),
+        about: kit.ana,
+        valid_until: deadline,
+      )
+    })
+  let fail = fn(tx) {
+    decisions.record_failure(
+      desk,
+      tx,
+      key: failing,
+      trigger: trigger(failing),
+      about: kit.ana,
+      failure: model.Raised("down"),
+    )
+  }
+  let assert Ok([_]) = kit.tx(env, fail)
+  let assert Ok(pending) =
+    queue.pending(env.db, point: spec.name, limit: 10, after: None)
+  assert list.map(pending, fn(summary) { summary.due })
+    == [Some(deadline), Some(deadline)]
+  // Not due yet on the store's clock: nothing is delivered.
+  let assert Ok(0) =
+    decisions_postgres.deliver_due(pg, env.db, wakers, limit: 10)
+  kit.wait_for_store_clock(env, deadline)
+  let assert Ok(2) =
+    decisions_postgres.deliver_due(pg, env.db, wakers, limit: 10)
+  let assert Ok(Some(head)) =
+    decisions_postgres.inspection().head(env.db, failing)
+  assert head.status == store.Expired
+  let assert Ok(recorded) =
+    kit.tx(env, decisions.recommend_once(
+      desk,
+      _,
+      key: late,
+      proposal: kit.proposal(spec.name, kit.ana),
+    ))
+  assert recorded.status == occurrence.Expired(vocabulary.DeadlinePassed)
+  assert recorded.valid_until == Some(deadline)
+  let assert Error(Refused(decisions.DeadlinePassedBefore(at))) =
+    kit.tx(env, fail)
+  assert at == deadline
+  assert kit.effects_of(env.db, late) == 0
   kit.check(env, [desk])
 }
 

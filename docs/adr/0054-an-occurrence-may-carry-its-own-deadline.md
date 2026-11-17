@@ -34,4 +34,5 @@ Recorded on 2026-11-17. Extends [ADR-0008](0008-time-and-the-record-decide-never
 ## Evidence and history
 
 - dash-crm's request for its point `reply.draft`, and the owner's rulings of 2026-11-17: an occurrence may carry its own deadline; a recommendation after that deadline is recorded and expired ("keeping it on record"); `record_failure` and `expect` after it are refused.
-- Tracker issue 30 of `issues/first-applications-findings`, which holds the build and its tests.
+- Tracker issue 30 of `issues/first-applications-findings`, which holds the build plan.
+- `src/decisions.gleam`, `expect_until`, `valid_until`, `wake`, `DeadlinePassedBefore`; `src/decisions/occurrence.gleam`, `Pending`, `pending_wake_times`, `pending_has_lapsed`; `test/deadline_per_occurrence_test.gleam`; the conformance check "a pending head keeps its due time and its wake-up"; the stress scenario "an expected record expires at its own deadline through a restart", run against the OTP store and PostgreSQL; `integrations/decisions_postgres/test/decisions_postgres/behaviour_test.gleam`, `an_expected_record_expires_at_its_own_deadline_test`; `examples/usage/src/decisions_usage/deadline_per_occurrence.gleam` (region `deadline-per-occurrence`).
