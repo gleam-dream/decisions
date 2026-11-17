@@ -4,10 +4,12 @@
 
 import decisions
 import decisions/model
+import decisions/occurrence
 import decisions/store as port_types
 import decisions/vocabulary.{
   Manifest, Recommendation, Ref, RuleFired, Rules, Subject, Trigger,
 }
+import decisions/wire
 import decisions_otp/backlog
 import decisions_otp/isolated
 import decisions_otp/runtime
@@ -20,6 +22,7 @@ import gleam/option.{None}
 import gleam/result
 import gleam/string
 import gleam/time/duration
+import gleam/time/timestamp
 import sinal
 import support/lab
 
@@ -186,6 +189,49 @@ pub fn a_key_superseded_before_it_is_recommended_is_superseded_test() {
       request: isolated.Request(..request("ex-1"), about:),
       model: sound(),
     )
+  assert store.queue(store.handle(s), "finance") == []
+}
+
+/// `expect_until` with `isolated.recommend`: after the key's own deadline a
+/// failed model is `Lapsed` and nothing is written; a model that answers
+/// late is recorded, already expired.
+pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
+  let s = lab.start()
+  let desk =
+    lab.desk(lab.point("owner.own-deadline", None), lab.asking("finance"))
+  let deadline =
+    timestamp.add(store.now(s), duration.minutes(1))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  list.each(["od-1", "od-2"], fn(key) {
+    let assert Ok(Nil) =
+      store.transaction(s, decisions.expect_until(
+        desk,
+        _,
+        key:,
+        trigger: Trigger("lab", key),
+        about: Subject("person", key),
+        valid_until: deadline,
+      ))
+  })
+  store.advance(s, duration.minutes(2))
+  let failing = model.new(fn(_, _) { Error(model.Raised("down")) })
+  let assert Ok(isolated.Lapsed(deadline: at)) =
+    isolated.recommend(
+      desk,
+      in: store.transaction(s, _),
+      request: request("od-1"),
+      model: failing,
+    )
+  assert at == deadline
+  let assert Ok(isolated.Recommended(late)) =
+    isolated.recommend(
+      desk,
+      in: store.transaction(s, _),
+      request: request("od-2"),
+      model: sound(),
+    )
+  assert late.status == occurrence.Expired(vocabulary.DeadlinePassed)
   assert store.queue(store.handle(s), "finance") == []
 }
 

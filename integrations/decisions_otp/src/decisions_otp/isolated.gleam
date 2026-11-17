@@ -31,6 +31,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
+import gleam/time/timestamp.{type Timestamp}
 import sinal
 
 type Answer(output) {
@@ -179,7 +180,8 @@ pub type Request {
   )
 }
 
-/// What `recommend` did.
+/// What `recommend` did. It may gain variants in a minor release; keep a
+/// `_` branch where a new one needs no decision of yours.
 pub type Attempted(output) {
   /// The model answered and the occurrence is on the record, now or from
   /// an earlier delivery of the same key.
@@ -196,6 +198,13 @@ pub type Attempted(output) {
   /// the failed attempt, was refused with `SupersededBefore` and nothing
   /// was written. The trigger is done.
   Superseded(event: String)
+  /// The key's own deadline (`decisions.expect_until`) passed before
+  /// anything was recommended, and the model failed: the failed attempt
+  /// was refused with `DeadlinePassedBefore` and nothing was written. The
+  /// trigger is done. A model that answers after the deadline is not
+  /// this: its recommendation is recorded and returned as `Recommended`,
+  /// with the occurrence already expired.
+  Lapsed(deadline: Timestamp)
 }
 
 /// Why `recommend_when`'s precondition does not let the recommendation
@@ -321,13 +330,15 @@ fn check(
   }
 }
 
-/// A key superseded before it was recommended wrote nothing and is done:
+/// A key superseded, or lapsed by its own deadline, before it was
+/// recommended wrote nothing and is done:
 /// say so in the result rather than as a refusal.
 fn superseded(
   attempted: Result(Attempted(o), Refusal),
 ) -> Result(Attempted(o), Refusal) {
   case attempted {
     Error(decisions.SupersededBefore(event:)) -> Ok(Superseded(event))
+    Error(decisions.DeadlinePassedBefore(deadline:)) -> Ok(Lapsed(deadline))
     other -> other
   }
 }
