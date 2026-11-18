@@ -8,9 +8,9 @@
 //// | --- | --- |
 //// | I1 | At most one release per occurrence; the gated tool's effects equal the released occurrences, when the audit counts effects |
 //// | I2 | A release follows an acceptance: the policy proceeded, or the required verdicts approved or corrected |
-//// | I3 | Nothing changes an outcome after it settles. After settlement only these entries are appended: `assessed`, `effected` and `verdict_refused` on any occurrence, and `reviewed`, `opened`, `noted` and `expanded` on a sampled one. A recorded refusal names a showing to its validator made before the occurrence settled |
+//// | I3 | Nothing changes an outcome after it settles. After settlement only these entries are appended: `assessed`, `effected` and `verdict_refused` on any occurrence, and `reviewed`, `opened`, `noted` and `expanded` on a sampled one. A recorded refusal names a showing to its validator made before the occurrence settled. One exception: a `recommended` entry may follow the `expired` entry of a record not begun whose own deadline passed, and the occurrence stays expired |
 //// | I4 | One deciding verdict per validator per output that stands |
-//// | I5 | Every wake-up the occurrence needs as it stands (`occurrence.wake_times`: the end of a hold, the deadline, each later policy answer) is pending; a settled occurrence has none |
+//// | I5 | Every wake-up the occurrence needs as it stands (`occurrence.wake_times`: the end of a hold, the deadline, each later policy answer; for a record not begun, `occurrence.pending_wake_times`: its own deadline) is pending; a settled occurrence has none |
 //// | I6 | A settled occurrence has exactly one settlement notice, an unsettled one none |
 //// | I7 | Entries are numbered 1, 2, 3 and so on, and their times never decrease, so the record as known earlier is a prefix of the record now |
 //// | I8 | The head equals the head the record implies (`occurrence.head`), field by field |
@@ -23,8 +23,12 @@
 //// round that its author belongs to.
 ////
 //// A record that has not begun (expected, or holding only failed attempts)
-//// needs no wake-up and no notice; once a newer event superseded it, it is
-//// settled: no wake-up, exactly one notice, head status `Expired`.
+//// needs a wake-up at its own deadline when it has one
+//// (`occurrence.pending_wake_times`) and no notice; once a newer event
+//// superseded it or its deadline passed, it is settled: no wake-up,
+//// exactly one notice, head status `Expired`. A recommendation may still
+//// follow an expiry by deadline: the occurrence then starts expired, and
+//// the notice the expiry admitted is its one notice.
 ////
 //// ```gleam
 //// import decisions/testing
@@ -249,18 +253,18 @@ fn stored(
   list.flatten([i5, i6, i8])
 }
 
-/// A record that has not begun: it needs no wake-up; once superseded it is
-/// settled and has exactly one settlement notice; its head is
-/// `occurrence.pending_head`.
+/// A record that has not begun: it needs a wake-up at its own deadline
+/// while it waits; once it ended it is settled and has exactly one
+/// settlement notice; its head is `occurrence.pending_head`.
 fn see_pending(pending: occurrence.Pending) -> Seen {
   let head = occurrence.pending_head(pending)
   Seen(
     id: pending.id,
     status: store.status_name(head.status),
-    settled: pending.superseded != None,
+    settled: pending.ended != None,
     released: False,
     head:,
-    must_wake: [],
+    must_wake: occurrence.pending_wake_times(pending),
     violations: [],
   )
 }

@@ -126,6 +126,7 @@ pub fn checks() -> List(Check(tx)) {
       savepoint_in_rollback,
     ),
     Check("the head comes back as written", head_round_trip),
+    Check("a pending head keeps its due time and its wake-up", pending_due),
     Check("waiting filters by point, subject and status, in id order", waiting),
     Check("wake-ups are replaced and cancelled", wakes_replaced),
     Check("settlement notices are admitted in order", notices),
@@ -520,6 +521,55 @@ fn head_round_trip(adapter: Adapter(tx)) -> Result(Nil, String) {
     read == Some(second),
     "the replaced head came back as " <> string.inspect(read),
   )
+}
+
+/// A record not begun with its own deadline (`decisions.expect_until`):
+/// its head is `pending` and due at the deadline, and its wake-up is held
+/// like any other, so it expires on time and a queue of pending records
+/// can order by it.
+fn pending_due(adapter: Adapter(tx)) -> Result(Nil, String) {
+  let id = fresh_id(adapter, "pending-due")
+  let point = fresh_id(adapter, "point")
+  let base = at(adapter, 0)
+  let deadline = plus(base, 86_400)
+  let written =
+    Head(
+      point:,
+      subject: Subject("party", "ana"),
+      status: store.Pending,
+      awaiting: [],
+      due: Some(deadline),
+      arrived: base,
+      approved: [],
+      may_not_decide: [],
+      review_pending: False,
+    )
+  use Nil <- result.try(
+    append(adapter, adapter.handle, id, written, [stored(1, "expected")]),
+  )
+  use Nil <- result.try(
+    adapter.port.schedule(adapter.handle, point, id, [deadline])
+    |> result.map_error(store.describe),
+  )
+  use read <- result.try(
+    adapter.inspect.head(adapter.handle, id) |> result.map_error(store.describe),
+  )
+  use Nil <- result.try(expect(
+    read == Some(written),
+    "the pending head came back as " <> string.inspect(read),
+  ))
+  use wakes <- result.try(
+    adapter.inspect.wakes(adapter.handle) |> result.map_error(store.describe),
+  )
+  use Nil <- result.try(expect(
+    list.contains(wakes, store.Wake(point:, occurrence: id, at: deadline)),
+    "the pending record's wake-up is missing from " <> string.inspect(wakes),
+  ))
+  use found <- result.try(
+    adapter.port.waiting(adapter.handle, point, Subject("party", "ana"))
+    |> result.map_error(store.describe),
+  )
+  expect(found == [id], "waiting found " <> string.inspect(found))
 }
 
 fn waiting(adapter: Adapter(tx)) -> Result(Nil, String) {

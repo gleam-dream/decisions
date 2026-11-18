@@ -126,8 +126,10 @@ pub type Occurrence(output) {
 
 /// A record that has not begun: no recommendation yet. A trigger was
 /// received (`expected`), or a recommender failed under the key
-/// (`attempts`), or both; `superseded` names the event that superseded it
-/// before it began, after which it never will.
+/// (`attempts`), or both. `ended` is what ended it before it began: a
+/// newer event that superseded it, after which nothing is recommended, or
+/// its own deadline, after which a recommendation is still recorded and
+/// starts expired.
 pub type Pending {
   Pending(
     id: String,
@@ -135,10 +137,14 @@ pub type Pending {
     subject: Subject,
     /// When the record was first written.
     since: Timestamp,
-    /// `decisions.expect` recorded that a recommendation is expected.
+    /// `decisions.expect` or `decisions.expect_until` recorded that a
+    /// recommendation is expected.
     expected: Bool,
     attempts: List(Attempt),
-    superseded: Option(ExpiryCause),
+    /// The record's own deadline: the earliest its expectations carry
+    /// (`decisions.expect_until`), `None` when none does.
+    valid_until: Option(Timestamp),
+    ended: Option(ExpiryCause),
   )
 }
 
@@ -195,10 +201,36 @@ pub fn fold(
     ],
       _
     ->
-      case list.any(prefix, is_expiry) {
-        // Nothing is recommended after a supersession.
-        True -> Error(NoRecommendation)
-        False ->
+      case list.filter_map(prefix, expiry), prefix_deadline(prefix) {
+        // Nothing is recommended after a supersession. After the record's
+        // own deadline passed, a late recommendation is kept on the record
+        // and the occurrence starts expired. A record that ended by a
+        // deadline it never had was not written by the desk.
+        [vocabulary.DeadlinePassed], Some(_) ->
+          Ok(list.fold(
+            later,
+            Occurrence(
+              id:,
+              point:,
+              entries: list.append(prefix, [first]),
+              attempts:,
+              trigger:,
+              parent:,
+              subject:,
+              requester:,
+              context:,
+              recommendation:,
+              valid_until:,
+              informed: [],
+              policy_version: None,
+              later: [],
+              sampled: False,
+              status: Expired(vocabulary.DeadlinePassed),
+            ),
+            apply,
+          ))
+        [_, ..], _ -> Error(NoRecommendation)
+        [], _ ->
           Ok(list.fold(
             later,
             Occurrence(
@@ -226,10 +258,10 @@ pub fn fold(
   }
 }
 
-fn is_expiry(entry: Entry(o)) -> Bool {
+fn expiry(entry: Entry(o)) -> Result(ExpiryCause, Nil) {
   case entry.event {
-    entry.Expired(..) -> True
-    _ -> False
+    entry.Expired(cause:) -> Ok(cause)
+    _ -> Error(Nil)
   }
 }
 
@@ -244,42 +276,87 @@ fn pending(
     | entry.Expected(point:, subject:, ..) -> Ok(#(point, subject))
     _ -> Error(Nil)
   }
-  use #(point, subject) <- result.map(names)
-  Pending(
-    id:,
-    point:,
-    subject:,
-    since: first.at,
-    expected: list.any(prefix, fn(entry) {
+  use #(point, subject) <- result.try(names)
+  let found =
+    Pending(
+      id:,
+      point:,
+      subject:,
+      since: first.at,
+      expected: list.any(prefix, fn(entry) {
+        case entry.event {
+          entry.Expected(..) -> True
+          _ -> False
+        }
+      }),
+      attempts:,
+      valid_until: prefix_deadline(prefix),
+      ended: list.find_map(prefix, expiry) |> option.from_result,
+    )
+  // A record ends by its deadline only when it has one; one that says
+  // otherwise was not written by the desk.
+  case found.ended, found.valid_until {
+    Some(vocabulary.DeadlinePassed), None -> Error(Nil)
+    _, _ -> Ok(found)
+  }
+}
+
+/// The record's own deadline: the earliest its expectations carry.
+fn prefix_deadline(prefix: List(Entry(o))) -> Option(Timestamp) {
+  earliest(
+    list.filter_map(prefix, fn(entry) {
       case entry.event {
-        entry.Expected(..) -> True
-        _ -> False
-      }
-    }),
-    attempts:,
-    superseded: list.find_map(prefix, fn(entry) {
-      case entry.event {
-        entry.Expired(cause:) -> Ok(cause)
+        entry.Expected(valid_until: Some(at), ..) -> Ok(at)
         _ -> Error(Nil)
       }
-    })
-      |> option.from_result,
+    }),
   )
 }
 
+/// The earliest of some times, `None` when there are none.
+pub fn earliest(times: List(Timestamp)) -> Option(Timestamp) {
+  case list.sort(times, timestamp.compare) {
+    [first, ..] -> Some(first)
+    [] -> None
+  }
+}
+
+/// Whether a record that has not begun reached its own deadline at or
+/// before `now`, and has not ended yet. Nothing more is expected or
+/// attempted under it, whether or not the wake-up that expires it was
+/// delivered.
+pub fn pending_has_lapsed(pending: Pending, now: Timestamp) -> Bool {
+  case pending.valid_until, pending.ended {
+    Some(deadline), None -> timestamp.compare(now, deadline) != order.Lt
+    _, _ -> False
+  }
+}
+
+/// Every time at which a wake-up must be delivered for a record that has
+/// not begun: its own deadline while it has not ended, none otherwise.
+pub fn pending_wake_times(pending: Pending) -> List(Timestamp) {
+  case pending.ended {
+    None -> option.values([pending.valid_until])
+    Some(_) -> []
+  }
+}
+
 /// The head a store keeps beside a record that has not begun: `Pending`
-/// while it may still be recommended, `Expired` once a newer event
-/// superseded it.
+/// while it waits, due at its own deadline when it has one; `Expired` once
+/// a newer event superseded it or its deadline passed.
 pub fn pending_head(pending: Pending) -> store.Head {
   store.Head(
     point: pending.point,
     subject: pending.subject,
-    status: case pending.superseded {
+    status: case pending.ended {
       Some(_) -> store.Expired
       None -> store.Pending
     },
     awaiting: [],
-    due: None,
+    due: case pending.ended {
+      Some(_) -> None
+      None -> pending.valid_until
+    },
     arrived: pending.since,
     approved: [],
     may_not_decide: [],
@@ -287,7 +364,8 @@ pub fn pending_head(pending: Pending) -> store.Head {
   )
 }
 
-/// Whether the recommendation was expected first (`decisions.expect`).
+/// Whether the recommendation was expected first (`decisions.expect` or
+/// `decisions.expect_until`).
 pub fn was_expected(occurrence: Occurrence(o)) -> Bool {
   list.any(occurrence.entries, fn(entry) {
     case entry.event {

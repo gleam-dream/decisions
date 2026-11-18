@@ -1584,11 +1584,15 @@ pub type Follower =
 /// point left without one, such as one that settled before its point was
 /// followed.
 ///
-/// A record superseded before it began (expected, then a newer event)
+/// A record superseded before it began (expected, then a newer event), or
+/// lapsed at its own deadline before it began (`decisions.expect_until`),
 /// still admits a notice, and its follower is handed it like any other.
-/// Reading it (`decisions.read`) is refused with `SupersededBefore`, whose
-/// handling is `Drop`: return that refusal and the notice ends delivered;
-/// `decisions.read_record` tells such a record apart as `NotBegun`.
+/// Reading it (`decisions.read`) is refused with `SupersededBefore` or
+/// `DeadlinePassedBefore`, whose handling is `Drop`: return that refusal
+/// and the notice ends delivered; `decisions.read_record` tells such a
+/// record apart as `NotBegun`. When a late recommendation was recorded
+/// before the notice is delivered, `read` returns the expired occurrence
+/// instead.
 pub fn settlement_worker(
   store: Store,
   followers: List(Follower),

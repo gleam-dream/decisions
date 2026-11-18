@@ -124,10 +124,12 @@ pub opaque type Wired(tx) {
 /// work. See "Failure" above for what each does.
 ///
 /// A record that settled before it began (expected with
-/// `decisions.expect`, then superseded) has no occurrence to hand to
-/// `settled`: its notice is dropped as done and reported by
-/// `[decisions, job, dropped]`. The same goes for a trigger whose
-/// `recommend_once` or `record_failure` meets `SupersededBefore`: return
+/// `decisions.expect`, then superseded, or expected with
+/// `decisions.expect_until` and lapsed at its own deadline) has no
+/// occurrence to hand to `settled`: its notice is dropped as done and
+/// reported by `[decisions, job, dropped]`. The same goes for a trigger
+/// whose `recommend_once` or `record_failure` meets `SupersededBefore`, or
+/// whose `record_failure` meets `DeadlinePassedBefore`: return
 /// `DeskRefused(refusal)` and the trigger is dropped with the refusal as
 /// its reason.
 pub fn point(

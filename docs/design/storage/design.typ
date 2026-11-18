@@ -28,7 +28,7 @@
     (id: "mem", label: "Memory store", sub: "decisions/memory", kind: "database", tint: "teal"),
     (id: "otp", label: "OTP store", sub: "decisions_otp/store", kind: "database", tint: "teal"),
     (id: "pg", label: "PostgreSQL adapter", sub: "decisions_postgres", kind: "database", tint: "teal"),
-    (id: "suite", label: "Conformance suite", sub: "twenty-one checks", kind: "component", tint: "teal"),
+    (id: "suite", label: "Conformance suite", sub: "twenty-two checks", kind: "component", tint: "teal"),
   ), edges: (
     (from: "desk", to: "port", relation: "call", label: "load, append, schedule, settled, ..."),
     (from: "mem", to: "port", relation: "dependency", label: "implements"),
@@ -41,7 +41,7 @@
     #attribute(name: "Point and subject", type: "Name and subject", provenance: "derived")[What superseding filters on.]
     #attribute(name: "Status", type: "Pending or one of the nine statuses", provenance: "derived")[Stored by `store.status_name`; `pending` while the record has not begun: it holds an expectation or only failed attempts.]
     #attribute(name: "Awaiting", type: "Decision sets", provenance: "derived")[The queues the occurrence waits in; empty unless it awaits.]
-    #attribute(name: "Due", type: "Optional time", provenance: "derived")[The deadline while it waits, the hold's end while it is held.]
+    #attribute(name: "Due", type: "Optional time", provenance: "derived")[The effective deadline while it waits, the hold's end while it is held, the occurrence's own deadline while it has not begun (#adr(54)). The conformance suite checks that a pending head keeps it and that a record not begun can hold a wake-up.]
     #attribute(name: "Arrived", type: "Time", provenance: "derived")[The recommendation's time, or the first attempt's when there is none.]
     #attribute(name: "Approved", type: "Validators", provenance: "derived")[Who approved the standing output, so a queue leaves the card out for them.]
     #attribute(name: "May not decide", type: "Validators", provenance: "derived")[Who may not decide the occurrence whatever sets they hold: under `SomeoneElseHolding`, the requester and a person who recommended as their own act; under `Several`, whoever already approved the standing output; under `Either`, only who every alternative excludes. Empty unless it awaits. A queue leaves the card out for them (#adr(23)).]
@@ -72,8 +72,8 @@
   )
 ])
 
-#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-one checks for one process, and a stress suite for the clauses that need several.", body: [
-  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-one named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
+#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-two checks for one process, and a stress suite for the clauses that need several.", body: [
+  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-two named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
   #md-table(2, (
     [*Check*], [*Clause*],
     [an absent id loads empty; an absent id takes its first entry once], [`load`],

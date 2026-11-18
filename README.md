@@ -777,11 +777,11 @@ moment are handled one after the other and the second supersedes the first's
 expectation. In the other order two admissions can deadlock; the store refuses
 one with `Contended`, and it is delivered again.
 
-| The trigger was                            | Then                                 | Result                                                     |
-| ------------------------------------------ | ------------------------------------ | ---------------------------------------------------------- |
-| Expected, and nothing newer happened       | `recommend_once`                     | The occurrence begins as usual                             |
-| Expected, and a newer event happened first | `recommend_once` or `record_failure` | Refused with `SupersededBefore(event)`; nothing is written |
-| Never expected                             | `recommend_once` after `happened`    | The occurrence begins; nothing supersedes it               |
+| The trigger was                            | Then                                 | Result                                                                                                                                                                                                      |
+| ------------------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Expected, and nothing newer happened       | `recommend_once`                     | The occurrence begins as usual                                                                                                                                                                              |
+| Expected, and a newer event happened first | `recommend_once` or `record_failure` | Refused with `SupersededBefore(event)`; nothing is written. If the key's own deadline (`expect_until`) had already passed when the event happened, it expired at its deadline instead: see the next section |
+| Never expected                             | `recommend_once` after `happened`    | The occurrence begins; nothing supersedes it                                                                                                                                                                |
 
 In the example below a statement line is expected when it arrives, and a
 corrected statement for the same company later supersedes it. A record that
@@ -855,6 +855,130 @@ pub fn recommend(
     ),
   ))
   |> result.map(fn(recorded) { recorded.id })
+}
+
+```
+
+<!-- prettier-ignore-end -->
+
+## A deadline of the occurrence's own
+
+A point's `valid_for` counts from the recommendation. When an occurrence must
+end at an instant the application knows when it admits the trigger, such as
+the close of a customer's 24-hour service window, give that instant to the
+occurrence itself: `decisions.expect_until(.., valid_until:)` on the
+expectation, or `decisions.valid_until(proposal, at:)` on the proposal. The
+recommendation carries the earliest of the point's validity, the
+expectation's deadline and the proposal's; a deadline never moves later. One
+wake-up expires the occurrence at it, with cause `DeadlinePassed`, decided by
+the store clock whether or not the wake-up was delivered on time.
+
+| At or after the deadline                                                                                                                 | Result                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Once recommended: a verdict, a showing, a note                                                                                           | Refused with `NotAwaiting`, as for a point's validity                                                                                                                                                                    |
+| The wake-up, nothing recommended yet                                                                                                     | The record expires with `DeadlinePassed`; one settlement notice; `wake` answers `LapsedBefore(pending)`                                                                                                                  |
+| `happened` with a declared event, nothing recommended yet                                                                                | The record expires with `DeadlinePassed` rather than superseded, and is reported in `not_begun`; a later recommendation is recorded expired                                                                              |
+| `record_failure(_with)`, `expect`, `expect_until`, `read`, `open` and the other verbs that need an occurrence, before any recommendation | Refused with `DeadlinePassedBefore(deadline)`; nothing written                                                                                                                                                           |
+| `expect` or `expect_until` delivered again after the deadline                                                                            | `DeadlinePassedBefore`; an `expect_until` whose deadline had already passed answers `Ok(Nil)` the first time, the record written expired. Treat the refusal as done, not a failure, so the admitting transaction commits |
+| `recommend_once`                                                                                                                         | Recorded and expired at once; no policy runs, nothing is shown                                                                                                                                                           |
+| A key expected with `expect` alone                                                                                                       | No deadline until it is recommended                                                                                                                                                                                      |
+
+A deadline ends the wait for a decision, not a hold: an output accepted
+before the deadline and held is still released when its hold ends, as with a
+point's validity. If nothing may happen after the deadline, check it in the
+gated tool's guard or the release check.
+
+A record admits one settlement notice, from whichever write ended it. What
+a follower reads for it depends on when the notice is delivered: before a
+late recommendation commits, `decisions.read` answers
+`DeadlinePassedBefore`; after, it returns the expired occurrence. A later
+recommendation admits no second notice. PostgreSQL hands such a notice to
+the point's follower; the OTP runtime drops a notice whose record has not
+begun as done. Read late outputs from the records, not from the notices.
+
+The record not begun is due at its deadline: `decisions_postgres/queue.pending`
+reports it in `due`.
+
+**Upgrading.** `entry.Expected` and `occurrence.Pending` gain `valid_until`,
+`Pending.superseded` is now `ended`, and `learning.Coverage` gains
+`lapsed_before`: patterns that name every field, and constructors, add them.
+`decisions.Woken` gains `LapsedBefore` and `isolated.Attempted` gains
+`Lapsed`: exhaustive matches add a branch. `wake` on a record not begun now
+answers `NothingDue` or `NotDue` where it was refused with `NotRecommended`
+or `SupersededBefore`; `waker` already treats these as done or "deliver
+again". See [ADR 0054](docs/adr/0054-an-occurrence-may-carry-its-own-deadline.md#adr-0054).
+
+<!-- prettier-ignore-start -->
+
+<!-- snips: examples/usage/src/decisions_usage/deadline_per_occurrence.gleam#deadline-per-occurrence -->
+```gleam
+import decisions
+import decisions/memory.{type Memory}
+import decisions/occurrence
+import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/vocabulary.{
+  Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
+}
+import decisions/wire
+import gleam/time/duration
+import gleam/time/timestamp.{type Timestamp}
+
+pub fn desk() -> decisions.Desk(String, Memory) {
+  decisions.desk(
+    // No validity of its own: each draft carries its window.
+    decisions.point("reply.draft", wire.text()),
+    drives: fn(_) {
+      decisions.Gated(
+        name: "send",
+        guard: fn(_, _) { Ok([]) },
+        execute: fn(_, _) { Ok(Nil) },
+      )
+    },
+    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    over: memory.port(),
+  )
+}
+
+/// The transaction that stores the customer's message expects the draft,
+/// due when the service window closes.
+pub fn receive(
+  store: Memory,
+  message: String,
+  written_at: Timestamp,
+) -> Result(Nil, decisions.Refusal) {
+  memory.transaction(store, decisions.expect_until(
+    desk(),
+    _,
+    key: "reply:" <> message,
+    trigger: Trigger(kind: "message", id: message),
+    about: Subject("party", "ana"),
+    valid_until: timestamp.add(written_at, duration.hours(24)),
+  ))
+}
+
+/// The model's draft keeps the deadline the expectation carries.
+pub fn draft(
+  store: Memory,
+  message: String,
+  text: String,
+) -> Result(occurrence.Occurrence(String), decisions.Refusal) {
+  memory.transaction(store, decisions.recommend_once(
+    desk(),
+    _,
+    key: "reply:" <> message,
+    proposal: decisions.proposal(
+      trigger: Trigger(kind: "message", id: message),
+      about: Subject("party", "ana"),
+      context: Manifest(refs: [], renderer: "reply-1"),
+      recommending: Recommendation(
+        output: text,
+        by: Agent(kind: "reply", version: "1"),
+        explanation: RuleFired("draft"),
+        signals: [],
+        reads: [],
+      ),
+    ),
+  ))
 }
 
 ```
@@ -1432,7 +1556,7 @@ for the schema.
 | An approval counts only for the alternative that admits it           | Each verdict records the sets its validator held; eligibility is judged per alternative                                 |
 
 `decisions/testing.check` checks the eight invariants behind this table over
-any store, and `decisions/conformance` runs twenty-one checks of the storage port
+any store, and `decisions/conformance` runs twenty-two checks of the storage port
 against any adapter.
 
 ## What Decisions does not do

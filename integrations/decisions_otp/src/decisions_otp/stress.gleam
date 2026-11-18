@@ -38,6 +38,7 @@
 
 import decisions.{type Desk, type Refusal, Gated}
 import decisions/conformance.{type Adapter}
+import decisions/entry
 import decisions/fact.{type Key}
 import decisions/model
 import decisions/occurrence
@@ -207,6 +208,10 @@ pub fn scenarios() -> List(Scenario(tx)) {
     Scenario("B5 chaos while occurrences move", b5),
     Scenario("B6 poison is set aside", b6),
     Scenario("B7 a model that raises or hangs", b7),
+    Scenario(
+      "an expected record expires at its own deadline through a restart",
+      own_deadline,
+    ),
   ]
 }
 
@@ -2295,6 +2300,191 @@ fn b4(target: Target(tx), load: Load) -> Result(Nil, String) {
   invariants(target, [replies, refunds])
 }
 
+/// Four keys expected with one deadline of their own (`expect_until`): one
+/// whose model keeps failing, one recommended and waiting for a verdict,
+/// one whose model answers after the deadline but before any wake-up is
+/// delivered, and one whose model answers only after its wake-up expired
+/// it. The store restarts before the deadline, time passes it, and the
+/// runtime started over the restarted store expires what is still pending.
+/// Both late recommendations are recorded expired, each record has one
+/// settlement notice, a late failure is refused, and a verdict is refused.
+fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
+  let replies =
+    desk(target, point(unique(target, "own-deadline"), None), asking("finance"))
+  let failing = unique(target, "failing")
+  let waiting = unique(target, "waiting")
+  let late = unique(target, "late")
+  let late_first = unique(target, "late-first")
+  let deadline =
+    timestamp.add(target.backlog.now(), duration.minutes(1))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  let expect_until = fn(desk, tx, key) {
+    decisions.expect_until(
+      desk,
+      tx,
+      key:,
+      trigger: Trigger("stress", key),
+      about: ana,
+      valid_until: deadline,
+    )
+  }
+  let fail = fn(desk, tx, key) {
+    decisions.record_failure(
+      desk,
+      tx,
+      key:,
+      trigger: Trigger("stress", key),
+      about: ana,
+      failure: model.Raised("the provider is down"),
+    )
+  }
+  use Nil <- result.try(
+    within(target, fn(tx) {
+      use Nil <- result.try(expect_until(replies, tx, failing))
+      use Nil <- result.try(expect_until(replies, tx, waiting))
+      use Nil <- result.try(expect_until(replies, tx, late))
+      use Nil <- result.try(expect_until(replies, tx, late_first))
+      use _ <- result.try(fail(replies, tx, failing))
+      recommend(
+        replies,
+        tx,
+        waiting,
+        about: ana,
+        output: "Olá",
+        by: Rules("rules", "1"),
+        score: 0.5,
+      )
+      |> result.replace(Nil)
+    })
+    |> result.map_error(said),
+  )
+  use again <- result.try(target.restart())
+  let replies = rebuilt_asking(again, replies)
+  again.advance(duration.minutes(2))
+  // Past the deadline, before any runtime delivers a wake-up.
+  use first <- result.try(
+    within(again, recommend(
+      replies,
+      _,
+      late_first,
+      about: ana,
+      output: "tarde",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  use Nil <- result.try(expect(
+    first.status == occurrence.Expired(vocabulary.DeadlinePassed)
+      && first.policy_version == None
+      && kinds(first) == ["expected", "expired", "recommended"],
+    "the recommendation before the wake-up is " <> string.inspect(first.status),
+  ))
+  let config =
+    runtime.config(
+      again.backlog,
+      points: [runtime.point(replies, settled: runtime.nothing_follows)],
+      work: nothing,
+    )
+    |> quick
+  use supervisor <- result.try(start_runtime(config))
+  let status = fn(id) {
+    again.adapter.inspect.head(again.adapter.handle, id)
+    |> result.map(option.map(_, fn(head: store.Head) { head.status }))
+  }
+  let expired =
+    wait_until(
+      fn() {
+        list.all([failing, waiting, late, late_first], fn(id) {
+          status(id) == Ok(Some(store.Expired))
+        })
+      },
+      within: 20_000,
+    )
+  stop_runtime(supervisor)
+  use Nil <- result.try(expect(
+    expired,
+    "after the deadline: "
+      <> string.inspect(list.map([failing, waiting, late, late_first], status)),
+  ))
+  use known <- result.try(read(again, replies, waiting))
+  use Nil <- result.try(expect(
+    known.status == occurrence.Expired(vocabulary.DeadlinePassed)
+      && known.valid_until == Some(deadline),
+    "the waiting occurrence ended " <> string.inspect(known.status),
+  ))
+  use Nil <- result.try(
+    case
+      within(again, open_and_decide(
+        replies,
+        _,
+        waiting,
+        vocabulary.Validator(subject: "bia", holds: ["finance"]),
+        vocabulary.Approve,
+      ))
+    {
+      Error(Refused(decisions.NotAwaiting)) -> Ok(Nil)
+      other -> Error("a verdict after the deadline: " <> string.inspect(other))
+    },
+  )
+  use Nil <- result.try(case within(again, fail(replies, _, failing)) {
+    Error(Refused(decisions.DeadlinePassedBefore(at))) if at == deadline ->
+      Ok(Nil)
+    other -> Error("a failure after the deadline: " <> string.inspect(other))
+  })
+  use recorded <- result.try(
+    within(again, recommend(
+      replies,
+      _,
+      late,
+      about: ana,
+      output: "tarde",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  use Nil <- result.try(expect(
+    recorded.status == occurrence.Expired(vocabulary.DeadlinePassed)
+      && recorded.policy_version == None
+      && kinds(recorded) == ["expected", "expired", "recommended"],
+    "the late recommendation is " <> string.inspect(recorded.status),
+  ))
+  use rows <- result.try(effects(again, replies))
+  use Nil <- result.try(expect(rows == [], "something was released"))
+  use notices <- result.try(
+    again.adapter.inspect.notices(again.adapter.handle) |> store_text,
+  )
+  let noticed = fn(id) {
+    list.count(notices, fn(notice: store.Notice) { notice.occurrence == id })
+  }
+  use Nil <- result.try(expect(
+    list.all([failing, waiting, late, late_first], fn(id) { noticed(id) == 1 }),
+    "settlement notices: "
+      <> string.inspect(
+      list.map([failing, waiting, late, late_first], fn(id) {
+        #(id, noticed(id))
+      }),
+    ),
+  ))
+  let result = invariants(again, [replies])
+  again.adapter.cleanup()
+  result
+}
+
+fn kinds(known: occurrence.Occurrence(o)) -> List(String) {
+  list.map(known.entries, fn(e) { entry.kind(e.event) })
+}
+
+/// The same asking desk over the restarted target.
+fn rebuilt_asking(
+  target: Target(tx),
+  old: Desk(String, tx),
+) -> Desk(String, tx) {
+  desk(target, decisions.point_of(old), asking("finance"))
+}
+
 fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
   let automatic =
     desk(target, point(unique(target, "auto"), None), proceeding())
@@ -2344,7 +2534,8 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
       case attempted {
         isolated.Recommended(_)
         | isolated.Skipped(_)
-        | isolated.Superseded(_) -> Ok(Nil)
+        | isolated.Superseded(_)
+        | isolated.Lapsed(_) -> Ok(Nil)
         isolated.Failed(failure:, ..) ->
           Error(decisions.ApplicationFailed(model.describe(failure)))
       }

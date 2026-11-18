@@ -390,41 +390,50 @@ pub fn candidate_under(
 }
 
 /// How triggers fared before a recommendation, for coverage: of the
-/// records read, how many began with an expectation (`decisions.expect`),
-/// how many of those a newer event superseded before anything was
-/// recommended, and how many are still expected with nothing recommended
-/// (work in flight, or a worker that died for good).
+/// records read, how many began with an expectation (`decisions.expect` or
+/// `decisions.expect_until`), how many of those a newer event superseded
+/// before anything was recommended, how many expired at their own
+/// deadline before anything was recommended (the expiry written: a record
+/// lapsed by the clock whose wake-up has not run yet still counts as
+/// expected), and how many are still expected with
+/// nothing recommended (work in flight, or a worker that died for good). A
+/// recommendation recorded after the deadline began the record, so it
+/// counts only as expected.
 pub type Coverage {
-  Coverage(expected: Int, superseded_before: Int, still_expected: Int)
+  Coverage(
+    expected: Int,
+    superseded_before: Int,
+    lapsed_before: Int,
+    still_expected: Int,
+  )
 }
 
 /// Count `Coverage` over records read with `decisions.read_record`.
 pub fn coverage(records: List(decisions.Record(o))) -> Coverage {
-  list.fold(records, Coverage(0, 0, 0), fn(sum, record) {
+  let expected = fn(sum: Coverage, was: Bool) {
+    case was {
+      True -> Coverage(..sum, expected: sum.expected + 1)
+      False -> sum
+    }
+  }
+  list.fold(records, Coverage(0, 0, 0, 0), fn(sum, record) {
     case record {
       decisions.Begun(known) ->
         case occurrence.was_expected(known) {
           True -> Coverage(..sum, expected: sum.expected + 1)
           False -> sum
         }
-      decisions.NotBegun(pending) ->
-        case pending.expected, pending.superseded {
-          True, Some(_) ->
-            Coverage(
-              ..sum,
-              expected: sum.expected + 1,
-              superseded_before: sum.superseded_before + 1,
-            )
-          True, None ->
-            Coverage(
-              ..sum,
-              expected: sum.expected + 1,
-              still_expected: sum.still_expected + 1,
-            )
-          False, Some(_) ->
+      decisions.NotBegun(pending) -> {
+        let sum = expected(sum, pending.expected)
+        case pending.ended, pending.expected {
+          Some(vocabulary.Superseded(_)), _ ->
             Coverage(..sum, superseded_before: sum.superseded_before + 1)
-          False, None -> sum
+          Some(vocabulary.DeadlinePassed), _ ->
+            Coverage(..sum, lapsed_before: sum.lapsed_before + 1)
+          None, True -> Coverage(..sum, still_expected: sum.still_expected + 1)
+          None, False -> sum
         }
+      }
     }
   })
 }

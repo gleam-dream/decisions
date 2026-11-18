@@ -303,7 +303,12 @@ pub fn expect_is_safe_to_repeat_and_then_recommends_test() {
     record
   }
   assert learning.coverage([read("owner:req-4"), read("owner:req-5")])
-    == learning.Coverage(expected: 2, superseded_before: 0, still_expected: 1)
+    == learning.Coverage(
+      expected: 2,
+      superseded_before: 0,
+      lapsed_before: 0,
+      still_expected: 1,
+    )
   audit(db, d)
 }
 

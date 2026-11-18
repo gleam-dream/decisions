@@ -134,7 +134,11 @@ pub fn b7_test() {
   run("B7 ")
 }
 
+pub fn own_deadline_test() {
+  run("an expected record expires at its own deadline")
+}
+
 /// Every scenario has a test above.
 pub fn every_scenario_is_run_test() {
-  assert list.length(stress.names()) == 23
+  assert list.length(stress.names()) == 24
 }
