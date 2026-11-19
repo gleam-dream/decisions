@@ -16,8 +16,9 @@ The repository holds three packages:
 | `decisions_otp`      | `integrations/decisions_otp`      | The process-safe in-memory store, the supervised runtime, isolated model calls, parallel replay and subscriptions.                |
 | `decisions_postgres` | `integrations/decisions_postgres` | The storage port over PostgreSQL, its migrations, the Grind workers for wake-ups and settlements, `NOTIFY` and the queue queries. |
 
-The two integrations depend on the root by path (`decisions = { path = "../.." }`)
-while it is unpublished. The core never depends on an integration. The design
+The core is released to Hex first. Each integration depends on the root by path
+(`decisions = { path = "../.." }`) until its own release commit replaces that
+with the core's Hex version range. The core never depends on an integration. The design
 layer under `docs/design/` owns the contracts and the vocabulary, `docs/adr/`
 records the rationale, and `docs/COVERAGE.md` maps repository parts to their
 design owners.

@@ -1930,6 +1930,9 @@ pub fn inform(
 }
 
 /// What a wake-up found.
+///
+/// It may gain variants in a minor release; keep a `_` branch where a new
+/// one needs no decision of yours.
 pub type Woken(output) {
   /// Something was due and the occurrence moved.
   Woken(occurrence: Occurrence(output))

@@ -1,6 +1,6 @@
 # An occurrence may carry its own deadline
 
-Status: in-progress
+Status: done
 Category: enhancement
 
 AI-assisted contribution.

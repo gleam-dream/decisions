@@ -71,24 +71,30 @@ application code.
 
 ## Install
 
-The packages are **not yet published on Hex**. Add them from Git:
+The packages are published on Hex one after the other: `decisions` first,
+then `decisions_otp`, then `decisions_postgres`, each once the one it depends on
+is there.
 
 ```toml
 [dependencies]
-decisions = { git = "https://github.com/gleam-dream/decisions.git", ref = "main" }
+decisions = ">= 0.1.0 and < 0.2.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
-decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "main", path = "integrations/decisions_otp" }
+decisions_otp = ">= 0.1.0 and < 0.2.0"
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "main", path = "integrations/decisions_postgres" }
+decisions_postgres = ">= 0.1.0 and < 0.2.0"
 grind = ">= 0.1.1 and < 0.2.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
 ```
 
-Commit `gleam.toml` and `manifest.toml` to retain the resolved Git commit.
+An integration not yet on Hex can be taken from Git on the default branch,
+for example
+`decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "first-build", path = "integrations/decisions_otp" }`;
+commit `manifest.toml` to keep the resolved commit. Below 1.0 a minor version
+(0.1 to 0.2) may change the API, so the ranges above stop before the next one.
 
 | Package              | Install it when                                                                                                                                                | Depends on                                                   |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -906,7 +912,7 @@ reports it in `due`.
 `Lapsed`: exhaustive matches add a branch. `wake` on a record not begun now
 answers `NothingDue` or `NotDue` where it was refused with `NotRecommended`
 or `SupersededBefore`; `waker` already treats these as done or "deliver
-again". See [ADR 0054](docs/adr/0054-an-occurrence-may-carry-its-own-deadline.md#adr-0054).
+again". See [ADR 0054](https://github.com/gleam-dream/decisions/blob/first-build/docs/adr/0054-an-occurrence-may-carry-its-own-deadline.md#adr-0054).
 
 <!-- prettier-ignore-start -->
 
@@ -1415,7 +1421,7 @@ of its own with a deadline it cannot ignore, records a failed attempt, and with
 `recommend_when` checks a precondition inside the recommending transaction. The
 in-memory store loses everything when its owner stops; use it for tests and
 for deployments that accept that. See the
-[package README](integrations/decisions_otp/README.md).
+[package README](https://github.com/gleam-dream/decisions/blob/first-build/integrations/decisions_otp/README.md).
 
 ## Run it on PostgreSQL
 
@@ -1531,7 +1537,7 @@ pages of a point's occurrences from heads alone, each on one index.
 `decisions_postgres/live` forwards `NOTIFY` hints; `subscribe` is acknowledged
 and returns the listener's process to monitor, and the listener reconnects when
 its connection drops. A client that must not miss a change also polls
-`queue.positions`. See the [package README](integrations/decisions_postgres/README.md)
+`queue.positions`. See the [package README](https://github.com/gleam-dream/decisions/blob/first-build/integrations/decisions_postgres/README.md)
 for the schema.
 
 ## What is guaranteed, and by what
@@ -1583,16 +1589,16 @@ and 7 152/s against PostgreSQL 16 with fsync off. A paged export of 10 000
 occurrences from the OTP store takes about 3.6 ms. In PostgreSQL the savepoint
 around the gated tool costs about 0.15 ms a call and the store-clock query
 about 0.07 ms. These are observational captures with scripted models; see
-[BENCHMARKS.md](docs/BENCHMARKS.md) for the method, every workload and the
+[BENCHMARKS.md](https://github.com/gleam-dream/decisions/blob/first-build/docs/BENCHMARKS.md) for the method, every workload and the
 limits.
 
 ## Examples and references
 
-- The [usage examples](examples/usage/README.md) are a separate Gleam package
+- The [usage examples](https://github.com/gleam-dream/decisions/blob/first-build/examples/usage/README.md) are a separate Gleam package
   that compiles and asserts the usage snippets above; the OTP and PostgreSQL wiring are compiled tests of their packages.
-- The [design PDF](docs/design/design-layer.pdf) describes the record, storage
-  and runtime contexts; the [decision records](docs/adr/) explain why; the
-  [coverage map](docs/COVERAGE.md) links every part of the repository to its
+- The [design PDF](https://github.com/gleam-dream/decisions/blob/first-build/docs/design/design-layer.pdf) describes the record, storage
+  and runtime contexts; the [decision records](https://github.com/gleam-dream/decisions/tree/first-build/docs/adr/) explain why; the
+  [coverage map](https://github.com/gleam-dream/decisions/blob/first-build/docs/COVERAGE.md) links every part of the repository to its
   design.
 - Three Oversight applications use the packages end to end:
   `clinic_registration` (patient registration from a conversation on
@@ -1601,4 +1607,4 @@ limits.
   OTP runtime with no database). They are in
   [gleam-dream/oversight](https://github.com/gleam-dream/oversight/tree/main/apps)
   under `apps/`, recorded in Oversight's design layer with its ADRs 0033 to 0039. Each pins this repository to one commit as Git+path dependencies.
-- See [AGENTS.md](AGENTS.md) for development and validation commands.
+- See [AGENTS.md](https://github.com/gleam-dream/decisions/blob/first-build/AGENTS.md) for development and validation commands.

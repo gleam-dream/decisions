@@ -857,6 +857,9 @@ pub fn final(occurrence: Occurrence(o)) -> Option(o) {
 
 /// What really happened to an occurrence, as a follower or an agent tells
 /// someone: the settled truth, never a status in between.
+///
+/// It may gain variants in a minor release; keep a `_` branch where a new
+/// one needs no decision of yours.
 pub type Account(output) {
   /// Nothing final yet: it waits for the policy, a consulted point or
   /// verdicts, or it is accepted and held, and can still be withdrawn.
@@ -900,6 +903,9 @@ pub fn account(occurrence: Occurrence(o)) -> Account(o) {
 }
 
 /// Who answers for an occurrence's outcome.
+///
+/// It may gain variants in a minor release; keep a `_` branch where a new
+/// one needs no decision of yours.
 pub type Responsible {
   /// The policy, at this version, let it proceed.
   ThePolicy(version: Int)
