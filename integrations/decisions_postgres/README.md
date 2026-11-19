@@ -115,7 +115,10 @@ when its job arrives; a wake-up that came early is snoozed to the time the
 waker names. A settlement job runs the follower and marks the notice delivered
 in one transaction, so the follower's database writes happen once per notice;
 a follower is `#(point name, fn(connection, occurrence id) -> Result(Nil,
-decisions.HandlerFailure))`.
+decisions.HandlerFailure))`. Every notice reaches it, including one for a
+record that ended before it began; reading with `decisions.read_record` gives
+the same `Begun` or `NotBegun` the OTP runtime hands its followers, while
+`decisions.read` refuses a record not begun.
 
 Both workers act on `decisions.handling(failure)` alone (a wake-up's
 refusal as `DeskRefused`, a waker or follower that raises as an application

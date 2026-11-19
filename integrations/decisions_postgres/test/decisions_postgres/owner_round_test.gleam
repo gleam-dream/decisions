@@ -22,6 +22,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/duration
+import gleam/time/timestamp
 import grind
 import grind/job
 import grind/worker
@@ -372,5 +373,95 @@ pub fn a_notice_for_a_record_that_never_began_ends_done_test() {
     [pog.text(key)],
     decode.bool,
   )
+  kit.check(env, [desk])
+}
+
+/// The Grind settlement worker hands the follower every notice, as the OTP
+/// runtime does (ADR 0055): a record superseded before it began and one
+/// lapsed at its own deadline each reach it once, and `read_record` reads
+/// both as `NotBegun` with their cause. Each call writes one row in the
+/// delivery's transaction, so a notice dropped or delivered twice shows.
+pub fn every_notice_reaches_the_follower_as_not_begun_test() {
+  let #(name, store) = kit.store()
+  let spec = kit.Spec(..kit.spec("not_begun"), superseded_by: ["closed"])
+  let store = decisions_postgres.following(store, spec.name)
+  let desk = kit.desk(store, spec)
+  // The follower's rows, kept apart from the gated tool's effects.
+  let followed = spec.name <> ".followed"
+  let follower = #(spec.name, fn(tx, id) {
+    use record <- result.try(
+      decisions.read_record(desk, tx, key: id)
+      |> result.map_error(decisions.DeskRefused),
+    )
+    let handed = case record {
+      decisions.NotBegun(pending) ->
+        "not begun, " <> string.inspect(pending.ended)
+      decisions.Begun(known) ->
+        "begun, " <> occurrence.status_name(known.status)
+    }
+    pog.query(
+      "INSERT INTO test_effects (occurrence, key, point) VALUES ($1, $2, $3)",
+    )
+    |> pog.parameter(pog.text(id))
+    |> pog.parameter(pog.text(handed))
+    |> pog.parameter(pog.text(followed))
+    |> pog.execute(tx)
+    |> result.replace(Nil)
+    |> result.map_error(fn(error) {
+      decisions.ApplicationFailed(string.inspect(error))
+    })
+  })
+  use env <- kit.run(name, store, kit.delivering(), [decisions.waker(desk)], [
+    follower,
+  ])
+  let superseded = kit.tag("superseded")
+  let lapsed = kit.tag("lapsed")
+  let deadline =
+    decisions_postgres.port(store).now(env.db)
+    |> timestamp.add(duration.seconds(2))
+  let assert Ok(Nil) =
+    kit.tx(env, fn(tx) {
+      use Nil <- result.try(decisions.expect(
+        desk,
+        tx,
+        key: superseded,
+        trigger: Trigger("message", superseded),
+        about: Subject("person", superseded),
+      ))
+      use _ <- result.try(decisions.happened(
+        desk,
+        tx,
+        "closed",
+        about: Subject("person", superseded),
+      ))
+      decisions.expect_until(
+        desk,
+        tx,
+        key: lapsed,
+        trigger: Trigger("message", lapsed),
+        about: Subject("person", lapsed),
+        valid_until: deadline,
+      )
+    })
+  let assert True =
+    kit.eventually(10_000, fn() { kit.effects(env.db, followed) >= 2 })
+  let assert [#("succeeded", 1), #("succeeded", 1)] =
+    kit.finished_jobs(env, "decisions.settlement")
+  let rows =
+    kit.scalar(
+      env.db,
+      "SELECT coalesce(array_agg(occurrence || ' ' || key ORDER BY occurrence), '{}')
+       FROM test_effects WHERE point = $1",
+      [pog.text(followed)],
+      decode.list(decode.string),
+    )
+  assert list.sort(rows, string.compare)
+    == list.sort(
+      [
+        superseded <> " not begun, Some(Superseded(\"closed\"))",
+        lapsed <> " not begun, Some(DeadlinePassed)",
+      ],
+      string.compare,
+    )
   kit.check(env, [desk])
 }

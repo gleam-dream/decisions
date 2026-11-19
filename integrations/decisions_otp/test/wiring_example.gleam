@@ -3,7 +3,6 @@
 //// `otp-runtime`.
 
 import decisions
-import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Ask, Policy}
 import decisions/wire
 import decisions_otp/runtime
@@ -36,13 +35,20 @@ pub fn refund_desk() -> decisions.Desk(String, store.Tx) {
   )
 }
 
-/// What follows a settled refund: here, a row in the same transaction.
+/// What follows a settled refund: here, a row in the same transaction. A
+/// record that ended before it began (superseded, or lapsed at its own
+/// deadline) is handed over too, and asks nothing of this follower.
 pub fn tell_the_customer(
   tx: store.Tx,
-  refund: occurrence.Occurrence(String),
+  record: decisions.Record(String),
 ) -> Result(Nil, decisions.HandlerFailure) {
-  store.add(tx, "outbox", "your refund " <> refund.id <> " is settled")
-  Ok(Nil)
+  case record {
+    decisions.Begun(refund) -> {
+      store.add(tx, "outbox", "your refund " <> refund.id <> " is settled")
+      Ok(Nil)
+    }
+    decisions.NotBegun(_) -> Ok(Nil)
+  }
 }
 
 /// The application's tree: the store first, then the runtime that

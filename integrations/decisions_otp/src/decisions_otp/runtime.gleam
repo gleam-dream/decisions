@@ -83,8 +83,7 @@
 //// |> static_supervisor.add(runtime.supervised(config))
 //// ```
 
-import decisions.{type Desk, type HandlerFailure, type Refusal}
-import decisions/occurrence.{type Occurrence}
+import decisions.{type Desk, type HandlerFailure, type Record, type Refusal}
 import decisions/store.{type Wake, Wake}
 import decisions/wire
 import decisions_otp/backlog.{
@@ -117,38 +116,47 @@ pub opaque type Wired(tx) {
 }
 
 /// A point to serve. `settled` runs in the transaction that marks the
-/// settlement delivered, with the occurrence as the record holds it; its
-/// writes in that transaction commit with the delivery. Return `Error` to
-/// roll the delivery back: `DeskRefused(refusal)` for a verb of a desk
-/// that refused, `ApplicationFailed(reason)` for the application's own
-/// work. See "Failure" above for what each does.
+/// settlement delivered, with the record as `decisions.read_record` reads
+/// it then; its writes in that transaction commit with the delivery.
+/// Return `Error` to roll the delivery back: `DeskRefused(refusal)` for a
+/// verb of a desk that refused, `ApplicationFailed(reason)` for the
+/// application's own work. See "Failure" above for what each does.
 ///
-/// A record that settled before it began (expected with
-/// `decisions.expect`, then superseded, or expected with
-/// `decisions.expect_until` and lapsed at its own deadline) has no
-/// occurrence to hand to `settled`: its notice is dropped as done and
-/// reported by `[decisions, job, dropped]`. The same goes for a trigger
-/// whose `recommend_once` or `record_failure` meets `SupersededBefore`, or
-/// whose `record_failure` meets `DeadlinePassedBefore`: return
-/// `DeskRefused(refusal)` and the trigger is dropped with the refusal as
-/// its reason.
+/// Every settlement notice reaches `settled`, as it does on PostgreSQL:
+///
+/// - `Begun(occurrence)`: the occurrence settled. One that lapsed at its
+///   own deadline and was then recommended late is handed over this way,
+///   expired with `DeadlinePassed`.
+/// - `NotBegun(pending)`: the record ended before it began, superseded by
+///   a newer event or lapsed at its own deadline (`decisions.expect_until`);
+///   the cause is in `pending.ended`. Its outcome is final: a superseded
+///   record never begins, and a lapsed one may still receive a late
+///   recommendation, recorded expired, which admits no second notice. Do
+///   not wait for it; the follower's own work may still fail and is
+///   handled like any other failure.
+///
+/// A trigger whose `recommend_once` or `record_failure` meets
+/// `SupersededBefore`, or whose `record_failure` meets
+/// `DeadlinePassedBefore`, is another matter: return
+/// `DeskRefused(refusal)` from `work` and the trigger is dropped with the
+/// refusal as its reason.
 pub fn point(
   desk: Desk(o, tx),
-  settled settled: fn(tx, Occurrence(o)) -> Result(Nil, HandlerFailure),
+  settled settled: fn(tx, Record(o)) -> Result(Nil, HandlerFailure),
 ) -> Wired(tx) {
   let #(name, wake) = decisions.waker(desk)
   Wired(name:, wake:, settled: fn(tx, id) {
-    use known <- result.try(
-      decisions.read(desk, tx, occurrence: id) |> result.map_error(refused),
+    use record <- result.try(
+      decisions.read_record(desk, tx, key: id) |> result.map_error(refused),
     )
-    settled(tx, known) |> result.map_error(from_handler)
+    settled(tx, record) |> result.map_error(from_handler)
   })
 }
 
 /// For a point where nothing follows a settlement.
 pub fn nothing_follows(
   _tx: tx,
-  _occurrence: Occurrence(o),
+  _record: Record(o),
 ) -> Result(Nil, HandlerFailure) {
   Ok(Nil)
 }

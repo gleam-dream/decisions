@@ -2,7 +2,6 @@
 //// work. What is lost, and what restarts it.
 
 import decisions
-import decisions/occurrence
 import decisions/store as decisions_store
 import decisions/vocabulary.{Approve, Person, Rules}
 import decisions_otp/backlog
@@ -93,7 +92,8 @@ pub fn the_dispatcher_killed_mid_delivery_loses_nothing_test() {
   let counter = lab.start()
   let inside = process.new_subject()
   let desk = lab.desk(lab.point("lab.auto", None), lab.proceeding())
-  let follow = fn(tx, known: occurrence.Occurrence(String)) {
+  let follow = fn(tx, record: decisions.Record(String)) {
+    let assert decisions.Begun(known) = record
     case calls(counter, "follow") {
       1 -> {
         process.send(inside, Nil)
@@ -227,7 +227,8 @@ pub fn a_verdict_is_followed_once_test() {
       runtime.config(
         store.backlog(s),
         points: [
-          runtime.point(desk, settled: fn(tx, known) {
+          runtime.point(desk, settled: fn(tx, record) {
+            let assert decisions.Begun(known) = record
             store.add(tx, "followed", known.id)
             Ok(Nil)
           }),
@@ -371,7 +372,8 @@ pub fn a_contended_store_is_retried_without_counting_test() {
       runtime.config(
         store.backlog(s),
         points: [
-          runtime.point(flaky, settled: fn(tx, known) {
+          runtime.point(flaky, settled: fn(tx, record) {
+            let assert decisions.Begun(known) = record
             store.add(tx, "followed", known.id)
             Ok(Nil)
           }),

@@ -77,7 +77,8 @@ pub fn a_handler_failure_is_acted_on_by_kind_test() {
       runtime.config(
         store.backlog(s),
         points: [
-          runtime.point(busy, settled: fn(tx, known) {
+          runtime.point(busy, settled: fn(tx, record) {
+            let assert decisions.Begun(known) = record
             case calls(counter, "busy") <= 6 {
               True ->
                 Error(

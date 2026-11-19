@@ -138,7 +138,11 @@ pub fn own_deadline_test() {
   run("an expected record expires at its own deadline")
 }
 
+pub fn every_settlement_notice_reaches_the_follower_test() {
+  run("every settlement notice reaches the follower")
+}
+
 /// Every scenario has a test above.
 pub fn every_scenario_is_run_test() {
-  assert list.length(stress.names()) == 24
+  assert list.length(stress.names()) == 25
 }

@@ -316,9 +316,8 @@ pub fn a_worker_drops_a_trigger_superseded_before_test() {
   let dropped = process.new_subject()
   let attachment =
     sinal.observe(telemetry.job_dropped(), fn(_, metadata) {
-      // The superseded record's settlement notice is dropped too, as a
-      // notice for a record that never began; this test is about the
-      // trigger.
+      // The superseded record's settlement notice goes to the follower,
+      // as `NotBegun`; this test is about the trigger.
       case metadata.queue {
         telemetry.TriggerQueue -> process.send(dropped, metadata)
         _ -> Nil

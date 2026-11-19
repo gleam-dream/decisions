@@ -25,6 +25,8 @@
 //// | B5 | a random child of the runtime killed every 50 ms while occurrences move; the triggers arrive in waves paced by the kills, so at least five children die while work is in flight at any load: all settle |
 //// | B6 | a record that no longer decodes is set aside at once; a settlement handler and a trigger that always fail are set aside after three attempts; the jobs behind them are delivered |
 //// | B7 | a model that raises and one that hangs: a typed failure within the deadline, on the record |
+//// | own deadline | four keys expected with one deadline of their own, the store restarted before it: each expires once at the deadline, a late recommendation is recorded expired, a late failure and a late verdict are refused |
+//// | every notice | a record superseded before it began, one lapsed at its own deadline, two lapsed and recommended late (before and after their wake-up), and one rejected: the runtime hands each settlement notice to the point's follower exactly once, none dropped or set aside |
 ////
 //// A database adapter's test runs them like this:
 ////
@@ -211,6 +213,10 @@ pub fn scenarios() -> List(Scenario(tx)) {
     Scenario(
       "an expected record expires at its own deadline through a restart",
       own_deadline,
+    ),
+    Scenario(
+      "every settlement notice reaches the follower, begun or not",
+      every_notice,
     ),
   ]
 }
@@ -2477,6 +2483,214 @@ fn kinds(known: occurrence.Occurrence(o)) -> List(String) {
   list.map(known.entries, fn(e) { entry.kind(e.event) })
 }
 
+/// Five records about five subjects end four ways; the runtime delivers
+/// their settlement notices. The follower writes one row per call in the
+/// delivery's transaction, with no de-duplication, so a notice dropped or
+/// delivered twice shows.
+fn every_notice(target: Target(tx), _load: Load) -> Result(Nil, String) {
+  let desk =
+    desk(target, point(unique(target, "notices"), None), asking("finance"))
+  let table = unique(target, "followed")
+  let key = fn(name) { unique(target, name) }
+  let #(superseded, lapsed, late, woken, rejected) = #(
+    key("superseded"),
+    key("lapsed"),
+    key("late"),
+    key("woken"),
+    key("rejected"),
+  )
+  let about = fn(id) { Subject("person", id) }
+  let deadline =
+    timestamp.add(target.backlog.now(), duration.minutes(1))
+    |> wire.milliseconds
+    |> wire.from_milliseconds
+  let expect_by = fn(tx, id) {
+    decisions.expect_until(
+      desk,
+      tx,
+      key: id,
+      trigger: Trigger("stress", id),
+      about: about(id),
+      valid_until: deadline,
+    )
+  }
+  use Nil <- result.try(
+    within(target, fn(tx) {
+      use Nil <- result.try(decisions.expect(
+        desk,
+        tx,
+        key: superseded,
+        trigger: Trigger("stress", superseded),
+        about: about(superseded),
+      ))
+      use _ <- result.try(decisions.happened(
+        desk,
+        tx,
+        "superseded",
+        about: about(superseded),
+      ))
+      use Nil <- result.try(expect_by(tx, lapsed))
+      use Nil <- result.try(expect_by(tx, late))
+      use Nil <- result.try(expect_by(tx, woken))
+      use _ <- result.try(recommend(
+        desk,
+        tx,
+        rejected,
+        about: about(rejected),
+        output: "no",
+        by: Rules("rules", "1"),
+        score: 0.5,
+      ))
+      open_and_decide(
+        desk,
+        tx,
+        rejected,
+        Validator(subject: "bia", holds: ["finance"]),
+        Reject(Reason("no", None)),
+      )
+      |> result.replace(Nil)
+    })
+    |> result.map_error(said),
+  )
+  // Past the deadline, the late key is recommended before any wake-up; the
+  // woken key is expired by its wake-up first, which admits its notice
+  // while it has not begun, and recommended after: its notice is read at
+  // delivery, as begun.
+  target.advance(duration.minutes(2))
+  use _ <- result.try(
+    within(target, decisions.wake(desk, _, occurrence: woken))
+    |> result.map_error(said),
+  )
+  use _ <- result.try(
+    within(target, recommend(
+      desk,
+      _,
+      woken,
+      about: about(woken),
+      output: "tarde",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  use _ <- result.try(
+    within(target, recommend(
+      desk,
+      _,
+      late,
+      about: about(late),
+      output: "tarde",
+      by: Rules("rules", "1"),
+      score: 0.5,
+    ))
+    |> result.map_error(said),
+  )
+  let follow = fn(tx, record: decisions.Record(String)) {
+    target.add(tx, table, handed(record))
+    |> result.map_error(decisions.ApplicationFailed)
+  }
+  let config =
+    runtime.config(
+      target.backlog,
+      points: [runtime.point(desk, settled: follow)],
+      work: nothing,
+    )
+    |> quick
+  use supervisor <- result.try(start_runtime(config))
+  let rows = fn() {
+    target.rows(target.adapter.handle, table) |> result.unwrap([])
+  }
+  let keys = [superseded, lapsed, late, woken, rejected]
+  let settled =
+    wait_until(
+      fn() {
+        list.length(rows()) >= list.length(keys)
+        || {
+          // The head first: a lapse and its notice commit together, so
+          // an empty backlog read after it holds no notice of the lapse.
+          target.adapter.inspect.head(target.adapter.handle, lapsed)
+          |> result.map(option.map(_, fn(head: store.Head) { head.status }))
+          == Ok(Some(store.Expired))
+          && target.backlog.undelivered(100) == Ok([])
+        }
+      },
+      within: 20_000,
+    )
+  // Let a delivery in flight finish before counting.
+  process.sleep(50)
+  stop_runtime(supervisor)
+  let followed = rows()
+  use undelivered <- result.try(target.backlog.undelivered(100) |> store_text)
+  use aside <- result.try(target.backlog.aside() |> store_text)
+  use Nil <- result.try(expect(
+    settled,
+    "the runtime did not settle its notices",
+  ))
+  let wanted = [
+    superseded <> " not begun, superseded",
+    lapsed <> " not begun, deadline passed",
+    late <> " begun, expired, deadline passed",
+    woken <> " begun, expired, deadline passed",
+    rejected <> " begun, rejected",
+  ]
+  use Nil <- result.try(expect(
+    list.sort(followed, string.compare) == list.sort(wanted, string.compare),
+    "the follower was handed "
+      <> string.inspect(followed)
+      <> " where "
+      <> string.inspect(wanted)
+      <> " was due",
+  ))
+  use Nil <- result.try(expect(
+    undelivered == [] && aside == [],
+    "notices left: " <> string.inspect(#(undelivered, aside)),
+  ))
+  use notices <- result.try(
+    target.adapter.inspect.notices(target.adapter.handle) |> store_text,
+  )
+  use Nil <- result.try(expect(
+    list.all(keys, fn(id) {
+      list.count(notices, fn(notice: store.Notice) { notice.occurrence == id })
+      == 1
+    }),
+    "settlement notices: " <> string.inspect(notices),
+  ))
+  invariants(target, [desk])
+}
+
+/// What a follower was handed, as one line: the key, whether the record
+/// had begun, and how it ended.
+fn handed(record: decisions.Record(String)) -> String {
+  let cause = fn(cause) {
+    case cause {
+      vocabulary.Superseded(_) -> "superseded"
+      vocabulary.DeadlinePassed -> "deadline passed"
+    }
+  }
+  case record {
+    decisions.NotBegun(pending) ->
+      pending.id
+      <> " not begun, "
+      <> option.map(pending.ended, cause) |> option.unwrap("not ended")
+    decisions.Begun(known) ->
+      known.id
+      <> " begun, "
+      <> occurrence.status_name(known.status)
+      <> case known.status {
+        occurrence.Expired(ended) -> ", " <> cause(ended)
+        _ -> ""
+      }
+  }
+}
+
+/// The key of a record handed to a follower.
+fn key_of(record: decisions.Record(o)) -> String {
+  case record {
+    decisions.Begun(known) -> known.id
+    decisions.NotBegun(pending) -> pending.id
+  }
+}
+
 /// The same asking desk over the restarted target.
 fn rebuilt_asking(
   target: Target(tx),
@@ -2543,12 +2757,13 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
   }
   // What follows a settlement: one row per occurrence, written in the
   // delivery's own transaction.
-  let follow = fn(tx, known: occurrence.Occurrence(String)) {
+  let follow = fn(tx, record: decisions.Record(String)) {
+    let id = key_of(record)
     {
       use rows <- result.try(target.rows(tx, "followed"))
-      case list.contains(rows, known.id) {
+      case list.contains(rows, id) {
         True -> Ok(Nil)
-        False -> target.add(tx, "followed", known.id)
+        False -> target.add(tx, "followed", id)
       }
     }
     |> result.map_error(decisions.ApplicationFailed)

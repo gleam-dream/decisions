@@ -894,13 +894,13 @@ before the deadline and held is still released when its hold ends, as with a
 point's validity. If nothing may happen after the deadline, check it in the
 gated tool's guard or the release check.
 
-A record admits one settlement notice, from whichever write ended it. What
-a follower reads for it depends on when the notice is delivered: before a
-late recommendation commits, `decisions.read` answers
-`DeadlinePassedBefore`; after, it returns the expired occurrence. A later
-recommendation admits no second notice. PostgreSQL hands such a notice to
-the point's follower; the OTP runtime drops a notice whose record has not
-begun as done. Read late outputs from the records, not from the notices.
+A record admits one settlement notice, from whichever write ended it, and
+both runtimes hand it to the point's follower. What the follower reads
+depends on when the notice is delivered: before a late recommendation
+commits, `decisions.read_record` answers `NotBegun` with the deadline as
+its cause (`decisions.read` refuses with `DeadlinePassedBefore`); after, it
+answers `Begun` with the expired occurrence. A later recommendation admits
+no second notice. Read late outputs from the records, not from the notices.
 
 The record not begun is due at its deadline: `decisions_postgres/queue.pending`
 reports it in `due`.
@@ -1365,13 +1365,20 @@ pub fn refund_desk() -> decisions.Desk(String, store.Tx) {
   )
 }
 
-/// What follows a settled refund: here, a row in the same transaction.
+/// What follows a settled refund: here, a row in the same transaction. A
+/// record that ended before it began (superseded, or lapsed at its own
+/// deadline) is handed over too, and asks nothing of this follower.
 pub fn tell_the_customer(
   tx: store.Tx,
-  refund: occurrence.Occurrence(String),
+  record: decisions.Record(String),
 ) -> Result(Nil, decisions.HandlerFailure) {
-  store.add(tx, "outbox", "your refund " <> refund.id <> " is settled")
-  Ok(Nil)
+  case record {
+    decisions.Begun(refund) -> {
+      store.add(tx, "outbox", "your refund " <> refund.id <> " is settled")
+      Ok(Nil)
+    }
+    decisions.NotBegun(_) -> Ok(Nil)
+  }
 }
 
 /// The application's tree: the store first, then the runtime that

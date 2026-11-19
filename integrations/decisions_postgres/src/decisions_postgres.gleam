@@ -1538,10 +1538,17 @@ pub type NoticeJob {
 }
 
 /// What follows a point's settlements: given the transaction and the
-/// settled occurrence's id, it starts what comes next, typically by reading
-/// the occurrence (`decisions.read`) and calling a verb of another desk or
-/// resuming a run. An `Error` rolls the delivery back; what happens next
-/// depends on the failure (see `settlement_worker`). Wrap a verb's refusal
+/// settled record's id, it starts what comes next, typically by reading the
+/// record and calling a verb of another desk or resuming a run. Every
+/// notice reaches it, including one for a record that ended before it
+/// began. Read it with `decisions.read_record` to get the same
+/// `Begun(occurrence)` or `NotBegun(pending)` the OTP runtime hands its
+/// followers (ADR 0055); `decisions.read` refuses a record not begun. The
+/// outcome of a record not begun is final (a lapsed one may still record
+/// a late recommendation, expired, with no second notice): do not wait
+/// for it to begin. An
+/// `Error` rolls the delivery back; what happens next depends on the
+/// failure (see `settlement_worker`). Wrap a verb's refusal
 /// in `decisions.DeskRefused`, and the application's own failure, such as
 /// a call to another system, in `decisions.ApplicationFailed`.
 pub type Follower =
