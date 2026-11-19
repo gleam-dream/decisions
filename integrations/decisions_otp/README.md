@@ -3,7 +3,7 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-The BEAM around [`decisions`](../../README.md): everything that needs
+The BEAM around [`decisions`](https://github.com/gleam-dream/decisions/blob/first-build/README.md): everything that needs
 processes, and nothing that keeps the truth. The record stays in the store.
 Every process this package starts acts on rows and keeps none, so each can be
 killed at any instant and its replacement carries on.
@@ -81,11 +81,11 @@ nix develop ../.. --command bash -c 'gleam format --check src test bench/src && 
 
 The scale run (condition H and use case 12 against the in-memory store)
 prints its load and the machine with every number; the retained capture is in
-[`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md):
+[`docs/BENCHMARKS.md`](https://github.com/gleam-dream/decisions/blob/first-build/docs/BENCHMARKS.md):
 
 ```sh
 cd bench && nix develop ../../.. --command gleam run
 ```
 
 The design of this package is in the runtime and storage contexts of the
-[design layer](../../docs/design/design-layer.pdf).
+[design layer](https://github.com/gleam-dream/decisions/blob/first-build/docs/design/design-layer.pdf).
