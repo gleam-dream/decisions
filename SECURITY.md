@@ -4,14 +4,16 @@
 
 This repository holds three packages: `decisions`, `decisions_otp` and
 `decisions_postgres`. Security fixes are released for the latest minor version
-of each package published on [Hex](https://hex.pm/packages/decisions). Older
-versions do not receive patches; upgrade to the latest release to get a fix.
-Until a package has its first Hex release, fixes land on the `main` branch.
+of `decisions` on [Hex](https://hex.pm/packages/decisions), and for the latest
+Git tag of each integration (`decisions_otp-v…`, `decisions_postgres-v…`), which
+are not on Hex. Older versions do not receive patches; upgrade to the latest
+release to get a fix. Fixes land first on the default branch, `first-build`.
 
-| Version                     | Supported |
-| --------------------------- | --------- |
-| Latest minor release on Hex | Yes       |
-| Older releases              | No        |
+| Version                                                 | Supported |
+| ------------------------------------------------------- | --------- |
+| Latest minor release of `decisions` on Hex              | Yes       |
+| Latest Git tag of `decisions_otp`, `decisions_postgres` | Yes       |
+| Older releases                                          | No        |
 
 ## Reporting a vulnerability
 

@@ -71,30 +71,29 @@ application code.
 
 ## Install
 
-The packages are published on Hex one after the other: `decisions` first,
-then `decisions_otp`, then `decisions_postgres`, each once the one it depends on
-is there.
+`decisions` is published on Hex. The two integrations are not: take them from
+this repository by Git tag, one tag per package and version
+(`decisions_otp-v0.1.0`, `decisions_postgres-v0.1.0`). They may be published on
+Hex later.
 
 ```toml
 [dependencies]
 decisions = ">= 0.1.0 and < 0.2.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
-decisions_otp = ">= 0.1.0 and < 0.2.0"
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.1.0", path = "integrations/decisions_otp" }
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = ">= 0.1.0 and < 0.2.0"
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.1.0", path = "integrations/decisions_postgres" }
 grind = ">= 0.1.1 and < 0.2.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
 ```
 
-An integration not yet on Hex can be taken from Git on the default branch,
-for example
-`decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "first-build", path = "integrations/decisions_otp" }`;
-commit `manifest.toml` to keep the resolved commit. Below 1.0 a minor version
-(0.1 to 0.2) may change the API, so the ranges above stop before the next one.
+Commit `manifest.toml` to keep the resolved commit of each tag. Below 1.0 a
+minor version (0.1 to 0.2) may change the API, so the core's range stops before
+the next one; a new integration tag says which core range it takes.
 
 | Package              | Install it when                                                                                                                                                | Depends on                                                   |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |

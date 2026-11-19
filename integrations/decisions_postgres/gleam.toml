@@ -8,8 +8,8 @@ repository = { type = "github", user = "gleam-dream", repo = "decisions" }
 internal_modules = ["decisions_postgres/internal", "decisions_postgres/internal/*"]
 
 [dependencies]
-# The core, by path until this package's own release, which depends on the
-# core's Hex version range instead.
+# The core, by path until this package's release commit (a Git tag, not a
+# Hex release), which takes the core's Hex version range instead.
 decisions = { path = "../.." }
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
