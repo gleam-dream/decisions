@@ -20,7 +20,7 @@ The core is released to Hex. The integrations are released as Git tags of this
 repository (`decisions_otp-v0.1.0`, `decisions_postgres-v0.1.0`), not on Hex.
 An integration's release commit replaces its path dependency on the root
 (`decisions = { path = "../.." }`) with the core's Hex version range;
-`decisions_otp` has done so, and tests against the published core. The core never depends on an integration. The design
+both have done so, and test against the published core. The core never depends on an integration. The design
 layer under `docs/design/` owns the contracts and the vocabulary, `docs/adr/`
 records the rationale, and `docs/COVERAGE.md` maps repository parts to their
 design owners.
