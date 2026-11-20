@@ -2,7 +2,7 @@
 
 <a id="adr-0057"></a>
 
-Recorded on 2026-11-19. Amends nothing; the public API of `decisions/wire` and `decisions/view` is unchanged. It ships with the next release of the core: until then the integrations, which build against the published core, keep its former `wire.Codec`.
+Recorded on 2026-11-19. Amends nothing; the public API of `decisions/wire` and `decisions/view` is unchanged. It ships in core 0.1.1. The integrations build against the published core, so they keep the former `wire.Codec` until their own releases move to 0.1.1.
 
 ## Decision
 
@@ -26,7 +26,7 @@ Revisit when json_blueprint holds a record's continuation once ([json_blueprint 
 ## What changes for consumers
 
 - Nothing in the API, the stored text or the card document: schemas, documents, decoding results, error texts and placeholders are byte for byte the same.
-- From the next release of the core, a point built with `wire.codec` copies about as much as its json_blueprint codec: 1 664 bytes instead of 13 776 for the nested output in the test. A desk carried in a Grind job's closure, or held in actor state, is then copied with that much less. The integrations get it when they move to that release.
+- From core 0.1.1, a point built with `wire.codec` copies about as much as its json_blueprint codec: 1 664 bytes instead of 13 776 for the nested output in the test. A desk carried in a Grind job's closure, or held in actor state, is then copied with that much less. The integrations get it when their own releases move to 0.1.1.
 - `wire.schema` and `wire.decoder` build their result on each call. Code that calls them in a loop can keep the result for the loop's length.
 - Applications on `json_blueprint < 2.1.1` must upgrade; the new floor requires it.
 
