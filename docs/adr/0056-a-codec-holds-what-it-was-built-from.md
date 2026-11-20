@@ -6,15 +6,15 @@ Recorded on 2026-11-19. Amends nothing; the public API of `decisions/wire` and `
 
 ## Decision
 
-- Every package requires `json_blueprint >= 2.1.1`. Before 2.1.1 its combinator codecs grew in size when copied between processes, because a copy does not keep sharing. The integrations depend on the published core, whose range still admits 2.0.0, so each lists `json_blueprint` as a floor even though it does not import it.
+- Every package requires `json_blueprint >= 2.1.1`. Before 2.1.1 a copy of a combinator codec to another process multiplied in size at each nesting layer, because a copy does not keep sharing; from 2.1.1 each layer adds a roughly fixed amount. The integrations depend on the published core, whose range still admits 2.0.0, so each lists `json_blueprint` as a floor even though it does not import it.
 - `wire.Codec` holds only what it was built from: the json_blueprint codec for `wire.codec`, or the encoder and the decoder for `wire.plain`. `encode`, `decoder`, `schema` and `blueprint` derive what they return each time they are called. Before, a codec held the json_blueprint codec, an encode closure over it, `blueprint.decoder(it)` (a second closure over it) and the rendered schema.
 - `view.codec(output)` binds nothing before its fields. The output's schema is rendered inside the `output_schema` field when a document is encoded, not parsed once and captured by the fields after it. The point's codec is the only value from outside the document that its fields capture.
-- `test/codec_copy_size_test.gleam` holds both, measured as `erts_debug:flat_size * 8`, the bytes a send copies: a point's codec copies at most 64 bytes more than its json_blueprint codec, a desk's waker (the term a Grind job's closure holds) at most 1 024 bytes more, and the card codec over a nested output stays under 24 000 bytes.
+- `test/codec_copy_size_test.gleam` holds both, measured as `erts_debug:flat_size` times the word size, the bytes a send copies: a point's codec copies at most 64 bytes more than its json_blueprint codec, a desk's waker (the term a Grind job's closure holds) at most 1 024 bytes more, and the card codec over a nested output stays under 24 000 bytes.
 - No generated codecs in this change. The core's envelopes need none, and the card document cannot have one; see the assessment below.
 
 ## Assessment: generated codecs
 
-The json_blueprint guide recommends generated codecs for fixed, hot, long-lived or cross-process shapes. For each shape in decisions:
+The json_blueprint guide recommends a generated codec when the shape is fixed and the codec is hot, long-lived or held by other processes. For each shape in decisions:
 
 - **Entries and the wire helpers** (`decisions/entry`, the encoders and decoders in `decisions/wire`): these are `gleam/json` encoders and `gleam/dynamic/decode` decoders that top-level functions build per call. No process holds them, so they cost nothing to copy, and generating them would change nothing about copying. They are hot when a store decodes a record, but a measured decode cost would be a separate question.
 - **The card document** (`view.codec`): its fixed fields (refs, subject, items, approvals, verdicts) are built inside their fields by top-level functions, so the card codec does not multiply them. Its output fields are the point's own type, which only the application knows. json_blueprint's generator compiles a definition of concrete shapes into a module, so it cannot generate a document over any output. Generating only the fixed parts would shrink the card codec's base, about 4.4 kB, and nothing else.
@@ -39,7 +39,7 @@ Revisit when json_blueprint holds a record's continuation once ([json_blueprint 
 
 ## Evidence and history
 
-- The copied size in bytes (`erts_debug:flat_size * 8`) with json_blueprint 2.1.1, for the nested output of `test/codec_copy_size_test.gleam` (a record holding a record and a list of records):
+- The copied size in bytes (`erts_debug:flat_size` times the word size, 8 bytes on this 64-bit machine) with json_blueprint 2.1.1, for the nested output of `test/codec_copy_size_test.gleam` (a record holding a record and a list of records):
 
 | Term                         | Before  | After  |
 | ---------------------------- | ------- | ------ |

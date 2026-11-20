@@ -12,5 +12,5 @@ stash(Value) ->
 unstash() -> get(decisions_test_stash).
 
 %% The bytes a copy of the term takes when sent to another process: the
-%% flat size, which does not keep sharing, in words of 8 bytes.
-copied_bytes(Term) -> erts_debug:flat_size(Term) * 8.
+%% flat size, which does not keep sharing, times the word size.
+copied_bytes(Term) -> erts_debug:flat_size(Term) * erlang:system_info(wordsize).

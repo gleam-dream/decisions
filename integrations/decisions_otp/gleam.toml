@@ -18,8 +18,8 @@ gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 # Not imported here: a floor for the codecs a point holds. The published
-# core allows json_blueprint 2.0.0, whose combinator codecs grow when
-# copied between processes; 2.1.1 fixes that.
+# core allows json_blueprint 2.0.0, whose combinator codecs multiply in
+# size at each nesting layer when copied between processes; 2.1.1 fixes that.
 json_blueprint = ">= 2.1.1 and < 3.0.0"
 sinal = ">= 0.1.0 and < 0.2.0"
 

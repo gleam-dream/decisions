@@ -17,9 +17,9 @@ An application should be able to hand `decisions_otp` a model that is built insi
 
 ## Evidence
 
-- `integrations/decisions_otp/src/decisions_otp/isolated.gleam:70`: `call` starts `process.spawn_unlinked(fn() { .. model.run(inner, context, sources) .. })`, which captures `inner` on every call.
-- `integrations/decisions_otp/src/decisions_otp/replay.gleam:40`: `replay` passes `map` a closure that captures `candidate`; `start` at `replay.gleam:137` spawns one process per share with that closure.
-- Measured with json_blueprint 2.1.1 (`erts_debug:flat_size * 8`, the bytes a send copies): a `model.new` whose function captures `wire.codec` over the nested output of `test/codec_copy_size_test.gleam` copies 1 720 bytes; the json_blueprint codec alone copies 1 640. The cost of each call grows with whatever else the model captures.
+- `integrations/decisions_otp/src/decisions_otp/isolated.gleam:75`: `call` starts `process.spawn_unlinked(fn() { .. model.run(inner, context, sources) .. })`, which captures `inner` on every call.
+- `integrations/decisions_otp/src/decisions_otp/replay.gleam:45`: `replay` passes `map` a closure that captures `candidate`; `start` at `replay.gleam:142` spawns one process per share with that closure.
+- Measured with json_blueprint 2.1.1 (`erts_debug:flat_size` times the word size, the bytes a send copies): a `model.new` whose function captures `wire.codec` over the nested output of `test/codec_copy_size_test.gleam` copies 1 720 bytes; the json_blueprint codec alone copies 1 640. The cost of each call grows with whatever else the model captures.
 - Until this is built, the docs of `isolated.model` and `replay.replay`, and the README section "A point's codec, and what copying it costs", tell consumers to keep a model small and build heavy values inside its function.
 
 ## Done when
