@@ -9,7 +9,7 @@
 packages = [
   { name = "backoff", version = "1.1.6", build_tools = ["rebar3"], requirements = [], otp_app = "backoff", source = "hex", outer_checksum = "CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39" },
   { name = "decisions", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_json", "gleam_stdlib", "gleam_time", "json_blueprint"], otp_app = "decisions", source = "hex", outer_checksum = "30D6ACB4C164628C3E0F7255FC873B056D5888BDC7AAD3250CD4FB0EB1147CE0" },
-  { name = "decisions_otp", version = "0.1.0", build_tools = ["gleam"], requirements = ["decisions", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "sinal"], source = "local", path = "../decisions_otp" },
+  { name = "decisions_otp", version = "0.1.0", build_tools = ["gleam"], requirements = ["decisions", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "json_blueprint", "sinal"], source = "local", path = "../decisions_otp" },
   { name = "exception", version = "2.1.1", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "exception", source = "hex", outer_checksum = "6BDEA95248093599391C3B5DF1835C5C6A86C353C2F99CE539B450E3432FE117" },
   { name = "gleam_crypto", version = "1.6.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_crypto", source = "hex", outer_checksum = "2DE9E4EF53CF6FEE049D4F765731F7178F7A11AEFAE00EEE63BF7536B354AD3F" },
   { name = "gleam_erlang", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "1124AD3AA21143E5AF0FC5CF3D9529F6DB8CA03E43A55711B60B6B7B3874375C" },
@@ -19,7 +19,7 @@ packages = [
   { name = "gleam_time", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_time", source = "hex", outer_checksum = "3AB789C3ED4EB9DDA7283F46C3CF83A5487C9CFB790DC3FF8F8ACB5BF7B7A6C1" },
   { name = "gleeunit", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "EC31ABA74256AEA531EDF8169931D775BBB384FED0A8A1BDC4DD9354E3E21826" },
   { name = "grind", version = "0.1.1", build_tools = ["gleam"], requirements = ["exception", "gleam_erlang", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "pgo", "pog", "sinal"], otp_app = "grind", source = "hex", outer_checksum = "47C6F78ACEF063FC59D00B54E78201CA02C63836F61BED45EE40688FFADD0E59" },
-  { name = "json_blueprint", version = "2.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_json", "gleam_stdlib"], otp_app = "json_blueprint", source = "hex", outer_checksum = "5EA2604561F596B64116047B1F9ED86DBF44C414A7B1A588A6A40A33579C7DB1" },
+  { name = "json_blueprint", version = "2.1.1", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_json", "gleam_stdlib"], otp_app = "json_blueprint", source = "hex", outer_checksum = "6726C43158582C2414DD41F49A1CA3CE52B20643339075DF7DE14C65A5E49729" },
   { name = "opentelemetry_api", version = "1.5.0", build_tools = ["rebar3", "mix"], requirements = [], otp_app = "opentelemetry_api", source = "hex", outer_checksum = "F53EC8A1337AE4A487D43AC89DA4BD3A3C99DDF576655D071DEED8B56A2D5DDA" },
   { name = "pg_types", version = "0.6.0", build_tools = ["rebar3"], requirements = [], otp_app = "pg_types", source = "hex", outer_checksum = "9949A4849DD13408FA249AB7B745E0D2DFDB9532AEE2B9722326E33CD082A778" },
   { name = "pgo", version = "0.20.0", build_tools = ["rebar3"], requirements = ["backoff", "opentelemetry_api", "pg_types"], otp_app = "pgo", source = "hex", outer_checksum = "2F11E6649CEB38E569EF56B16BE1D04874AE5B11A02867080A2817CE423C683B" },
@@ -38,6 +38,7 @@ gleam_stdlib = { version = ">= 0.70.0 and < 2.0.0" }
 gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 grind = { version = ">= 0.1.1 and < 0.2.0" }
+json_blueprint = { version = ">= 2.1.1 and < 3.0.0" }
 pgo = { version = ">= 0.20.0 and < 0.21.0" }
 pog = { version = ">= 4.1.0 and < 4.2.0" }
 sinal = { version = ">= 0.1.0 and < 0.2.0" }
