@@ -78,7 +78,7 @@ Hex later.
 
 ```toml
 [dependencies]
-decisions = ">= 0.1.0 and < 0.2.0"
+decisions = ">= 0.1.1 and < 0.2.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
 decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.1.0", path = "integrations/decisions_otp" }
@@ -1265,10 +1265,10 @@ copies your values:
   copied. Build it where a card is encoded or decoded, and do not keep it in
   state that travels.
 
-From the next release of the core, a codec built with `wire.codec` holds only
-the json_blueprint codec it was given, and one built with `wire.plain` holds
-only its encoder and decoder. Before that release, `wire.codec` also holds a
-rendered schema and two closures over the codec. Every package requires
+From core 0.1.1, a codec built with `wire.codec` holds only the json_blueprint
+codec it was given, and one built with `wire.plain` holds only its encoder and
+decoder. In 0.1.0, `wire.codec` also holds a rendered schema and two closures
+over the codec. Every package requires
 `json_blueprint >= 2.1.1`, whose combinator codecs no longer multiply in size at
 each nesting layer when copied.
 
