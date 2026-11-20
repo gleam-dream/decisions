@@ -1244,37 +1244,37 @@ pub fn read(text: String) -> Result(View(Refund), String) {
 
 ## A point's codec, and what copying it costs
 
-A point holds its output codec. `wire.codec` keeps only the json_blueprint codec
-it was given and derives the encoder, decoder and schema when they are asked
-for; `wire.plain` keeps only its encoder and decoder.
+A point holds its output codec, and a point is copied wherever its desk goes.
+A copy between processes does not keep sharing, so whatever a codec captures is
+copied once per closure that holds it. These are the places where decisions
+copies your values:
 
-A point is copied wherever its desk goes. With `decisions_postgres`, the wake
-and settlement workers hold your wakers and followers, and so your desks, in
-the closure of every Grind job, which Grind copies several times per job. With
-`decisions_otp`, the runtime's processes keep them in their state, which is
-copied each time one of them starts or restarts. A copy between processes does not keep sharing, so
-what an output codec captures is copied once per closure that captures it. Keep
-a point's codec small:
+- `decisions_postgres`: the wake and settlement workers hold your wakers and
+  followers, and so your desks and points, in the closure of every Grind job.
+  Grind copies that closure several times per job.
+- `decisions_otp`: the runtime's processes hold the same values in their state,
+  which is copied each time one of them starts or restarts.
+- `decisions_otp`: `isolated.model` runs your `Model` in a new process for each
+  call, and `replay.replay` runs it in a new process for each share. Either way
+  the model, and every value its function captures, is copied each time. Keep
+  the model small: build heavy values, such as the codec of a structured model
+  answer, inside the model's function rather than capturing them.
+- `view.codec(output)` holds about twelve copies of the point's codec when it is
+  copied. Build it where a card is encoded or decoded, and do not keep it in
+  state that travels.
 
-- Require `json_blueprint >= 2.1.1`. Earlier combinator codecs grow when
-  copied.
-- Prefer a generated codec for an output whose shape is fixed, and
-  combinators for enums and unions known only at run time, custom codecs and
-  one-off shapes.
-- Build each child codec inside its field, as the field's `of:` or by a
-  top-level function. Never `let`-bind a child codec, or a large value, that
-  later fields capture: every field after it copies it again.
-- Build the point's codec in a top-level function, and do not send built
-  codecs, or values that hold them, to another process on every operation.
-- `view.codec(output)` holds about twelve copies of the point's codec when it
-  is copied. Build it where a card is encoded or decoded, not in state that
-  travels.
-- To guard a codec, assert its copied size in a test:
-  `erts_debug:flat_size(Codec) * 8` bytes.
+From the next release of the core, a codec built with `wire.codec` holds only
+the json_blueprint codec it was given, and one built with `wire.plain` holds
+only its encoder and decoder. Before that release, `wire.codec` also holds a
+rendered schema and two closures over the codec. Every package requires
+`json_blueprint >= 2.1.1`, whose combinator codecs no longer grow when copied.
 
-json_blueprint's
-[codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md)
-explains the rules. [ADR-0056](docs/adr/0056-a-codec-holds-what-it-was-built-from.md#adr-0056)
+To guard what a point costs, assert in a test the bytes a send copies,
+`erts_debug:flat_size(Term) * 8`, for the term that travels, such as
+`decisions.waker(desk)`. For how to write a codec that stays small (generated
+or combinator, and where to build child codecs), follow json_blueprint's
+[codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
+[ADR-0056](docs/adr/0056-a-codec-holds-what-it-was-built-from.md#adr-0056)
 records decisions' part and the measurements.
 
 ## Learn and replay

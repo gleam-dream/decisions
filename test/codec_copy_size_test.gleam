@@ -5,6 +5,8 @@
 //// closures is copied once per closure. The bytes measured here are the
 //// flat size of each term, as a send copies it.
 
+import decisions.{Gated}
+import decisions/memory
 import decisions/view
 import decisions/wire
 import gleam/option.{type Option}
@@ -78,6 +80,23 @@ pub fn a_point_codec_costs_about_its_blueprint_test() {
   let bare = copied_bytes(order())
   let held = copied_bytes(wire.codec(order()))
   assert held <= bare + 64
+}
+
+/// The term that travels: a desk's waker, which a Grind job's closure or a
+/// runtime process's state holds. It carries the point's codec once.
+pub fn a_waker_carries_its_point_codec_once_test() {
+  let desk =
+    decisions.desk(
+      decisions.point("orders.order", wire.codec(order())),
+      drives: fn(_) {
+        Gated(name: "ship", guard: fn(_, _) { Ok([]) }, execute: fn(_, _) {
+          Ok(Nil)
+        })
+      },
+      under: fn(_) { Error("no policy") },
+      over: memory.port(),
+    )
+  assert copied_bytes(decisions.waker(desk)) <= copied_bytes(order()) + 1024
 }
 
 /// The card codec over a nested output stays small: neither the output

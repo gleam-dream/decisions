@@ -29,22 +29,13 @@
 //// ```
 ////
 //// A point holds its codec, and a point is copied wherever its desk goes:
-//// into a Grind job's closure, which is copied several times per job, and
-//// into an actor's state. A copy between processes does not keep sharing,
-//// so write a point's json_blueprint codec to stay small when copied (see
-//// json_blueprint's
-//// [codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md)):
-////
-//// - require `json_blueprint >= 2.1.1`;
-//// - prefer a generated codec for an output whose shape is fixed;
-//// - build each child codec inside its field, as the field's `of:` or by
-////   a top-level function, and never `let`-bind a child codec or a large
-////   value that later fields capture;
-//// - build the codec in a top-level function, as `refund` does above, and
-////   do not send built codecs, or values that hold them, to another
-////   process on every operation.
-////
-//// `Codec` itself holds only the codec it was built from.
+//// into Grind job closures, into the state of `decisions_otp`'s processes,
+//// and, through a model that captures a codec, into each isolated model
+//// call. A copy between processes does not keep sharing. `Codec` therefore
+//// holds only what it was built from, and derives its encoder, decoder and
+//// schema on each call. For how to write a json_blueprint codec that stays
+//// small when copied, see json_blueprint's
+//// [codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 
@@ -71,11 +62,8 @@ import json/blueprint/value
 /// How a point's output type becomes JSON and comes back. Build one with
 /// `codec` (which also carries the output's schema) or `plain`.
 ///
-/// A point holds its codec, and a point travels wherever its desk does:
-/// into job closures and actor state, which the BEAM copies on every send
-/// without keeping sharing. So a codec holds only what it was built from,
-/// and derives its encoder, decoder and schema each time they are asked
-/// for.
+/// It holds only what it was built from, because it is copied with its
+/// point (see the module documentation).
 pub opaque type Codec(a) {
   Blueprinted(blueprint: blueprint.Codec(a))
   Plain(encode: fn(a) -> Json, decoder: Decoder(a))

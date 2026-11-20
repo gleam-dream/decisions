@@ -12,7 +12,7 @@ make.
 Each issue is a brief: the behaviour wanted, the evidence in the application,
 and what done looks like. None prescribes an implementation.
 
-Thirty issues: 12 done, 1 in-progress, 16 needs-triage, 1 wontfix.
+Thirty-one issues: 12 done, 1 in-progress, 17 needs-triage, 1 wontfix.
 
 | Issue                                                                                                                                                                                                      | State        |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
@@ -46,3 +46,4 @@ Thirty issues: 12 done, 1 in-progress, 16 needs-triage, 1 wontfix.
 | [28. Do two expectations about one subject need an order when no `happened` runs?](issues/28-admission-order-for-points-that-only-expect.md)                                                               | needs-triage |
 | [29. Does a follow-on run start from the world as it is, or from the handed-over run's history?](issues/29-the-follow-on-recipe-continues-the-waiting-runs-view.md)                                        | done         |
 | [30. An occurrence may carry its own deadline](issues/30-a-deadline-per-occurrence.md)                                                                                                                     | done         |
+| [31. An isolated model is copied into every call, with everything it captures](issues/31-an-isolated-model-is-copied-into-every-call.md)                                                                   | needs-triage |

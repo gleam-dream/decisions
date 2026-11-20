@@ -16,8 +16,7 @@
 //// `codec` builds the document's json_blueprint codec around the point's
 //// codec. A copy of it to another process holds about twelve copies of the
 //// point's codec, so build it where a document is encoded or decoded and
-//// do not keep it in state that is sent between processes. A generated
-//// codec for the output keeps it small.
+//// do not keep it in state that is sent between processes.
 ////
 //// ```gleam
 //// import decisions/view

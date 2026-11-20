@@ -51,6 +51,11 @@ type Answer(output) {
 /// when the caller exits, so a worker killed while its model hangs leaves
 /// no model running. The model's process is not linked to the caller, so
 /// its death never takes the caller down.
+///
+/// Each call copies `inner`, and every value its function captures, into
+/// the new process; a copy does not keep sharing. Keep the model small:
+/// build heavy values, such as the codec of a structured answer, inside
+/// the model's function rather than capturing them.
 pub fn model(inner: Model(output), within within: Duration) -> Model(output) {
   model.reporting(fn(context, sources) { call(inner, context, sources, within) })
 }
