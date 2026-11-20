@@ -28,6 +28,13 @@ import gleam/string
 /// merged in order. A process that dies (rather than a candidate that
 /// raises, which `learning.replay_one` already reports) leaves its
 /// examples unanswered with `model.Raised`.
+///
+/// Each share copies `candidate`, and every heap term its function
+/// captures, into its process, and its examples with it; a copy does not
+/// keep sharing. A binary larger than 64 bytes is reference-counted, so
+/// only a reference to it is copied. Keep the candidate small: build heavy
+/// heap terms, such as the codec of a structured answer, inside the
+/// model's function.
 pub fn replay(
   examples: List(Example(o)),
   candidate: Model(o),

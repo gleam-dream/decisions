@@ -95,11 +95,11 @@ Commit `manifest.toml` to keep the resolved commit of each tag. Below 1.0 a
 minor version (0.1 to 0.2) may change the API, so the core's range stops before
 the next one; a new integration tag says which core range it takes.
 
-| Package              | Install it when                                                                                                                                                | Depends on                                                   |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `decisions`          | Always. The pure core: declaration, policy, record, desk, card, learning, the storage port and an in-memory store for tests. Builds for Erlang and JavaScript. | `gleam_stdlib`, `gleam_json`, `gleam_time`, `json_blueprint` |
-| `decisions_otp`      | You want the supervised runtime, model calls with a deadline, parallel replay, live hints, or a process-safe store for tests that start processes.             | `decisions`, `gleam_otp`, `gleam_erlang`, `sinal`            |
-| `decisions_postgres` | The record must live in PostgreSQL. You own the pool and the Grind runtime.                                                                                    | `decisions`, `pog`, `pgo`, `grind`, `sinal`                  |
+| Package              | Install it when                                                                                                                                                | Depends on                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `decisions`          | Always. The pure core: declaration, policy, record, desk, card, learning, the storage port and an in-memory store for tests. Builds for Erlang and JavaScript. | `gleam_stdlib`, `gleam_json`, `gleam_time`, `json_blueprint`        |
+| `decisions_otp`      | You want the supervised runtime, model calls with a deadline, parallel replay, live hints, or a process-safe store for tests that start processes.             | `decisions`, `gleam_otp`, `gleam_erlang`, `sinal`, `json_blueprint` |
+| `decisions_postgres` | The record must live in PostgreSQL. You own the pool and the Grind runtime.                                                                                    | `decisions`, `pog`, `pgo`, `grind`, `sinal`, `json_blueprint`       |
 
 ## How a decision point works
 
@@ -1241,6 +1241,44 @@ pub fn read(text: String) -> Result(View(Refund), String) {
 ```
 
 <!-- prettier-ignore-end -->
+
+## A point's codec, and what copying it costs
+
+A point holds its output codec, and a point is copied wherever its desk goes.
+A copy between processes does not keep sharing, so whatever a codec captures is
+copied once per closure that holds it. These are the places where decisions
+copies your values:
+
+- `decisions_postgres`: the wake and settlement workers hold your wakers and
+  followers, and so your desks and points, in the closure of every Grind job.
+  Grind copies that closure several times per job.
+- `decisions_otp`: the runtime's processes hold the same values in their state,
+  which is copied each time one of them starts or restarts.
+- `decisions_otp`: `isolated.model` runs your `Model` in a new process for each
+  call, and `replay.replay` runs it in a new process for each share. Either way
+  the model, and every heap term its function captures, is copied each time.
+  Keep the model small: build heavy heap terms, such as the codec of a
+  structured model answer, inside the model's function rather than capturing
+  them. A binary larger than 64 bytes, such as a long prompt, is
+  reference-counted and shared, so capturing it is cheap.
+- `view.codec(output)` holds about twelve copies of the point's codec when it is
+  copied. Build it where a card is encoded or decoded, and do not keep it in
+  state that travels.
+
+From the next release of the core, a codec built with `wire.codec` holds only
+the json_blueprint codec it was given, and one built with `wire.plain` holds
+only its encoder and decoder. Before that release, `wire.codec` also holds a
+rendered schema and two closures over the codec. Every package requires
+`json_blueprint >= 2.1.1`, whose combinator codecs no longer multiply in size at
+each nesting layer when copied.
+
+To guard what a point costs, assert in a test the bytes a send copies,
+`erts_debug:flat_size(Term)` times the word size, for the term that travels, such as
+`decisions.waker(desk)`. For how to write a codec that stays small (generated
+or combinator, and where to build child codecs), follow json_blueprint's
+[codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
+[ADR-0057](docs/adr/0057-a-codec-holds-what-it-was-built-from.md#adr-0057)
+records decisions' part and the measurements.
 
 ## Learn and replay
 

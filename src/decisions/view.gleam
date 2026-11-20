@@ -13,6 +13,11 @@
 //// codec carries one, the output's JSON Schema. A verdict returns as JSON
 //// that only the point's own codec decodes (`verdict`).
 ////
+//// `codec` builds the document's json_blueprint codec around the point's
+//// codec. A copy of it to another process holds about twelve copies of the
+//// point's codec, so build it where a document is encoded or decoded and
+//// do not keep it in state that is sent between processes.
+////
 //// ```gleam
 //// import decisions/view
 ////
@@ -186,13 +191,6 @@ pub fn to_json(view: View(o), output: Codec(o)) -> Result(Json, String) {
 /// it comes back as `ReadFailed` with the reason's text, whatever failure
 /// it was.
 pub fn codec(output: Codec(o)) -> blueprint.Codec(View(o)) {
-  let schema =
-    wire.schema(output)
-    |> option.map(fn(schema) {
-      let assert Ok(parsed) =
-        value.parse(json.to_string(schema), value.default_limits())
-      parsed
-    })
   use _format <- blueprint.field(
     "format",
     blueprint.try_map(
@@ -301,7 +299,7 @@ pub fn codec(output: Codec(o)) -> blueprint.Codec(View(o)) {
   use _schema <- blueprint.field(
     "output_schema",
     blueprint.nullable(blueprint.value()),
-    get: fn(_: View(o)) { schema },
+    get: fn(_: View(o)) { output_schema(output) },
   )
   blueprint.success(View(
     occurrence:,
@@ -319,6 +317,15 @@ pub fn codec(output: Codec(o)) -> blueprint.Codec(View(o)) {
     standing:,
     allowed:,
   ))
+}
+
+/// The output's schema as a json_blueprint value, rendered when a document
+/// is encoded rather than held by the card codec.
+fn output_schema(output: Codec(o)) -> Option(value.Value) {
+  use schema <- option.map(wire.schema(output))
+  let assert Ok(parsed) =
+    value.parse(json.to_string(schema), value.default_limits())
+  parsed
 }
 
 fn ref_codec() -> blueprint.Codec(Ref) {
