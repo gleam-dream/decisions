@@ -84,7 +84,7 @@
 ), body: [
   #entity(id: "point", title: "Point", description: [The declaration of a decision point. It is built once at wiring and stored nowhere but its name.], kind: "value-object", owner: "decisions", lifecycle: "immutable", domain: "record", tint: "violet")[
     #attribute(name: "Name", type: "Stable text", provenance: "authored")[Written on every occurrence's first entry. A desk refuses an occurrence of another point with `UnknownOccurrence`.]
-    #attribute(name: "Output codec", type: "Codec of the output type", provenance: "authored")[The only translation between the output and stored text. Built from a json_blueprint codec it also carries the output's JSON Schema. A point is copied with every desk sent to a process or captured by a job, so a point's codec copies about as much as the json_blueprint codec it was built from (#adr(56)).]
+    #attribute(name: "Output codec", type: "Codec of the output type", provenance: "authored")[The only translation between the output and stored text. Built from a json_blueprint codec it also carries the output's JSON Schema. A point is copied with every desk sent to a process or captured by a job, so a point's codec copies about as much as the json_blueprint codec it was built from (#adr(57)).]
     #attribute(name: "Allowed verdicts", type: "Approve or reject, or approve, reject or correct", provenance: "authored")[Approve and reject by default. A correction on a point that allows none is `VerdictNotAllowed`.]
     #attribute(name: "Declared facts", type: "Facts of the output and signals, each with its type", provenance: "authored")[What a policy may read besides the recommender and the time waited.]
     #attribute(name: "Hold", type: "Optional duration", provenance: "authored")[A wait between every acceptance and its release (`with_hold`).]
@@ -450,7 +450,7 @@
     [`verdicts`, `output_schema`], [The allowed verdicts, and the output's JSON Schema when the codec carries one, so a client can build a correction form.],
   ))
   #points(
-    [The document is exactly the encoding of `view.codec(output)`, a json_blueprint codec that carries the document's JSON Schema, so a client that has the same codec decodes it typed. Decoding is faithful except for an input that could not be resolved: it is marked `unavailable` and comes back as `ReadFailed` with the reason's text. A copy of the card codec costs the document's own codecs and about twelve copies of the point's codec, and nothing else from outside the document (#adr(56)).],
+    [The document is exactly the encoding of `view.codec(output)`, a json_blueprint codec that carries the document's JSON Schema, so a client that has the same codec decodes it typed. Decoding is faithful except for an input that could not be resolved: it is marked `unavailable` and comes back as `ReadFailed` with the reason's text. A copy of the card codec costs the document's own codecs and about twelve copies of the point's codec, and nothing else from outside the document (#adr(57)).],
     [A verdict returns as JSON decoded with the point's own codec (`view.verdict`); a correction whose output is not the point's output does not decode. `view.ticket_decoder` reads the ticket back from a card document. A client needs none of the point's code to render a queue, approve or reject.],
   )
 ])

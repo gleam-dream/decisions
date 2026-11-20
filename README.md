@@ -73,7 +73,7 @@ application code.
 
 `decisions` is published on Hex. The two integrations are not: take them from
 this repository by Git tag, one tag per package and version
-(`decisions_otp-v0.1.0`, `decisions_postgres-v0.1.0`). They may be published on
+(`decisions_otp-v0.1.0`, `decisions_postgres-v0.2.0`). They may be published on
 Hex later.
 
 ```toml
@@ -85,8 +85,8 @@ decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "d
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.1.0", path = "integrations/decisions_postgres" }
-grind = ">= 0.1.1 and < 0.2.0"
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.2.0", path = "integrations/decisions_postgres" }
+grind = ">= 0.2.0 and < 0.3.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
 ```
@@ -1275,7 +1275,7 @@ To guard what a point costs, assert in a test the bytes a send copies,
 `decisions.waker(desk)`. For how to write a codec that stays small (generated
 or combinator, and where to build child codecs), follow json_blueprint's
 [codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
-[ADR-0056](docs/adr/0056-a-codec-holds-what-it-was-built-from.md#adr-0056)
+[ADR-0057](docs/adr/0057-a-codec-holds-what-it-was-built-from.md#adr-0057)
 records decisions' part and the measurements.
 
 ## Learn and replay

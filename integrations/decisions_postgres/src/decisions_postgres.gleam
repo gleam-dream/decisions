@@ -36,6 +36,7 @@
 //// | The connection pool and the Grind runtime | The application (`grind.supervised`, or a pool it starts) |
 //// | The workers' registration | The application: `grind.with_worker(wake_worker(..))`, and `settlement_worker(..)` when a point has followers |
 //// | The schema | One migration owner: `migrate` at deploy time, or the SQL in `priv/migrations` through the application's tool |
+//// | Grind's own schema, at version 14 or later | The application, through Grind: `grind.migrate`, `grind.with_startup_migration`, or Grind's migration files in its tool |
 //// | The tables' rows | This package, through the port and the workers |
 ////
 //// ## Guarantees and what provides them
@@ -55,6 +56,7 @@
 //// | Wake-ups survive a restart, and a cancelled one does nothing | A row in `decisions_wakes` per wake-up and a Grind job admitted in the same transaction; the job delivers only while its row is pending |
 //// | One settlement notice per occurrence | Unique constraint `decisions_settled_once` |
 //// | A notice reaches what follows, once per database effect | A Grind job admitted in the settling transaction; the follower runs in the transaction that marks the notice delivered |
+//// | A delivery abandoned again and again ends set aside, not pending for ever | Each worker replays an expired lease 10 times, then its declared Grind settlement replays at most `authorized_replay_limit` more times and sets the row aside |
 ////
 //// The port reports an integrity violation (SQLSTATE class 23) as
 //// `store.Conflict`; a deadlock, a serialization failure or a lock wait
@@ -96,6 +98,7 @@ import decisions/wire
 import decisions_postgres/internal/migrations
 import decisions_postgres/internal/sql
 import decisions_postgres/telemetry
+import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/int
 import gleam/json
@@ -106,6 +109,8 @@ import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import grind
+import grind/abandoned.{type Abandoned}
+import grind/admin
 import grind/job
 import grind/worker
 import pog
@@ -969,8 +974,31 @@ pub type Waker =
 /// Delivery is at least once. A job delivered twice, or replayed after its
 /// worker was killed between the commit and Grind's acknowledgement, finds
 /// its row gone and does nothing, and `decisions.wake` itself does nothing
-/// when nothing is due. An attempt whose lease expires is replayed up to 10
-/// times (`ReplayAfterLeaseExpiry`).
+/// when nothing is due.
+///
+/// An attempt whose lease expires (its node died, or the delivery hung) is
+/// replayed up to 10 times (`ReplayAfterLeaseExpiry`). When those replays
+/// are used up, Grind holds the job uncertain and runs the worker's
+/// declared settlement (`worker.with_settlement`; in Grind's sense: what
+/// becomes of an abandoned job, not a decision's settlement or its
+/// notice). It reads the wake-up's row in Grind's transaction and does
+/// nothing else:
+///
+/// - The row is no longer pending: the job ends succeeded ("nothing
+///   pending"), as a delivery that finds it gone does.
+/// - A cancellation of the job was requested (Grind declines a replay
+///   then): the job ends failed and the row stays pending; `sweep` gives it
+///   a new job, since the row, not the Grind job, is the authority.
+/// - Otherwise the delivery is replayed, at most `authorized_replay_limit`
+///   (3) times per job; delivery is idempotent, so a replay is safe.
+/// - After that the row is set aside with the reason, in the same
+///   transaction, and the job ends failed with it. This setting aside
+///   emits no `telemetry.set_aside`, because the settlement may run more
+///   than once and keeps to database work; Grind reports the committed
+///   settlement as `[grind, job, resolved]` and keeps the reason on the job.
+///
+/// Grind's schema must be at version 14 or later for this (see the
+/// package README).
 ///
 /// A refusal is acted on by `decisions.handling(DeskRefused(refusal))`
 /// alone, the same rule as the settlement worker's:
@@ -1036,7 +1064,8 @@ fn wake_definition(
   )
   |> worker.with_queue(store.queue)
   |> worker.with_error_codec(text_codec())
-  |> worker.with_abandonment(worker.ReplayAfterLeaseExpiry(10))
+  |> worker.with_abandonment(worker.ReplayAfterLeaseExpiry(replays))
+  |> worker.with_settlement(settle_wake)
   // One snooze more than the limit, so the handler sets the wake-up aside
   // before Grind would end the job.
   |> worker.with_max_snoozes(store.snooze_limit + 1)
@@ -1313,18 +1342,28 @@ pub type Swept {
     /// Undelivered notices of followed points that had no live job and
     /// got one.
     notices: Int,
+    /// The Grind jobs, held uncertain with no settlement to come (left for
+    /// a person), whose pending rows got a new job here. Each still waits
+    /// in Grind's list of uncertain jobs: resolve it there with any
+    /// decision. Its row stays the authority, so a replay of it delivers
+    /// nothing twice.
+    left_uncertain: List(Int),
   )
 }
 
 /// Admit a Grind job for every pending wake-up, and every undelivered
-/// settlement notice of a point the store follows, whose job is missing or
-/// has ended: a point added to `following` after its occurrences settled,
-/// a job pruned, or one that ended while its row stayed pending. Run it
-/// once the runtime has started, and whenever an operator wants to; it is
-/// safe beside the workers, because the row stays the authority: a job
-/// admitted twice delivers once, and the second finds nothing pending. It
-/// reads each row's job (two queries a row), so its cost grows with the
-/// pending rows.
+/// settlement notice of a point the store follows, whose job will not
+/// deliver it: a job missing (never admitted, as for a point added to
+/// `following` after its occurrences settled, or pruned), ended while its
+/// row stayed pending, or held uncertain and left for a person. A job held
+/// uncertain whose declared settlement is still due is left to that
+/// settlement (see `wake_worker`). Run it once the runtime has started,
+/// and whenever an operator wants to; it is safe beside the workers,
+/// because the row stays the authority: a job admitted twice delivers
+/// once, and the second finds nothing pending. It reads each row's job
+/// (two queries a row) and lists the queue's uncertain jobs once, so its
+/// cost grows with the pending rows. A storage failure, Grind's included,
+/// is an `Error`, never a row taken for one without a job.
 pub fn sweep(store: Store, db: pog.Connection) -> Result(Swept, StoreError) {
   use wakes <- result.try(
     pog.query(
@@ -1355,76 +1394,182 @@ pub fn sweep(store: Store, db: pog.Connection) -> Result(Swept, StoreError) {
     })
     |> sql.run(db),
   )
+  // Listed before any job's state is read: a job held uncertain after
+  // this listing was held just now, and its settlement is due.
+  use marks <- result.try(uncertain_marks(store, 0, dict.new()))
   let wake_worker = wake_definition(store, never_runs)
   let notice_worker = settlement_definition(store, never_runs)
-  use woken <- result.try(
-    list.try_fold(wakes, 0, fn(count, row) {
+  use #(woken, left) <- result.try(
+    list.try_fold(wakes, #(0, []), fn(swept, row) {
       let #(input, job_id) = row
-      case live_job(store, wake_worker, job_id) {
-        True -> Ok(count)
-        False -> {
-          use admitted <- result.map(
-            readmit(db, "decisions_wakes", input.wake, fn(tx) {
-              admit_wake(
-                store,
-                tx,
-                input,
-                "decisions.wake:"
-                  <> int.to_string(input.wake)
-                  <> ":"
-                  <> sql.new_id(),
-              )
-            }),
+      use recorded <- result.try(recorded_job(store, wake_worker, job_id, marks))
+      readmit_unless_live(swept, recorded, fn() {
+        readmit(db, "decisions_wakes", input.wake, fn(tx) {
+          admit_wake(
+            store,
+            tx,
+            input,
+            "decisions.wake:"
+              <> int.to_string(input.wake)
+              <> ":"
+              <> sql.new_id(),
           )
-          count + admitted
-        }
-      }
+        })
+      })
     }),
   )
-  use noticed <- result.map(
-    list.try_fold(notices, 0, fn(count, row) {
+  use #(noticed, left) <- result.map(
+    list.try_fold(notices, #(0, left), fn(swept, row) {
       let #(input, job_id) = row
-      case live_job(store, notice_worker, job_id) {
-        True -> Ok(count)
-        False -> {
-          use admitted <- result.map(
-            readmit(db, "decisions_settled", input.notice, fn(tx) {
-              admit_notice(
-                store,
-                tx,
-                input,
-                "decisions.settlement:"
-                  <> int.to_string(input.notice)
-                  <> ":"
-                  <> sql.new_id(),
-              )
-            }),
+      use recorded <- result.try(recorded_job(
+        store,
+        notice_worker,
+        job_id,
+        marks,
+      ))
+      readmit_unless_live(swept, recorded, fn() {
+        readmit(db, "decisions_settled", input.notice, fn(tx) {
+          admit_notice(
+            store,
+            tx,
+            input,
+            "decisions.settlement:"
+              <> int.to_string(input.notice)
+              <> ":"
+              <> sql.new_id(),
           )
-          count + admitted
-        }
-      }
+        })
+      })
     }),
   )
-  Swept(wakes: woken, notices: noticed)
+  Swept(wakes: woken, notices: noticed, left_uncertain: list.reverse(left))
 }
 
-/// Whether a row's recorded job still waits or runs.
-fn live_job(
+/// What a pending row's recorded Grind job will do for it.
+type Recorded {
+  /// No job recorded, or none Grind holds as this row's: never admitted,
+  /// pruned, or another runtime's.
+  NoJob
+  /// Waiting or running: it will deliver the row.
+  Live
+  /// Held uncertain, and its worker's declared settlement is still due: the
+  /// settlement decides it.
+  AwaitingSettlement
+  /// Held uncertain with no settlement to come: left for a person, so it
+  /// will not deliver the row by itself.
+  LeftUncertain(job: Int)
+  /// Finished while its row stayed pending: it will not deliver again.
+  Ended
+}
+
+fn readmit_unless_live(
+  swept: #(Int, List(Int)),
+  recorded: Recorded,
+  readmit: fn() -> Result(Int, StoreError),
+) -> Result(#(Int, List(Int)), StoreError) {
+  let #(count, left) = swept
+  case recorded {
+    Live | AwaitingSettlement -> Ok(swept)
+    NoJob | Ended ->
+      result.map(readmit(), fn(admitted) { #(count + admitted, left) })
+    LeftUncertain(job:) ->
+      result.map(readmit(), fn(admitted) {
+        case admitted {
+          0 -> #(count, left)
+          _ -> #(count + admitted, [job, ..left])
+        }
+      })
+  }
+}
+
+/// Every uncertain job in the store's queue, by id: `True` while its
+/// settlement mark is due (a settler will decide it), `False` when it has
+/// none or it ended.
+fn uncertain_marks(
+  store: Store,
+  after: Int,
+  marks: Dict(Int, Bool),
+) -> Result(Dict(Int, Bool), StoreError) {
+  let page = 1000
+  use jobs <- result.try(
+    admin.list(
+      store.jobs,
+      admin.query(limit: page)
+        |> admin.in_queue(store.queue)
+        |> admin.in_state(job.Uncertain)
+        |> admin.after(after),
+    )
+    |> result.map_error(fn(error) {
+      store.Unavailable(
+        "Grind's uncertain jobs could not be listed: "
+        <> admin.describe_error(error),
+      )
+    }),
+  )
+  let marks =
+    list.fold(jobs, marks, fn(marks, summary) {
+      let due = case summary.settlement {
+        Some(mark) -> option.is_some(admin.mark_due_at(mark))
+        None -> False
+      }
+      dict.insert(marks, summary.id, due)
+    })
+  let full = list.length(jobs) == page
+  case list.last(jobs) {
+    Ok(last) if full -> uncertain_marks(store, last.id, marks)
+    _ -> Ok(marks)
+  }
+}
+
+/// What a row's recorded job will do for it. `marks` is
+/// `uncertain_marks`, listed before this read.
+fn recorded_job(
   store: Store,
   definition: worker.Worker(input, String, String),
   job_id: Option(Int),
-) -> Bool {
+  marks: Dict(Int, Bool),
+) -> Result(Recorded, StoreError) {
   case job_id {
-    None -> False
-    Some(id) ->
-      case grind.bind(store.jobs, definition, id) {
-        Error(_) -> False
-        Ok(handle) ->
-          case grind.state(store.jobs, handle) {
-            Ok(state) -> !job.is_finished(state)
-            Error(_) -> False
+    None -> Ok(NoJob)
+    Some(id) -> {
+      let state =
+        grind.bind(store.jobs, definition, id)
+        |> result.try(grind.state(store.jobs, _))
+      case state {
+        Ok(job.Uncertain) ->
+          case dict.get(marks, id) {
+            Ok(False) -> Ok(LeftUncertain(job: id))
+            Ok(True) | Error(Nil) -> Ok(AwaitingSettlement)
           }
+        Ok(state) ->
+          case job.is_finished(state) {
+            True -> Ok(Ended)
+            False -> Ok(Live)
+          }
+        Error(grind.ReadUnavailable(error)) ->
+          Error(store.Unavailable(
+            "the job "
+            <> int.to_string(id)
+            <> " could not be read: "
+            <> sql.describe(error),
+          ))
+        Error(grind.ReadNotRunning) ->
+          Error(store.Unavailable(
+            "the job "
+            <> int.to_string(id)
+            <> " could not be read: the Grind runtime is not running",
+          ))
+        // The id names no job of this row's worker in this runtime: never
+        // its job, or pruned.
+        Error(grind.JobNotFound)
+        | Error(grind.QueueMismatch(..))
+        | Error(grind.WorkerMismatch(..))
+        | Error(grind.CodecMismatch(..))
+        | Error(grind.HandleFromAnotherDatabase)
+        | Error(grind.UndecodableValue(_))
+        | Error(grind.CorruptRecord(_)) -> Ok(NoJob)
       }
+    }
   }
 }
 
@@ -1480,17 +1625,8 @@ fn set_aside_wake(
   input: WakeJob,
   reason: String,
 ) -> Nil {
-  let marked =
-    pog.query(
-      "UPDATE decisions_wakes
-       SET set_aside_at = clock_timestamp(), set_aside_reason = $2
-       WHERE id = $1 AND set_aside_at IS NULL",
-    )
-    |> pog.parameter(pog.int(input.wake))
-    |> pog.parameter(pog.text(reason))
-    |> pog.execute(db)
-  case marked {
-    Ok(pog.Returned(count: 1, ..)) ->
+  case wake_aside(db, input.wake, reason) {
+    Ok(True) ->
       emit_set_aside(
         store,
         telemetry.WakeUp,
@@ -1500,6 +1636,25 @@ fn set_aside_wake(
       )
     _ -> Nil
   }
+}
+
+/// Set a pending wake-up's row aside; `False` when it was no longer
+/// pending.
+fn wake_aside(
+  db: pog.Connection,
+  wake: Int,
+  reason: String,
+) -> Result(Bool, StoreError) {
+  pog.query(
+    "UPDATE decisions_wakes
+     SET set_aside_at = clock_timestamp(), set_aside_reason = $2
+     WHERE id = $1 AND set_aside_at IS NULL",
+  )
+  |> pog.parameter(pog.int(wake))
+  |> pog.parameter(pog.text(reason))
+  |> pog.execute(db)
+  |> result.map(fn(returned) { returned.count == 1 })
+  |> result.map_error(sql.store_error)
 }
 
 fn set_aside_occurrence(
@@ -1527,6 +1682,136 @@ fn emit_set_aside(
     telemetry.Count(1),
     telemetry.SetAside(source: store.name, kind:, point:, occurrence:, reason:),
   )
+}
+
+// -- Abandoned deliveries ------------------------------------------------------------
+
+/// The lease-expiry replays Grind gives a wake-up or notice job before it
+/// holds the job uncertain (`worker.ReplayAfterLeaseExpiry`).
+const replays = 10
+
+/// How many replays the workers' declared settlement authorises for one
+/// abandoned wake-up or notice job once Grind's own replays are used up,
+/// before it sets the row aside. `AuthorizeReplay` does not give the job
+/// its replays back, so each one is a single further delivery.
+pub const authorized_replay_limit = 3
+
+/// What becomes of a delivery Grind abandoned (its lease expired with no
+/// replay left), decided from its row and the abandoned job alone.
+type AbandonedDelivery {
+  /// The row is no longer pending: nothing is left to deliver.
+  NoLongerPending
+  /// The row is pending: deliver it again.
+  DeliverAgain
+  /// The row is pending, but a cancellation of the job was requested, and
+  /// Grind declines a replay then. The job ends failed; the row stays the
+  /// authority, so `sweep` gives it a new job.
+  CancelRequested
+  /// The row is pending and the authorised replays are used up: set the
+  /// row aside.
+  GiveUp
+}
+
+fn abandoned_delivery(
+  pending: Bool,
+  job: Abandoned(input),
+) -> AbandonedDelivery {
+  case
+    pending,
+    abandoned.cancellation_requested(job),
+    abandoned.authorized_replays(job) < authorized_replay_limit
+  {
+    False, _, _ -> NoLongerPending
+    True, True, _ -> CancelRequested
+    True, False, True -> DeliverAgain
+    True, False, False -> GiveUp
+  }
+}
+
+/// The wake-up worker's settlement (`worker.with_settlement`), run by Grind
+/// in a transaction of its own when a delivery is abandoned for good. It
+/// does database work only.
+fn settle_wake(
+  tx: pog.Connection,
+  job: Abandoned(WakeJob),
+) -> Result(worker.Settlement(String, String), String) {
+  let wake = abandoned.input(job).wake
+  settle_abandoned(
+    job,
+    pending: pending(
+      tx,
+      "SELECT count(*) FROM decisions_wakes
+       WHERE id = $1 AND set_aside_at IS NULL",
+      wake,
+    ),
+    set_aside: fn(reason) { wake_aside(tx, wake, reason) },
+  )
+}
+
+/// The settlement worker's settlement, as `settle_wake`.
+fn settle_notice(
+  tx: pog.Connection,
+  job: Abandoned(NoticeJob),
+) -> Result(worker.Settlement(String, String), String) {
+  let notice = abandoned.input(job).notice
+  settle_abandoned(
+    job,
+    pending: pending(
+      tx,
+      "SELECT count(*) FROM decisions_settled
+       WHERE id = $1 AND delivered_at IS NULL AND set_aside_at IS NULL",
+      notice,
+    ),
+    set_aside: fn(reason) { notice_aside(tx, notice, reason) },
+  )
+}
+
+fn pending(
+  tx: pog.Connection,
+  query: String,
+  id: Int,
+) -> Result(Bool, StoreError) {
+  pog.query(query)
+  |> pog.parameter(pog.int(id))
+  |> pog.returning(decode.at([0], decode.int))
+  |> sql.run(tx)
+  |> result.map(fn(counts) { counts != [0] })
+}
+
+/// An `Error` asks Grind to try again later; a storage failure is one.
+fn settle_abandoned(
+  job: Abandoned(input),
+  pending pending: Result(Bool, StoreError),
+  set_aside set_aside: fn(String) -> Result(Bool, StoreError),
+) -> Result(worker.Settlement(String, String), String) {
+  use pending <- result.try(pending |> result.map_error(store.describe))
+  case abandoned_delivery(pending, job) {
+    NoLongerPending -> Ok(worker.ConfirmSuccess("nothing pending"))
+    DeliverAgain -> Ok(worker.AuthorizeReplay)
+    CancelRequested ->
+      Ok(worker.ConfirmFailure(
+        "abandoned with a cancellation requested; its row is still pending, "
+        <> "so this job delivered nothing, and sweep gives the row a new job",
+      ))
+    GiveUp -> {
+      let reason = given_up(job)
+      case set_aside(reason) {
+        Error(error) -> Error(store.describe(error))
+        // Another delivery took the row since it was read.
+        Ok(False) -> Ok(worker.ConfirmSuccess("nothing pending"))
+        Ok(True) -> Ok(worker.ConfirmFailure(reason))
+      }
+    }
+  }
+}
+
+fn given_up(job: Abandoned(input)) -> String {
+  "abandoned after "
+  <> int.to_string(abandoned.replays(job))
+  <> " replays and "
+  <> int.to_string(abandoned.authorized_replays(job))
+  <> " authorised replays: each delivery died with its node or outlived "
+  <> "its lease; set aside so it blocks nothing"
 }
 
 // -- Settlements ---------------------------------------------------------------------------
@@ -1591,6 +1876,13 @@ pub type Follower =
 /// point left without one, such as one that settled before its point was
 /// followed.
 ///
+/// An attempt whose lease expires is replayed up to 10 times, and then the
+/// job is settled in Grind's sense (`worker.with_settlement`: what becomes
+/// of an abandoned job, which is not this worker's settlement notice) by
+/// the rule `wake_worker` states, with the notice's row in place of the
+/// wake-up's: replayed at most `authorized_replay_limit` times, then set
+/// aside.
+///
 /// A record superseded before it began (expected, then a newer event), or
 /// lapsed at its own deadline before it began (`decisions.expect_until`),
 /// still admits a notice, and its follower is handed it like any other.
@@ -1635,7 +1927,8 @@ fn settlement_definition(
   )
   |> worker.with_queue(store.queue)
   |> worker.with_error_codec(text_codec())
-  |> worker.with_abandonment(worker.ReplayAfterLeaseExpiry(10))
+  |> worker.with_abandonment(worker.ReplayAfterLeaseExpiry(replays))
+  |> worker.with_settlement(settle_notice)
   |> worker.with_max_snoozes(store.snooze_limit + 1)
   |> worker.with_max_attempts(store.settlement_attempts)
 }
@@ -1842,17 +2135,8 @@ fn set_aside_notice(
   input: NoticeJob,
   reason: String,
 ) -> Nil {
-  let marked =
-    pog.query(
-      "UPDATE decisions_settled
-       SET set_aside_at = clock_timestamp(), set_aside_reason = $2
-       WHERE id = $1 AND set_aside_at IS NULL AND delivered_at IS NULL",
-    )
-    |> pog.parameter(pog.int(input.notice))
-    |> pog.parameter(pog.text(reason))
-    |> pog.execute(db)
-  case marked {
-    Ok(pog.Returned(count: 1, ..)) ->
+  case notice_aside(db, input.notice, reason) {
+    Ok(True) ->
       emit_set_aside(
         store,
         telemetry.Notice,
@@ -1862,4 +2146,22 @@ fn set_aside_notice(
       )
     _ -> Nil
   }
+}
+
+/// Set an undelivered notice aside; `False` when it was no longer pending.
+fn notice_aside(
+  db: pog.Connection,
+  notice: Int,
+  reason: String,
+) -> Result(Bool, StoreError) {
+  pog.query(
+    "UPDATE decisions_settled
+     SET set_aside_at = clock_timestamp(), set_aside_reason = $2
+     WHERE id = $1 AND set_aside_at IS NULL AND delivered_at IS NULL",
+  )
+  |> pog.parameter(pog.int(notice))
+  |> pog.parameter(pog.text(reason))
+  |> pog.execute(db)
+  |> result.map(fn(returned) { returned.count == 1 })
+  |> result.map_error(sql.store_error)
 }

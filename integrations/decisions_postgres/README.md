@@ -17,7 +17,10 @@ The application owns the pool and the Grind runtime. In this order:
 
 1. Run `migrate(db)` at deploy time with a role that may own DDL, or apply the
    SQL in `priv/migrations` with the application's tool, before any worker
-   polls. Choose one migration owner per schema.
+   polls. Choose one migration owner per schema. Grind's own schema is
+   Grind's to migrate, and must be at version 14 or later (Grind 0.2):
+   `grind.migrate`, `grind.with_startup_migration`, or Grind's migration
+   files in the application's tool.
 2. Build a store with `decisions_postgres.new(grind.named(name))`; the handle
    is valid before Grind runs. Add `following(point)` for each point whose
    settlements have a follower; without it a settlement is recorded and
@@ -144,6 +147,45 @@ db)` gives a job to every pending wake-up and undelivered notice of a followed
 point that has none (run it at start). `deliver_due` and `deliver_notices`
 deliver what is due now through the same code paths, for tests with a clock
 offset and for an operator; both are safe beside the workers.
+
+### Abandoned deliveries
+
+A delivery whose node dies, or that hangs past its lease, is replayed by Grind
+up to 10 times. After that Grind holds the job uncertain and runs the
+settlement each worker declares with `worker.with_settlement`. That is Grind's
+word for deciding what becomes of an abandoned job; it is unrelated to a
+decision's settlement and the settlement notice the `settlement_worker`
+delivers. The declared settlement reads the job's row in Grind's transaction:
+
+- Row no longer pending: the job ends succeeded, "nothing pending".
+- Row pending, a cancellation of the job requested: the job ends failed and
+  the row stays pending, for `sweep` to give a new job. The row, not the Grind
+  job, is the authority: stop the work through the record (its desk, or
+  `set_aside`), not by cancelling its Grind job.
+- Row pending: the delivery is replayed, at most `authorized_replay_limit` (3)
+  times per job. Delivery is idempotent, so this is safe.
+- Past that bound: the row is set aside with the reason, in the same
+  transaction, and the job ends failed with it. This one setting aside emits
+  no `telemetry.set_aside`: the settlement may run more than once and keeps to
+  database work. Grind reports the committed settlement as
+  `[grind, job, resolved]` and keeps the reason on the job.
+
+`sweep` leaves a job held uncertain whose settlement is still due, and gives a
+new job to a row whose job is held uncertain with no settlement to come (left
+for a person). `Swept.left_uncertain` lists those Grind jobs; resolve each in
+Grind with any decision, since a replay finds its row taken.
+
+## Upgrading to 0.2.0
+
+- Take Grind 0.2 (`grind = ">= 0.2.0 and < 0.3.0"`), whose workers may
+  declare a settlement.
+- Apply Grind's schema version 14 before running it, as Grind's own upgrade
+  says: `grind.migrate` at deploy time, `grind.with_startup_migration`, or
+  Grind's migration file for version 14 mirrored into the application's tool.
+  This package's own tables do not change.
+- `Swept` has a third field, `left_uncertain`.
+- Jobs already held uncertain by lease expiry are marked by each Grind settler
+  when it starts, so the declared settlement settles them too.
 
 ### Pending records
 

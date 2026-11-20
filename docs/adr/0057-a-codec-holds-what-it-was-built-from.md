@@ -1,6 +1,6 @@
 # A codec holds what it was built from, because it is copied with its point
 
-<a id="adr-0056"></a>
+<a id="adr-0057"></a>
 
 Recorded on 2026-11-19. Amends nothing; the public API of `decisions/wire` and `decisions/view` is unchanged. It ships with the next release of the core: until then the integrations, which build against the published core, keep its former `wire.Codec`.
 
