@@ -7,7 +7,7 @@ This repository holds three packages: `decisions`, `decisions_otp` and
 of `decisions` on [Hex](https://hex.pm/packages/decisions), and for the latest
 Git tag of each integration (`decisions_otp-v…`, `decisions_postgres-v…`), which
 are not on Hex. Older versions do not receive patches; upgrade to the latest
-release to get a fix. Fixes land first on the default branch, `first-build`.
+release to get a fix. Fixes land first on the default branch, `main`.
 
 | Version                                                 | Supported |
 | ------------------------------------------------------- | --------- |
