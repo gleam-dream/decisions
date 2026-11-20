@@ -167,7 +167,8 @@ delivers. The declared settlement reads the job's row in Grind's transaction:
 - Past that bound: the row is set aside with the reason, in the same
   transaction, and the job ends failed with it. This one setting aside emits
   no `telemetry.set_aside`: the settlement may run more than once and keeps to
-  database work. Grind reports it as `[grind, diagnostic, settlement]`.
+  database work. Grind reports the committed settlement as
+  `[grind, job, resolved]` and keeps the reason on the job.
 
 `sweep` leaves a job held uncertain whose settlement is still due, and gives a
 new job to a row whose job is held uncertain with no settlement to come (left

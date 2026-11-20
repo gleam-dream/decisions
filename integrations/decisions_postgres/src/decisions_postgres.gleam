@@ -994,8 +994,8 @@ pub type Waker =
 /// - After that the row is set aside with the reason, in the same
 ///   transaction, and the job ends failed with it. This setting aside
 ///   emits no `telemetry.set_aside`, because the settlement may run more
-///   than once and keeps to database work; Grind reports the settlement
-///   (`[grind, diagnostic, settlement]`) and keeps the reason on the job.
+///   than once and keeps to database work; Grind reports the committed
+///   settlement as `[grind, job, resolved]` and keeps the reason on the job.
 ///
 /// Grind's schema must be at version 14 or later for this (see the
 /// package README).
