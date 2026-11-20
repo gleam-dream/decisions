@@ -52,10 +52,13 @@ type Answer(output) {
 /// no model running. The model's process is not linked to the caller, so
 /// its death never takes the caller down.
 ///
-/// Each call copies `inner`, and every value its function captures, into
-/// the new process; a copy does not keep sharing. Keep the model small:
-/// build heavy values, such as the codec of a structured answer, inside
-/// the model's function rather than capturing them.
+/// Each call copies `inner`, and every heap term its function captures,
+/// into the new process; a copy does not keep sharing. A binary larger
+/// than 64 bytes is the exception: it is reference-counted, so only a
+/// reference to it is copied, and capturing it costs nothing per call.
+/// Keep the model small: build heavy heap terms, such as the codec of a
+/// structured answer, inside the model's function rather than capturing
+/// them.
 pub fn model(inner: Model(output), within within: Duration) -> Model(output) {
   model.reporting(fn(context, sources) { call(inner, context, sources, within) })
 }

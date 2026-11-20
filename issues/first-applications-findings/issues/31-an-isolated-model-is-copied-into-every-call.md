@@ -9,7 +9,7 @@ AI-assisted contribution.
 
 ## Behaviour wanted
 
-`isolated.model(inner, within:)` runs a model in a process of its own for each call, and `replay.replay(examples, candidate, ..)` runs the candidate in a process of its own for each share of the examples. Both start the process with a closure that captures the user's `Model`, so the model, and every value its function captures, is copied into the new process on every call or share. A copy between processes does not keep sharing.
+`isolated.model(inner, within:)` runs a model in a process of its own for each call, and `replay.replay(examples, candidate, ..)` runs the candidate in a process of its own for each share of the examples. Both start the process with a closure that captures the user's `Model`, so the model, and every heap term its function captures, is copied into the new process on every call or share. A copy between processes does not keep sharing. A binary larger than 64 bytes is the exception: it is reference-counted, so only a reference to it is copied, and building it per call would cost more than capturing it.
 
 A model often captures a json_blueprint codec: the point's output codec, or the codec of a structured answer from an LLM provider. Each isolated call then copies that codec. A consumer service was killed for running out of memory when codecs held in its desks were copied several times per Grind job (ADR 0057), so the same pattern on every model call is a risk worth removing.
 

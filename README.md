@@ -1256,9 +1256,11 @@ copies your values:
   which is copied each time one of them starts or restarts.
 - `decisions_otp`: `isolated.model` runs your `Model` in a new process for each
   call, and `replay.replay` runs it in a new process for each share. Either way
-  the model, and every value its function captures, is copied each time. Keep
-  the model small: build heavy values, such as the codec of a structured model
-  answer, inside the model's function rather than capturing them.
+  the model, and every heap term its function captures, is copied each time.
+  Keep the model small: build heavy heap terms, such as the codec of a
+  structured model answer, inside the model's function rather than capturing
+  them. A binary larger than 64 bytes, such as a long prompt, is
+  reference-counted and shared, so capturing it is cheap.
 - `view.codec(output)` holds about twelve copies of the point's codec when it is
   copied. Build it where a card is encoded or decoded, and do not keep it in
   state that travels.

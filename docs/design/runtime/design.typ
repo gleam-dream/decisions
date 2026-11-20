@@ -17,7 +17,7 @@
     `runtime.pause` stops delivery while the runtime's processes stay up; stopping and starting the runtime is left to the application's own supervisor through `supervisor_of`. A stop and start owned by the runtime was declined in this build. Whether one is needed is open.
   ],
   pending-entry(title: "A model built inside its isolated process", kind: "build", since: "2026-11-20", adr: [#adr(57)])[
-    `isolated.model` copies the application's model, and every value its function captures, into a new process for each call, and `replay.replay` into one for each share. Until a model can be built inside that process, consumers keep a model small. Tracker issue 31 of `issues/first-applications-findings`.
+    `isolated.model` copies the application's model, and every heap term its function captures (a binary larger than 64 bytes is shared by reference), into a new process for each call, and `replay.replay` into one for each share. Until a model can be built inside that process, consumers keep a model small. Tracker issue 31 of `issues/first-applications-findings`.
   ],
 )
 
