@@ -28,6 +28,24 @@
 //// }
 //// ```
 ////
+//// A point holds its codec, and a point is copied wherever its desk goes:
+//// into a Grind job's closure, which is copied several times per job, and
+//// into an actor's state. A copy between processes does not keep sharing,
+//// so write a point's json_blueprint codec to stay small when copied (see
+//// json_blueprint's
+//// [codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md)):
+////
+//// - require `json_blueprint >= 2.1.1`;
+//// - prefer a generated codec for an output whose shape is fixed;
+//// - build each child codec inside its field, as the field's `of:` or by
+////   a top-level function, and never `let`-bind a child codec or a large
+////   value that later fields capture;
+//// - build the codec in a top-level function, as `refund` does above, and
+////   do not send built codecs, or values that hold them, to another
+////   process on every operation.
+////
+//// `Codec` itself holds only the codec it was built from.
+////
 //// Target-independent: builds for Erlang and JavaScript.
 
 import decisions/vocabulary.{
@@ -52,48 +70,28 @@ import json/blueprint/value
 
 /// How a point's output type becomes JSON and comes back. Build one with
 /// `codec` (which also carries the output's schema) or `plain`.
+///
+/// A point holds its codec, and a point travels wherever its desk does:
+/// into job closures and actor state, which the BEAM copies on every send
+/// without keeping sharing. So a codec holds only what it was built from,
+/// and derives its encoder, decoder and schema each time they are asked
+/// for.
 pub opaque type Codec(a) {
-  Codec(
-    encode: fn(a) -> Result(Json, String),
-    decoder: Decoder(a),
-    schema: Option(Json),
-    blueprint: blueprint.Codec(a),
-  )
+  Blueprinted(blueprint: blueprint.Codec(a))
+  Plain(encode: fn(a) -> Json, decoder: Decoder(a))
 }
 
 /// A codec from a `json_blueprint` codec. It carries the output's JSON
 /// Schema (Draft 2020-12), which `schema` returns and a card shows.
 pub fn codec(blueprint: blueprint.Codec(a)) -> Codec(a) {
-  let schema =
-    blueprint.schema(blueprint)
-    |> result.replace_error(Nil)
-    |> result.try(fn(found) {
-      blueprint.schema_document(found)
-      |> value.to_json
-      |> result.replace_error(Nil)
-    })
-    |> option.from_result
-  Codec(
-    encode: fn(item) {
-      blueprint.to_json(blueprint, item)
-      |> result.map_error(blueprint.describe_encode_error)
-    },
-    decoder: blueprint.decoder(blueprint),
-    schema:,
-    blueprint:,
-  )
+  Blueprinted(blueprint:)
 }
 
 /// A codec from an encoder and a decoder, with no schema. A card for a
 /// point with this codec can be approved or rejected by any client, and a
 /// correction form must be built by code that knows the output type.
 pub fn plain(encode: fn(a) -> Json, decoder: Decoder(a)) -> Codec(a) {
-  Codec(
-    encode: fn(item) { Ok(encode(item)) },
-    decoder:,
-    schema: None,
-    blueprint: any_json(encode, decoder),
-  )
+  Plain(encode:, decoder:)
 }
 
 /// A json_blueprint codec over any JSON, through an encoder and a decoder.
@@ -130,7 +128,10 @@ fn placeholder(decoder: Decoder(a)) -> a {
 /// that holds outputs, such as the card's (`decisions/view.codec`). For a
 /// `plain` codec its schema admits any JSON.
 pub fn blueprint(codec: Codec(a)) -> blueprint.Codec(a) {
-  codec.blueprint
+  case codec {
+    Blueprinted(blueprint:) -> blueprint
+    Plain(encode:, decoder:) -> any_json(encode, decoder)
+  }
 }
 
 /// A codec for text outputs, with its schema.
@@ -141,22 +142,42 @@ pub fn text() -> Codec(String) {
 /// Encode an output. An error means the codec cannot represent this
 /// value, such as a number with no exact JSON form.
 pub fn encode(codec: Codec(a), item: a) -> Result(Json, String) {
-  codec.encode(item)
+  case codec {
+    Blueprinted(blueprint:) ->
+      blueprint.to_json(blueprint, item)
+      |> result.map_error(blueprint.describe_encode_error)
+    Plain(encode:, ..) -> Ok(encode(item))
+  }
 }
 
 /// The decoder of an output.
 pub fn decoder(codec: Codec(a)) -> Decoder(a) {
-  codec.decoder
+  case codec {
+    Blueprinted(blueprint:) -> blueprint.decoder(blueprint)
+    Plain(decoder:, ..) -> decoder
+  }
 }
 
-/// The output's JSON Schema document, when the codec carries one.
+/// The output's JSON Schema document, when the codec carries one. It is
+/// rendered from the json_blueprint codec on each call.
 pub fn schema(codec: Codec(a)) -> Option(Json) {
-  codec.schema
+  case codec {
+    Blueprinted(blueprint:) ->
+      blueprint.schema(blueprint)
+      |> result.replace_error(Nil)
+      |> result.try(fn(found) {
+        blueprint.schema_document(found)
+        |> value.to_json
+        |> result.replace_error(Nil)
+      })
+      |> option.from_result
+    Plain(..) -> None
+  }
 }
 
 /// Decode an output from JSON text.
 pub fn parse(codec: Codec(a), text: String) -> Result(a, json.DecodeError) {
-  json.parse(text, codec.decoder)
+  json.parse(text, decoder(codec))
 }
 
 // -- Helpers --------------------------------------------------------------------
@@ -426,7 +447,7 @@ pub fn recommendation(
 
 /// Decodes a recommendation written by `recommendation`.
 pub fn recommendation_decoder(output: Codec(o)) -> Decoder(Recommendation(o)) {
-  use item <- decode.field("output", output.decoder)
+  use item <- decode.field("output", decoder(output))
   use by <- decode.field("by", recommender_decoder())
   use explanation <- decode.field("explanation", explanation_decoder())
   use signals <- decode.field("signals", facts_decoder())
@@ -482,7 +503,7 @@ pub fn verdict_decoder(output: Codec(o)) -> Decoder(Verdict(o)) {
       decode.success(Reject(reason:))
     }
     "correct" -> {
-      use item <- decode.field("output", output.decoder)
+      use item <- decode.field("output", decoder(output))
       use reason <- decode.field("reason", reason_decoder())
       decode.success(Correct(output: item, reason:))
     }
@@ -517,7 +538,7 @@ fn finding_decoder(output: Codec(o)) -> Decoder(Finding(o)) {
   case tag {
     "right" -> decode.success(Right)
     "wrong" -> {
-      use truth <- decode.field("truth", decode.optional(output.decoder))
+      use truth <- decode.field("truth", decode.optional(decoder(output)))
       decode.success(Wrong(truth:))
     }
     _ -> decode.failure(Right, "Finding")
