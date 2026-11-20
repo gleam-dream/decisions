@@ -3,7 +3,7 @@
 # notifications. A separate package, so that the core never depends on
 # gleam_otp.
 name = "decisions_otp"
-version = "0.1.0"
+version = "0.1.1"
 target = "erlang"
 gleam = ">= 1.18.0"
 licenses = ["Apache-2.0"]
@@ -12,15 +12,11 @@ repository = { type = "github", user = "gleam-dream", repo = "decisions" }
 internal_modules = ["decisions_otp/internal", "decisions_otp/internal/*"]
 
 [dependencies]
-decisions = ">= 0.1.0 and < 0.2.0"
+decisions = ">= 0.1.1 and < 0.2.0"
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
-# Not imported here: a floor for the codecs a point holds. The published
-# core allows json_blueprint 2.0.0, whose combinator codecs multiply in
-# size at each nesting layer when copied between processes; 2.1.1 fixes that.
-json_blueprint = ">= 2.1.1 and < 3.0.0"
 sinal = ">= 0.1.0 and < 0.2.0"
 
 [dev-dependencies]

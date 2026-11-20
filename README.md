@@ -73,7 +73,7 @@ application code.
 
 `decisions` is published on Hex. The two integrations are not: take them from
 this repository by Git tag, one tag per package and version
-(`decisions_otp-v0.1.0`, `decisions_postgres-v0.2.0`). They may be published on
+(`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`). They may be published on
 Hex later.
 
 ```toml
@@ -81,11 +81,11 @@ Hex later.
 decisions = ">= 0.1.1 and < 0.2.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
-decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.1.0", path = "integrations/decisions_otp" }
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.1.1", path = "integrations/decisions_otp" }
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.2.0", path = "integrations/decisions_postgres" }
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.2.1", path = "integrations/decisions_postgres" }
 grind = ">= 0.2.0 and < 0.3.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
@@ -95,11 +95,11 @@ Commit `manifest.toml` to keep the resolved commit of each tag. Below 1.0 a
 minor version (0.1 to 0.2) may change the API, so the core's range stops before
 the next one; a new integration tag says which core range it takes.
 
-| Package              | Install it when                                                                                                                                                | Depends on                                                          |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `decisions`          | Always. The pure core: declaration, policy, record, desk, card, learning, the storage port and an in-memory store for tests. Builds for Erlang and JavaScript. | `gleam_stdlib`, `gleam_json`, `gleam_time`, `json_blueprint`        |
-| `decisions_otp`      | You want the supervised runtime, model calls with a deadline, parallel replay, live hints, or a process-safe store for tests that start processes.             | `decisions`, `gleam_otp`, `gleam_erlang`, `sinal`, `json_blueprint` |
-| `decisions_postgres` | The record must live in PostgreSQL. You own the pool and the Grind runtime.                                                                                    | `decisions`, `pog`, `pgo`, `grind`, `sinal`, `json_blueprint`       |
+| Package              | Install it when                                                                                                                                                | Depends on                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `decisions`          | Always. The pure core: declaration, policy, record, desk, card, learning, the storage port and an in-memory store for tests. Builds for Erlang and JavaScript. | `gleam_stdlib`, `gleam_json`, `gleam_time`, `json_blueprint` |
+| `decisions_otp`      | You want the supervised runtime, model calls with a deadline, parallel replay, live hints, or a process-safe store for tests that start processes.             | `decisions`, `gleam_otp`, `gleam_erlang`, `sinal`            |
+| `decisions_postgres` | The record must live in PostgreSQL. You own the pool and the Grind runtime.                                                                                    | `decisions`, `pog`, `pgo`, `grind`, `sinal`                  |
 
 ## How a decision point works
 

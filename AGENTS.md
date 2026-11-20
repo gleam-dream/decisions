@@ -17,7 +17,7 @@ The repository holds three packages:
 | `decisions_postgres` | `integrations/decisions_postgres` | The storage port over PostgreSQL, its migrations, the Grind workers for wake-ups and settlements, `NOTIFY` and the queue queries. |
 
 The core is released to Hex. The integrations are released as Git tags of this
-repository (`decisions_otp-v0.1.0`, `decisions_postgres-v0.2.0`), not on Hex.
+repository (`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`), not on Hex.
 An integration's release commit replaces its path dependency on the root
 (`decisions = { path = "../.." }`) with the core's Hex version range;
 both have done so, and test against the published core. The core never depends on an integration. The design
