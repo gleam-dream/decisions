@@ -124,7 +124,7 @@
       [A tool that writes and refuses leaves nothing], [`atomically` is a savepoint; a tool that raises rolls back to it and raises again.],
       [The store clock], [`clock_timestamp()` at the moment of the call, never `now()`, truncated to the millisecond entries keep.],
       [Wake-ups survive a restart, and a cancelled one does nothing], [One `decisions_wakes` row per wake-up and a Grind job admitted in the same transaction; the job acts only while its row is pending.],
-      [A pending row always has a job, or a sweep admits one], [`sweep(store, db)` admits a job for every pending wake-up and every undelivered notice of a followed point that has none: a job pruned, ended, or never admitted because the point became followed later. Run it at start and when an operator wants to (#adr(45)).],
+      [A pending row always has a job, or a sweep admits one], [`sweep(store, db)` admits a job for every pending wake-up and every undelivered notice of a followed point whose job will not deliver it: a job pruned, ended, held uncertain for a person, or never admitted because the point became followed later. Run it at start and when an operator wants to (#adr(45), #adr(56)).],
       [One settlement notice per occurrence], [Unique constraint `decisions_settled_once`.],
       [Ids], [`new_id` is a UUID version 7 made on the node.],
     ))
