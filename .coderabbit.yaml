@@ -1,0 +1,513 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# Review policy for decisions, derived by the coderabbit-config skill.
+# Each instruction names the skill it comes from; `policy` is the review policy
+# of coderabbit-config itself, and `repository` marks a rule beyond the catalog.
+#
+# Catalogs read:
+#   dash-skills        879841a61c3f83cd809edca9229c4a6bb7f909f8
+#   gleam-agent-tools  6a9ea2f647e787a32d3c7fa88d9c58c5b81ae9d7
+#
+# Governing skills: coderabbit-config (policy), gleam, gleam-lib, gleam-ffi,
+# gleam-otp, gleam-sql, grind, sinal, json-blueprint, modeling, testing,
+# design, tracker, gate, git.
+#
+# Packages: decisions 0.1.1 (root, Hex), decisions_otp 0.1.1 and
+# decisions_postgres 0.2.1 (integrations/, Git tags).
+# Governing dependency versions, locked in each package's manifest.toml:
+#   json_blueprint 2.1.2 (every package). The json-blueprint skill requires
+#     >= 2.2.0; its copy-size rules are for 2.2.0 and are not taken. The rules
+#     taken use API that 2.1.2 has.
+#   gleam_otp 1.3.0, gleam_erlang 1.3.0 (integrations)
+#   sinal 0.1.0, telemetry 1.4.2 (integrations; 1.4.3 in decisions_otp/bench)
+#   grind 0.2.0 (decisions_postgres). The grind skill names 0.2.1, which
+#     changed only what a job copies; its rules are taken for 0.2.0.
+#   pog 4.1.0 (decisions_postgres)
+#   gleam_stdlib 1.0.5, gleam_json 3.1.0, gleam_crypto 1.6.0,
+#   gleam_time 1.11.0, gleeunit 1.11.0.
+language: en-US
+tone_instructions: >-
+  Literal and concise. Report only defects you can evidence from the diff, its
+  callers, the design, or a cited rule. One finding per cause. An empty review
+  is valid.
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_instructions: |
+    Lead with the problem the change solves, then the response in one short
+    paragraph, then the effect on the public API, the record or the storage
+    port contract, if any. Do not narrate the diff file by file.
+  review_status: true
+  commit_status: true
+  fail_commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+  poem: false
+  in_progress_fortune: false
+  enable_prompt_for_ai_agents: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    base_branches:
+      - main
+
+  # Rendered design and the Nix lock.
+  path_filters:
+    - "!flake.lock"
+    - "!docs/design/design-layer.pdf"
+
+  path_instructions:
+    - path: "{src,integrations/*/src,examples/usage/src}/**"
+      instructions: |
+        Review policy (policy).
+        - Design first. docs/COVERAGE.md maps each part to its owning section in
+          docs/design (contexts `record`, `storage` and `runtime`) and
+          docs/adr. Flag code that contradicts that unit's interface,
+          invariants or side effects, and a change to designed behavior with
+          no change to its design. A fix that restores designed behavior needs
+          none. When code and design disagree, the design changes first.
+        - Core abstractions. Flag a second representation of a concept the
+          design names (point, occurrence, entry, record, head, card,
+          verdict, refusal, disposition, gated tool, release, policy hold,
+          desk, port, pending wake-up, settlement notice), a name that differs
+          from the CONTEXT.typ glossaries or the owning context the context
+          map gives, and a module that reaches into a package's `internal`
+          modules past the interface that owns them.
+        - Lean. Flag code no test, caller or unit needs: an unset option, an
+          unvaried parameter, a wrapper that adds no rule, an unreachable
+          branch. Say what to delete.
+        - Migration, never a legacy path. Flag a compatibility shim, a fallback
+          to an old format, a dual read or write, a deprecated alias, and a
+          flag that keeps old behavior. A change to a public module ships as a
+          breaking release with a migration note.
+        - Composable. In a public module, flag hidden call ordering, global
+          state, a mandatory framework where functions compose, a concept the
+          common caller must learn and does not need, and a module with two
+          responsibilities.
+        - Test first. Flag a behavior change with no test that exercises it,
+          and a test bound to internals.
+        - Typed before foreign. Flag Erlang or JavaScript where Gleam does the
+          job, an unchecked cast, an untyped value that reaches domain logic
+          undecoded, and a crash on a routine failure.
+        - Silence. Report nothing that `gleam format`, the compiler with
+          warnings as errors, the tests or scripts/test.sh decide, and no
+          layout or naming preference without a written rule.
+
+    - path: "{src,test,examples,integrations}/**/*.gleam"
+      instructions: |
+        Gleam (gleam).
+        - Flag a module function, private included, without annotated
+          arguments and return type, and an imported function or constant used
+          unqualified.
+        - Flag a name against the conventions: `Json` not `JSON`,
+          conversions named `x_to_y` or `to_y` inside module `x`, `try_` only
+          for an error-propagating counterpart.
+        - Flag `Option` carrying a failure, and a change that merges omitted,
+          explicit false, empty and failed where they mean different things.
+        - Flag an error a caller must parse as a string to choose recovery.
+        - Flag independent optional fields or booleans standing for exclusive
+          states; they are variants.
+        - Flag a predicate check followed by `let assert` on the same shape,
+          and a catch-all branch that silently accepts a new variant, such as
+          a new entry kind, refusal or store error.
+        - Flag `panic` or `let assert` handling a routine external failure in
+          a package's `src/`.
+        - Flag a refactor that changes observable errors, ordering or effects.
+        - Flag a compatibility branch with no comment saying why it exists.
+        - Flag `src/` importing a `test/` or `dev/` module or `gleeunit`.
+        - Flag a new process, module or generic machinery added only for
+          organization, and a local type replacing a compatible ecosystem type.
+
+    - path: "{src,integrations/*/src}/**/*.gleam"
+      instructions: |
+        Published library surface (gleam-lib). Exported constructors, fields,
+        variants, module paths and behavior of `decisions`, `decisions_otp`
+        and `decisions_postgres` outside their `internal` modules are the
+        compatibility surface; `internal_modules` marks instability, not
+        access control.
+        - Flag a removed or changed export, variant, field or behavior in a
+          public module that the pull request does not call breaking, and a
+          change with no matching update to the example in examples/usage that
+          shows it (AGENTS.md).
+        - Flag a core module in `src/` that starts a process, performs I/O, or
+          imports an integration, `gleam_otp`, `gleam_erlang`, `pog`, `grind`
+          or `sinal` (AGENTS.md, ADR 0003).
+        - Flag a public signature that exposes an implementation-state type
+          parameter, and an integration that replaces the application's output
+          or error type with its own.
+        - Flag an argument that does not affect behavior, a bound operation
+          that makes callers repeat a point's name or codec at each use, a
+          setter per field where a record update works, and two public paths
+          for one common task.
+        - Flag configuration validated after a resource is allocated, and a
+          builder or extension protocol with no distinct use case.
+        - Flag a dynamic dispatcher over heterogeneous parameters where typed
+          operations can be bound.
+        - Flag a deliberate crash on a failure the caller could act on; return
+          a structured error instead.
+        - Flag a codec, desk or waker newly held in a value sent between
+          processes with no bound on its copied size in a test, as
+          test/codec_copy_size_test.gleam bounds the point's codec (ADR
+          0057).
+        - Flag the library taking over policy that belongs to the
+          application: Fabric, llm_wire and Relay joins stay recipes (ADR
+          0004).
+
+    - path: "{src,test,integrations}/**/*.{gleam,erl,mjs}"
+      instructions: |
+        Foreign boundaries (gleam-ffi). Apply to `*.erl` and `*.mjs` files and
+        to a Gleam module that declares `@external`.
+        - Flag validation, branching or state transitions in foreign code; it
+          performs the native call and the representation conversion only.
+        - Flag an external that declares a native value to be a checked domain
+          value, `Dynamic` or a type variable that accepts every handle, and a
+          generic return that hides an unchecked cast.
+        - Flag a JavaScript foreign function that builds a Gleam `Result`,
+          list or variant as a lookalike object instead of through the
+          generated `gleam.mjs` constructors, and an import of the prelude not
+          resolved relative to the generated module.
+        - Flag an expected native failure not mapped to the declared failure
+          value, and code that assumes Gleam catches a foreign exception.
+        - Flag an `async` export or a callback declared as a plain value; a
+          Promise must be modelled.
+        - Flag an exact integer passed through a JavaScript number beyond the
+          safe range.
+        - Flag a core external with no implementation, or a different
+          contract, on Erlang or JavaScript, and a JavaScript claim backed only
+          by compilation.
+        - Flag a foreign function with no remaining caller.
+
+    - path: "integrations/**/*.{gleam,erl}"
+      instructions: |
+        Processes (gleam-otp; gleam_otp 1.3.0, gleam_erlang 1.3.0). In a
+        module that imports `gleam/otp/*` or `gleam/erlang/process`:
+        - Flag a slow effect, such as a model call, in a coordinator that must
+          stay responsive; run it under a deliberate owner and route its
+          completion, failure and cancellation back as messages.
+        - Flag accepted work, active workers or waiting messages with no
+          bound.
+        - Flag a subject received from outside its owning process.
+        - Flag `process.call` treated as returning a timeout `Error` or as
+          proof that the request had no effect, and a call timeout followed
+          by an unconditional retry of an external effect.
+        - Flag a message, spawn closure, job closure or start argument that
+          captures a desk, catalogue or whole environment where an id would
+          do.
+        - Flag a supervisor strategy that does not match the restart
+          dependency of its children, and a restart that leaves dependants
+          holding an exited subject.
+        - Flag a process name created from unbounded input; names are
+          atoms.
+        - Flag a supervision restart presented as restoring business state or
+          undoing an effect; the record is the state (ADR 0002).
+
+    - path: "{src,test,examples,integrations}/**/*.gleam"
+      instructions: |
+        JSON codecs (json-blueprint; locked 2.1.2, copy-size rules for 2.2.0
+        not taken). In a module that imports `json/blueprint/*`:
+        - Flag a change to a union envelope (`tag`/`value`) or to stored
+          entry JSON in a change that claims wire compatibility.
+        - Flag a callback passed to `field`, `optional_field`, `success` or a
+          getter that has an effect or is not synchronous and pure, and a
+          placeholder value from schema discovery stored as data.
+        - Flag a change that merges omission, null and a value; over
+          `nullable`, `optional_field` yields `None`, `Some(None)` and
+          `Some(Some(value))`.
+        - Flag a definition derived at run time and used without
+          `codec.check`.
+        - Flag a union `match` that returns a value tagged by another union.
+        - Flag untrusted text parsed without `value.default_limits()` or
+          `value.with_max_bytes`, and `Float` or `codec.int()` used for an
+          exact number where the `number` API applies.
+        - Flag a reader of `codec.view` that does not handle `OtherSchema`.
+        - Flag a codec stored with `term_to_binary` or kept across an upgrade.
+
+    - path: "integrations/*/src/**/*.gleam"
+      instructions: |
+        Telemetry (sinal; rules for 0.1.0 on telemetry 1.4.2). In a module
+        that imports `sinal`:
+        - Flag an event name or field key built from a runtime value; each
+          creates a permanent atom. Occurrence ids and point names go in
+          metadata values.
+        - Flag an event defined twice instead of one definition reused by its
+          emitters and observers.
+        - Flag a custom getter or encoder that can fail or raise; encoding
+          runs in the emitting process before dispatch.
+        - Flag an attachment that is never detached.
+        - Flag an unrouted handler that does I/O, a database write or a
+          network call on a hot path.
+        - Flag telemetry used to decide whether a record entry, a release or
+          a business commit happened.
+        - Flag a span around more than one local call, and a native duration
+          converted without an explicit unit.
+
+    - path: "integrations/decisions_postgres/{src,test}/**/*.gleam"
+      instructions: |
+        Durable jobs (grind; locked 0.2.0). In a module that imports
+        `grind`:
+        - Flag a worker identity or version changed without keeping old
+          stored jobs readable, and a changed callback meaning kept under the
+          same version.
+        - Flag a new submission key after a timeout or `CommitUnknown`; keep
+          the `PendingSubmission` and call `reconcile_submission`.
+        - Flag a submission made outside the caller's transaction where the
+          wake-up or settlement row must commit with it; use `submit_in` with
+          that connection and propagate its errors.
+        - Flag a staged reply presented as proof of the caller's commit.
+        - Flag `Uncertain` work replayed because a process died, outside the
+          worker's declared settlement rule (ADR 0056) or an attributed
+          `admin.resolution`.
+        - Flag cancellation treated as proof that no effect happened, and
+          `await` returning `Pending` treated as cancellation.
+        - Flag a uniqueness window or retained receipt treated as a permanent
+          business ledger.
+        - Flag a worker value or closure that captures an environment, desk
+          or catalogue; on 0.2.0 each attempt holds the worker.
+        - Flag the time of a job's delivery used to decide the record; time
+          and the record decide (ADR 0008).
+
+    - path: "integrations/decisions_postgres/{src,test,priv}/**"
+      instructions: |
+        PostgreSQL access (gleam-sql; rules for pog 4.1.0).
+        - Flag a value interpolated into SQL text instead of bound as a
+          parameter, and an identifier or ordering taken from input.
+        - Flag a query inside a transaction that uses the pool instead of the
+          transaction's connection.
+        - Flag a transaction callback that replaces a failure with success.
+        - Flag a decoding failure after a write reported as no write, and any
+          error taken as proof that no write occurred.
+        - Flag an empty string silently stored as null, or null as empty.
+        - Flag an invariant of the record enforced only by an application
+          check, with no constraint, conditional write or lock.
+        - Flag a claim that a model call, a released tool or another store
+          commits atomically with the transaction.
+        - Flag an edit to an applied migration under `priv/migrations`
+          instead of a new migration, and a change to it with no matching
+          change to `internal/migrations.gleam`.
+        - Flag pool startup or shutdown added to the package; the application
+          owns the pool (integrations/decisions_postgres/AGENTS.md).
+
+    - path: "{src,integrations/*/src}/**/*.gleam"
+      instructions: |
+        Domain model (modeling). Applies to the occurrence lifecycle, its
+        entries, the head, cards, verdicts, policies and the storage port.
+        - Flag conditional data held outside the variant that gives it
+          meaning, and a constrained value buildable without its constructor.
+        - Flag a transition with no stated source, trigger, guard, target and
+          outcome, including its refusal and re-entry, and state assigned
+          directly instead of through a domain verb such as `open`, `decide`
+          or `withdraw`.
+        - Flag a transition that is not a pure function of the record, the
+          command and the facts it needs, the clock read after the lock
+          included.
+        - Flag a commit with no absence lock, savepoint, version check or
+          conditional write against a concurrent commit, and a conflict with
+          no named response (ADR 0005, ADR 0022).
+        - Flag an effect a commit requests that is not delivered through a
+          stored pending row or a transactional enqueue (ADR 0045).
+        - Flag a stored observation, such as a model read or a hint, that
+          authorizes a release or a verdict.
+        - Flag an entry rewritten or deleted instead of appended, and a
+          stored tag derived from a module or constructor name.
+        - Flag a changing fact, such as who may decide, checked from a stored
+          value instead of rechecked when the operation runs.
+
+    - path: "{test,examples/usage/test,integrations/*/test}/**"
+      instructions: |
+        Tests (testing).
+        - Flag a test that confirms success through internals, private state,
+          a table query or a side channel where the public API or the record
+          can show it.
+        - Flag a mock of an internal collaborator, and an assertion on call
+          counts or call order.
+        - Flag a scenario outcome that no design rule states.
+        - Flag tests left in place for an interface the diff replaced.
+        - Flag a refusal, illegal transition or illegal input the change
+          introduces with no test through the public boundary.
+        - Flag a store change with no case in the conformance suite or the
+          shared stress scenarios, so that an adapter is not checked against
+          the port contract (ADR 0006, ADR 0026).
+        - Flag a race shown without real processes against a real
+          transaction boundary, and a crash simulated without `process.kill`
+          (integrations/decisions_otp/AGENTS.md).
+        - Flag a fake standing in for PostgreSQL where transactions or
+          constraints are under test, and a database test that selects a
+          database other than `DECISIONS_TEST_DATABASE_URL`.
+
+    - path: "docs/{design,adr}/**"
+      instructions: |
+        Design layer (design; policy).
+        - Fresh reader. The reviewer never saw the change being made. Flag a
+          changed unit that does not tell a reader with no memory what the
+          code does not say, and a unit that copies the code.
+        - Flag content the code states: payloads, fields, limits, timeouts,
+          function or file lists, queries. Name the rule it serves instead; a
+          file or symbol is allowed only where a reader needs it to find where
+          a rule is enforced.
+        - Flag session narration, progress notes, status or delivery history.
+        - Flag a unit missing one of overview, interface, invariants, side
+          effects and verification; an empty part says "none".
+        - Flag a concept defined in a second home, a glossary term with two
+          meanings or two owning contexts, and a retired term reused.
+        - Flag an edit to an accepted ADR's text instead of a superseding ADR,
+          and a changed date on a pending entry.
+
+    - path: "issues/**/*.md"
+      instructions: |
+        Local tracker (tracker; AGENTS.md).
+        - Each issue file carries one `Status:` and one `Category:` header
+          with a value AGENTS.md lists.
+        - Flag an issue titled with a solution instead of the observable
+          problem, line numbers or solution code in an issue, and a horizontal
+          task such as "build the data layer".
+        - Flag an AI-written comment that does not start with
+          `AI-assisted contribution.`
+
+    - path: "{scripts/**,fixtures/negative/**,flake.nix,lefthook.yml,.github/workflows/**}"
+      instructions: |
+        Gate (gate).
+        - Flag a check that passes or skips when its tool or part is missing;
+          it fails or reports unmeasured, as `--require-all` does in CI.
+        - Flag a tool not supplied through the Nix flake, and a command that
+          differs between local runs and CI.
+        - Flag a new check that encodes a layout, naming or README
+          convention, and a check that scripts what a tool already performs.
+        - Flag a replaced check that drops security or data-integrity
+          coverage, such as the PostgreSQL suite or the negative fixtures.
+        - Flag a gate that keeps a formatting check but loses compilation or
+          behavior tests of a package, the usage examples or the JavaScript
+          build.
+        - Flag a negative fixture whose `.expect` file no longer names the
+          diagnostic it proves, or one with no positive control.
+        - Flag a benchmark turned into a gating threshold (ADR 0028), and a
+          database script that can select a database other than its own
+          throwaway cluster.
+
+  pre_merge_checks:
+    title:
+      mode: "off"
+    description:
+      mode: warning
+    issue_assessment:
+      mode: "off"
+    docstrings:
+      mode: "off"
+    custom_checks:
+      - name: No weakened test or gate
+        mode: error
+        instructions: |
+          Source: policy, gate. Fail if the diff skips, deletes, disables or
+          loosens a test, a conformance or stress scenario, a negative fixture
+          or a step of scripts/test.sh, scripts/test-postgres.sh,
+          scripts/check_negative.sh, scripts/check_javascript.sh or CI
+          (including dropping `--require-all`, removing a package from
+          scripts/test.sh, or adding `continue-on-error`), and the pull
+          request description does not name the behavior that no longer
+          exists or the stronger check that replaces it. Pass otherwise.
+      - name: Behavior change carries its design
+        mode: warning
+        instructions: |
+          Source: policy, design. Warn if the diff changes public behavior, an
+          invariant of the record or the storage port contract in src/ or
+          integrations/*/src with no change under docs/design or docs/adr, and
+          the pull request description does not say the change restores
+          designed behavior or preserves behavior. Pass for tests, tooling and
+          documentation-only changes.
+      - name: Breaking change is declared
+        mode: warning
+        instructions: |
+          Source: policy, gleam-lib. Warn if the diff removes or changes an
+          exported function, type, constructor, field or module path outside
+          an `internal` module of decisions, decisions_otp or
+          decisions_postgres, and the pull request description does not call
+          the change breaking and give its migration. Pass otherwise.
+      - name: Problem-first description
+        mode: warning
+        instructions: |
+          Source: git. Warn unless the pull request description gives the
+          problem, why it matters, one concrete example, the solution in one
+          paragraph, its trade-offs, and what was verified, with no file
+          tour, and its claims match the diff.
+      - name: No attribution text
+        mode: warning
+        instructions: |
+          Source: git. Warn if the pull request title or description contains
+          a co-author credit, `Co-Authored-By`, a "Generated with" or
+          "Generated by" line, or a line starting with the robot emoji.
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+
+  tools:
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    shellcheck:
+      enabled: true
+    # The repository has no Python and runs no JavaScript, SQL, Markdown,
+    # YAML or prose linter; their findings would be preferences without a
+    # written rule (policy, Silence).
+    ruff:
+      enabled: false
+    pylint:
+      enabled: false
+    flake8:
+      enabled: false
+    biome:
+      enabled: false
+    eslint:
+      enabled: false
+    oxc:
+      enabled: false
+    sqlfluff:
+      enabled: false
+    squawk:
+      enabled: false
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    yamllint:
+      enabled: false
+    github-checks:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    # AGENTS.md and CLAUDE.md are read by default.
+    filePatterns:
+      - files: "docs/COVERAGE.md,docs/CONTEXT-MAP.md,docs/design/**/*.typ,docs/adr/*.md"
+        applyTo: "src/**,integrations/**,examples/**,test/**"
+      - files: "docs/BENCHMARKS.md"
+        applyTo: "integrations/decisions_otp/bench/**"
+  learnings:
+    scope: local
+  pull_requests:
+    scope: local
