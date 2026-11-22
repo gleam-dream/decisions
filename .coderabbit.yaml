@@ -5,29 +5,16 @@
 # of coderabbit-config itself, and `repository` marks a rule beyond the catalog.
 #
 # Catalogs read:
-#   practice catalog (not public)  879841a61c3f83cd809edca9229c4a6bb7f909f8
-#   gleam-agent-tools  6a9ea2f647e787a32d3c7fa88d9c58c5b81ae9d7
+#   practice catalog (not public)  a56636a4eed7a0d644b89f5bb7c7d7c9692e0887
+#   gleam-agent-tools  d7b541cb885b3edbf25563b06aee97b28b66074f
 #
 # Governing skills: coderabbit-config (policy), gleam, gleam-lib, gleam-ffi,
 # gleam-otp, gleam-sql, grind, sinal, json-blueprint, modeling, testing,
 # design, tracker, gate, git.
 #
-# Packages: decisions 0.1.1 (root, Hex), decisions_otp 0.1.1 and
-# decisions_postgres 0.2.1 (integrations/, Git tags).
-# Governing dependency versions, locked in each package's manifest.toml:
-#   json_blueprint 2.2.0 (root, examples/usage, integrations/decisions_otp/
-#     bench); 2.1.2 in integrations/decisions_otp and
-#     integrations/decisions_postgres, which take it through the Hex core
-#     0.1.1 and import no json/blueprint module. 2.2.0 is the version the
-#     json-blueprint skill requires, so its copy-size rules are taken with
-#     its codec API rules.
-#   gleam_otp 1.3.0, gleam_erlang 1.3.0 (integrations)
-#   sinal 0.1.0, telemetry 1.4.2 (integrations; 1.4.3 in decisions_otp/bench)
-#   grind 0.2.0 (decisions_postgres). The grind skill names 0.2.1, which
-#     changed only what a job copies; its rules are taken for 0.2.0.
-#   pog 4.1.0 (decisions_postgres)
-#   gleam_stdlib 1.0.5, gleam_json 3.1.0, gleam_crypto 1.6.0,
-#   gleam_time 1.11.0, gleeunit 1.11.0.
+# Packages: decisions (root, Hex), decisions_otp and decisions_postgres
+# (integrations/, Git tags). json_blueprint reaches the integrations through
+# the Hex core; they import no json/blueprint module.
 language: en-US
 tone_instructions: >-
   Literal and concise. Report only defects you can evidence from the diff, its
@@ -195,7 +182,7 @@ reviews:
 
     - path: "integrations/**/*.{gleam,erl}"
       instructions: |
-        Processes (gleam-otp; gleam_otp 1.3.0, gleam_erlang 1.3.0). In a
+        Processes (gleam-otp). In a
         module that imports `gleam/otp/*` or `gleam/erlang/process`:
         - Flag a slow effect, such as a model call, in a coordinator that must
           stay responsive; run it under a deliberate owner and route its
@@ -219,7 +206,7 @@ reviews:
 
     - path: "{src,test,examples,integrations}/**/*.gleam"
       instructions: |
-        JSON codecs (json-blueprint; json_blueprint 2.2.0). In a module that
+        JSON codecs (json-blueprint). In a module that
         imports `json/blueprint/*`:
         - Flag a change to a union envelope (`tag`/`value`) or to stored
           entry JSON in a change that claims wire compatibility.
@@ -243,13 +230,12 @@ reviews:
         - Flag one value placed in several parts of a term sent between
           processes, such as a codec captured by several closures of a desk;
           each place is copied.
-        - Flag a codec stored with `term_to_binary` or kept across a hot
-          upgrade from 2.1.x; rebuild it.
+        - Flag a codec stored with `term_to_binary` or kept across a hot code
+          upgrade; rebuild it.
 
     - path: "integrations/*/src/**/*.gleam"
       instructions: |
-        Telemetry (sinal; rules for 0.1.0 on telemetry 1.4.2). In a module
-        that imports `sinal`:
+        Telemetry (sinal). In a module that imports `sinal`:
         - Flag an event name or field key built from a runtime value; each
           creates a permanent atom. Occurrence ids and point names go in
           metadata values.
@@ -267,8 +253,7 @@ reviews:
 
     - path: "integrations/decisions_postgres/{src,test}/**/*.gleam"
       instructions: |
-        Durable jobs (grind; locked 0.2.0). In a module that imports
-        `grind`:
+        Durable jobs (grind). In a module that imports `grind`:
         - Flag a worker identity or version changed without keeping old
           stored jobs readable, and a changed callback meaning kept under the
           same version.
@@ -286,13 +271,17 @@ reviews:
         - Flag a uniqueness window or retained receipt treated as a permanent
           business ledger.
         - Flag a worker value or closure that captures an environment, desk
-          or catalogue; on 0.2.0 each attempt holds the worker.
+          or catalogue; each job copies a closure over the whole worker
+          definition three times, and its handler keeps one while it runs.
+        - Flag `admin.settle_due` called where the copy of its queue's
+          settlement closures into the caller is not budgeted; no other call
+          copies workers.
         - Flag the time of a job's delivery used to decide the record; time
           and the record decide (ADR 0008).
 
     - path: "integrations/decisions_postgres/{src,test,priv}/**"
       instructions: |
-        PostgreSQL access (gleam-sql; rules for pog 4.1.0).
+        PostgreSQL access (gleam-sql).
         - Flag a value interpolated into SQL text instead of bound as a
           parameter, and an identifier or ordering taken from input.
         - Flag a query inside a transaction that uses the pool instead of the
