@@ -1268,9 +1268,9 @@ copies your values:
 From core 0.1.1, a codec built with `wire.codec` holds only the json_blueprint
 codec it was given, and one built with `wire.plain` holds only its encoder and
 decoder. In 0.1.0, `wire.codec` also holds a rendered schema and two closures
-over the codec. Every package requires
-`json_blueprint >= 2.1.1`, whose combinator codecs no longer multiply in size at
-each nesting layer when copied.
+over the codec. The core requires `json_blueprint >= 2.2.0`, whose combinator
+codecs copy at about their own size; the integrations take the floor through
+the core.
 
 To guard what a point costs, assert in a test the bytes a send copies,
 `erts_debug:flat_size(Term)` times the word size, for the term that travels, such as
