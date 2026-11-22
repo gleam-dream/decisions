@@ -27,7 +27,7 @@ target = "javascript"
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
-json_blueprint = ">= 2.1.1 and < 3.0.0"
+json_blueprint = ">= 2.2.0 and < 3.0.0"
 decisions = { path = "$ROOT" }
 TOML
 

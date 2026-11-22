@@ -15,9 +15,12 @@
 # Packages: decisions 0.1.1 (root, Hex), decisions_otp 0.1.1 and
 # decisions_postgres 0.2.1 (integrations/, Git tags).
 # Governing dependency versions, locked in each package's manifest.toml:
-#   json_blueprint 2.1.2 (every package). The json-blueprint skill requires
-#     >= 2.2.0; its copy-size rules are for 2.2.0 and are not taken. The rules
-#     taken use API that 2.1.2 has.
+#   json_blueprint 2.2.0 (root, examples/usage, integrations/decisions_otp/
+#     bench); 2.1.2 in integrations/decisions_otp and
+#     integrations/decisions_postgres, which take it through the Hex core
+#     0.1.1 and import no json/blueprint module. 2.2.0 is the version the
+#     json-blueprint skill requires, so its copy-size rules are taken with
+#     its codec API rules.
 #   gleam_otp 1.3.0, gleam_erlang 1.3.0 (integrations)
 #   sinal 0.1.0, telemetry 1.4.2 (integrations; 1.4.3 in decisions_otp/bench)
 #   grind 0.2.0 (decisions_postgres). The grind skill names 0.2.1, which
@@ -216,8 +219,8 @@ reviews:
 
     - path: "{src,test,examples,integrations}/**/*.gleam"
       instructions: |
-        JSON codecs (json-blueprint; locked 2.1.2, copy-size rules for 2.2.0
-        not taken). In a module that imports `json/blueprint/*`:
+        JSON codecs (json-blueprint; json_blueprint 2.2.0). In a module that
+        imports `json/blueprint/*`:
         - Flag a change to a union envelope (`tag`/`value`) or to stored
           entry JSON in a change that claims wire compatibility.
         - Flag a callback passed to `field`, `optional_field`, `success` or a
@@ -233,7 +236,15 @@ reviews:
           `value.with_max_bytes`, and `Float` or `codec.int()` used for an
           exact number where the `number` API applies.
         - Flag a reader of `codec.view` that does not handle `OtherSchema`.
-        - Flag a codec stored with `term_to_binary` or kept across an upgrade.
+        - Flag a run-time enum built inside its field of a
+          `use … <- codec.field` chain; it is rebuilt on every conversion.
+          Build it once before the chain and `codec.check` it where its labels
+          arrive.
+        - Flag one value placed in several parts of a term sent between
+          processes, such as a codec captured by several closures of a desk;
+          each place is copied.
+        - Flag a codec stored with `term_to_binary` or kept across a hot
+          upgrade from 2.1.x; rebuild it.
 
     - path: "integrations/*/src/**/*.gleam"
       instructions: |
