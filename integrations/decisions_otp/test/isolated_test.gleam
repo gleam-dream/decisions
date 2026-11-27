@@ -16,6 +16,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{None}
 import gleam/result
+import gleam/string
 import gleam/time/duration
 import sinal
 import sinal/correlation
@@ -29,7 +30,7 @@ pub fn a_model_that_raises_is_raised_and_the_caller_lives_test() {
   let raises = model.new(fn(_, _) { panic as "the model raised" })
   let assert Error(model.Raised(_)) =
     model.run(
-      isolated.model(raises, within: duration.seconds(1)),
+      isolated.model(raises, within: duration.seconds(1), heap: lab.heap()),
       context(),
       model.recorded(context: [], reads: []),
     )
@@ -46,7 +47,7 @@ pub fn a_model_that_hangs_is_killed_at_its_deadline_test() {
   let before = now_ms()
   let outcome =
     model.run(
-      isolated.model(hangs, within: duration.milliseconds(50)),
+      isolated.model(hangs, within: duration.milliseconds(50), heap: lab.heap()),
       context(),
       model.recorded(context: [], reads: []),
     )
@@ -78,7 +79,7 @@ pub fn the_reads_a_model_received_are_on_its_recommendation_test() {
   let ref = Ref("customer", "ana", "7")
   let assert Ok(recommendation) =
     model.run(
-      isolated.model(reading, within: duration.seconds(1)),
+      isolated.model(reading, within: duration.seconds(1), heap: lab.heap()),
       context(),
       model.recorded(context: [], reads: [#(ref, "Ana")]),
     )
@@ -113,7 +114,11 @@ pub fn a_failed_model_is_recorded_and_reported_test() {
       desk,
       in: store.transaction(s, _),
       request:,
-      model: isolated.model(hangs, within: duration.milliseconds(20)),
+      model: isolated.model(
+        hangs,
+        within: duration.milliseconds(20),
+        heap: lab.heap(),
+      ),
     )
   let _ = sinal.detach(attachment)
   let assert Ok(report) = process.receive(reports, 100)
@@ -204,4 +209,40 @@ fn monotonic_us() -> Int
 
 fn now_ms() -> Int {
   monotonic_us() / 1000
+}
+
+/// A model that allocates far more than its bound, well within its
+/// deadline, is killed and reported as raised; the caller lives.
+pub fn a_model_that_outgrows_its_heap_is_raised_test() {
+  let hoards =
+    model.new(fn(_, _) {
+      // About 80 MB of list cells.
+      let hoard = list.repeat(Nil, 5_000_000)
+      Ok(
+        Recommendation(
+          output: int.to_string(list.length(hoard)),
+          by: Rules("r", "1"),
+          explanation: RuleFired("r"),
+          signals: [],
+          reads: [],
+        ),
+      )
+    })
+  let assert Ok(heap) = isolated.heap_limit(megabytes: 10)
+  let assert Error(model.Raised(reason)) =
+    model.run(
+      isolated.model(hoards, within: duration.seconds(10), heap:),
+      context(),
+      model.recorded(context: [], reads: []),
+    )
+  assert string.contains(reason, "10 MB")
+}
+
+/// A heap limit is a whole number of megabytes, at least one: zero, which
+/// the runtime reads as "no limit", cannot be asked for.
+pub fn a_heap_limit_is_at_least_a_megabyte_test() {
+  assert isolated.heap_limit(megabytes: 0) == Error(Nil)
+  assert isolated.heap_limit(megabytes: -1) == Error(Nil)
+  let assert Ok(heap) = isolated.heap_limit(megabytes: 1)
+  assert isolated.heap_limit_megabytes(heap) == 1
 }

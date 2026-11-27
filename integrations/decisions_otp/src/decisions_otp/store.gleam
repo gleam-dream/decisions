@@ -108,7 +108,7 @@ import decisions_otp/internal/rows.{
   BundleKey, EntryKey, EntryRow, EvidenceKey, EvidenceRow, HeadKey, HeadRow,
   IndexRow, NoticeKey, NoticeRow, OccurrenceLock, PendingKey, PendingRow,
   PointKey, QueueKey, ReviewKey, SettledKey, TriggerKey, TriggerRow, WaitingKey,
-  WakeKey, WakeRow,
+  WakeAtKey, WakeKey, WakeRow,
 }
 import decisions_otp/live.{type Hint, type Topic}
 import gleam/bool
@@ -592,18 +592,19 @@ fn take(store: Store, open: Open, lock: Lock) -> Result(Nil, StoreError) {
       let answer = case process.selector_receive(selector, store.lock_timeout) {
         Ok(answer) -> answer
         // Too long: withdraw the request. The owner answers the
-        // withdrawal after any grant it already sent, so the last answer
-        // is the truth.
+        // withdrawal exactly once, on a subject of its own, and after any
+        // grant it already sent: that answer is the truth, and a grant on
+        // `reply` is in the mailbox by then, so it is read and dropped.
         Error(Nil) -> {
-          process.send(store.owner, owner.Withdraw(open.id, reply))
-          case process.selector_receive_forever(selector) {
-            Answered(owner.Granted) ->
-              case process.selector_receive(selector, 0) {
-                Ok(later) -> later
-                Error(Nil) -> Answered(owner.Granted)
-              }
-            other -> other
-          }
+          let withdrawn = process.new_subject()
+          process.send(store.owner, owner.Withdraw(open.id, withdrawn))
+          let answer =
+            process.new_selector()
+            |> process.select_map(withdrawn, Answered)
+            |> process.select_specific_monitor(monitor, fn(_) { OwnerStopped })
+            |> process.selector_receive_forever
+          let _ = process.receive(reply, 0)
+          answer
         }
       }
       process.demonitor_process(monitor)
@@ -858,12 +859,12 @@ fn schedule(
   use Nil <- result.try(take(store, open, OccurrenceLock(occurrence)))
   // Under the occurrence's lock: no other commit touches these rows.
   rows.scan(store.tables.rows, open.buffer, WakeKey(#(point, occurrence), 0))
-  |> list.each(fn(pair) { rows.delete(open.buffer, pair.0) })
+  |> list.each(fn(pair) { drop_wake(store, open, pair.0) })
   at
   |> list.map(wire.milliseconds)
   |> list.unique
   |> list.each(fn(ms) {
-    rows.put(open.buffer, WakeKey(#(point, occurrence), ms), WakeRow(0, 0))
+    put_wake(store, open, WakeKey(#(point, occurrence), ms), WakeRow(0, 0))
   })
   Ok(Nil)
 }
@@ -1460,20 +1461,18 @@ pub fn backlog(store: Store) -> Backlog(Tx) {
     transaction: fn(body) { transaction(store, body) },
     now: fn() { now(store) },
     due: fn(at, limit) {
-      let at = wire.milliseconds(at)
-      // A raw read: a commit seen in part here can only offer a wake-up
-      // that `take_wake` then finds gone, or miss one until the next look.
-      rows.scan_until(store.tables.rows, WakeKey(#("", ""), 0), at)
-      // A wake-up whose handler failed waits out its backoff.
-      |> list.filter(fn(pair) {
-        case pair.1 {
-          WakeRow(not_before:, ..) -> not_before <= at
-          _ -> False
+      // A raw read of the time-ordered index, which holds a wake-up whose
+      // handler failed at the end of its backoff: only the due prefix is
+      // read. A commit seen in part here can only offer a wake-up that
+      // `take_wake` then finds gone, or miss one until the next look.
+      rows.due_wakes(store.tables.rows, wire.milliseconds(at), limit)
+      |> list.filter_map(fn(key) {
+        case key {
+          WakeAtKey(wake: #(point, occurrence, at), ..) ->
+            Ok(Wake(point:, occurrence:, at: wire.from_milliseconds(at)))
+          _ -> Error(Nil)
         }
       })
-      |> list.filter_map(wake_of)
-      |> list.sort(fn(a, b) { timestamp.compare(a.at, b.at) })
-      |> list.take(limit)
       |> Ok
     },
     take_wake: fn(tx, wake: Wake) {
@@ -1486,7 +1485,7 @@ pub fn backlog(store: Store) -> Backlog(Tx) {
         // Due, and past any backoff: a second runtime on the same store
         // cannot deliver a wake-up that is still backing off.
         Ok(WakeRow(not_before:, ..)) if not_before <= at -> {
-          rows.delete(open.buffer, key)
+          drop_wake(store, open, key)
           Ok(True)
         }
         _ -> Ok(False)
@@ -1495,7 +1494,7 @@ pub fn backlog(store: Store) -> Backlog(Tx) {
     add_wake: fn(tx, wake: Wake) {
       use store, open <- within(tx)
       use Nil <- result.try(take(store, open, OccurrenceLock(wake.occurrence)))
-      rows.put(open.buffer, wake_key(wake), WakeRow(0, 0))
+      put_wake(store, open, wake_key(wake), WakeRow(0, 0))
       Ok(Nil)
     },
     undelivered: fn(limit) {
@@ -1591,6 +1590,10 @@ pub fn backlog(store: Store) -> Backlog(Tx) {
       use store, open <- within(tx)
       set_aside(store, open, job, reason)
     },
+    set_aside_occurrence: fn(tx, occurrence, reason) {
+      use store, open <- within(tx)
+      set_aside_occurrence(store, open, occurrence, reason)
+    },
     aside: fn() {
       scan_kind_committed(store, AsideKey(0, 0), 0)
       |> list.filter_map(fn(pair) {
@@ -1614,6 +1617,41 @@ fn wake_key(wake: Wake) -> Key {
   WakeKey(#(wake.point, wake.occurrence), wire.milliseconds(wake.at))
 }
 
+/// Write a wake-up's row and its row in the time-ordered index, in place
+/// of any it had.
+fn put_wake(store: Store, open: Open, key: Key, row: Row) -> Nil {
+  drop_wake(store, open, key)
+  rows.put(open.buffer, key, row)
+  case wake_at_key(key, row) {
+    Ok(index) -> rows.put(open.buffer, index, IndexRow)
+    Error(Nil) -> Nil
+  }
+}
+
+/// Remove a wake-up's row and its row in the time-ordered index.
+fn drop_wake(store: Store, open: Open, key: Key) -> Nil {
+  case rows.read(store.tables.rows, open.buffer, key) {
+    Ok(row) -> {
+      rows.delete(open.buffer, key)
+      case wake_at_key(key, row) {
+        Ok(index) -> rows.delete(open.buffer, index)
+        Error(Nil) -> Nil
+      }
+    }
+    Error(Nil) -> Nil
+  }
+}
+
+/// A wake-up's row in the time-ordered index: due at its time, or at the
+/// end of its backoff when that is later.
+fn wake_at_key(key: Key, row: Row) -> Result(Key, Nil) {
+  case key, row {
+    WakeKey(job: #(point, occurrence), at:), WakeRow(not_before:, ..) ->
+      Ok(WakeAtKey(int.max(at, not_before), #(point, occurrence, at)))
+    _, _ -> Error(Nil)
+  }
+}
+
 fn update_notice(
   store: Store,
   open: Open,
@@ -1634,8 +1672,9 @@ fn failed(store: Store, open: Open, job: Job) -> Result(Int, StoreError) {
       let key = wake_key(wake)
       case rows.read(store.tables.rows, open.buffer, key) {
         Ok(WakeRow(attempts:, ..)) -> {
-          rows.put(
-            open.buffer,
+          put_wake(
+            store,
+            open,
             key,
             WakeRow(attempts + 1, later(store, attempts + 1)),
           )
@@ -1695,6 +1734,38 @@ fn failed(store: Store, open: Open, job: Job) -> Result(Int, StoreError) {
   }
 }
 
+/// Take an occurrence out of its queues and `waiting`, and set aside its
+/// pending wake-ups. Its head and entries stay, so it can still be read.
+fn set_aside_occurrence(
+  store: Store,
+  open: Open,
+  occurrence: String,
+  reason: String,
+) -> Result(Nil, StoreError) {
+  use Nil <- result.try(take(store, open, OccurrenceLock(occurrence)))
+  case rows.read(store.tables.rows, open.buffer, HeadKey(occurrence, 0)) {
+    Ok(HeadRow(head:, ..)) -> {
+      list.each(head.awaiting, fn(set) {
+        rows.delete(open.buffer, QueueKey(set, queue_order(occurrence, head)))
+      })
+      rows.delete(
+        open.buffer,
+        WaitingKey(#(head.point, head.subject), occurrence),
+      )
+      rows.scan(
+        store.tables.rows,
+        open.buffer,
+        WakeKey(#(head.point, occurrence), 0),
+      )
+      |> list.filter_map(wake_of)
+      |> list.try_each(fn(wake) {
+        set_aside(store, open, WakeJob(wake), reason)
+      })
+    }
+    _ -> Ok(Nil)
+  }
+}
+
 fn set_aside(
   store: Store,
   open: Open,
@@ -1718,7 +1789,7 @@ fn set_aside(
         Ok(WakeRow(attempts:, ..)) -> attempts
         _ -> 0
       }
-      rows.delete(open.buffer, key)
+      drop_wake(store, open, key)
       keep(
         rows.AsideWake(wake.point, wake.occurrence, wire.milliseconds(wake.at)),
         attempts,

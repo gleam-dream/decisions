@@ -371,7 +371,11 @@ pub fn a_deadline_leaves_the_caller_s_mailbox_empty_test() {
       })
     let outcome =
       model.run(
-        isolated.model(late, within: duration.milliseconds(30)),
+        isolated.model(
+          late,
+          within: duration.milliseconds(30),
+          heap: lab.heap(),
+        ),
         Manifest(refs: [], renderer: "lab-1"),
         model.recorded(context: [], reads: []),
       )

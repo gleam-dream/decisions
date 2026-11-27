@@ -323,7 +323,7 @@ pub fn an_isolated_model_dies_with_its_caller_test() {
   let caller =
     process.spawn_unlinked(fn() {
       model.run(
-        isolated.model(hangs, within: duration.minutes(5)),
+        isolated.model(hangs, within: duration.minutes(5), heap: lab.heap()),
         Manifest(refs: [], renderer: "lab-1"),
         model.recorded(context: [], reads: []),
       )

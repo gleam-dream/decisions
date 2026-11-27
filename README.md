@@ -1429,7 +1429,7 @@ copies your values:
 - `decisions_otp`: the runtime's processes hold the same values in their state,
   which is copied each time one of them starts or restarts.
 - `decisions_otp`: `isolated.model` runs your `Model` in a new process for each
-  call, and `replay.replay` runs it in a new process for each share. Either way
+  call, held to a deadline and a heap limit you give it, and `replay.replay` runs it in a new process for each share. Either way
   the model, and every heap term its function captures, is copied each time.
   Keep the model small: build heavy heap terms, such as the codec of a
   structured model answer, inside the model's function rather than capturing

@@ -385,6 +385,27 @@ fn backlog(
           |> result.replace(Nil)
       }
     },
+    // As the package's own wake-up worker does: the head is marked set
+    // aside (which `waiting` leaves out), its queue rows go, and its
+    // pending wake-ups are set aside.
+    set_aside_occurrence: fn(tx, occurrence, reason) {
+      pog.query(
+        "WITH head AS (
+           UPDATE decisions_occurrences
+           SET set_aside_at = clock_timestamp(), set_aside_reason = $2
+           WHERE id = $1 AND set_aside_at IS NULL
+         ), queues AS (
+           DELETE FROM decisions_awaiting WHERE occurrence_id = $1
+         )
+         UPDATE decisions_wakes
+         SET set_aside_at = clock_timestamp(), set_aside_reason = $2
+         WHERE occurrence_id = $1 AND set_aside_at IS NULL",
+      )
+      |> pog.parameter(pog.text(occurrence))
+      |> pog.parameter(pog.text(reason))
+      |> rows(decisions_postgres.connection(tx))
+      |> result.replace(Nil)
+    },
     aside: fn() { aside(db) },
   )
 }

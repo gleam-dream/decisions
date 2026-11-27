@@ -386,6 +386,30 @@ let assert Ok(lock_timeout) = port_types.lock_timeout(milliseconds: 50)
 store.Config(..store.defaults(), lock_timeout:)
 ```
 
+### An isolated model has a heap limit
+
+`isolated.model` takes `heap:`, an `isolated.HeapLimit` of whole megabytes and
+at least one. A model whose heap passes it is killed at once and its call is
+`model.Raised`. In 0.1 a model could allocate without bound within its
+deadline.
+
+```gleam
+// Before (0.1)
+isolated.model(classifier, within: duration.seconds(5))
+
+// After (0.2)
+let assert Ok(heap) = isolated.heap_limit(megabytes: 256)
+isolated.model(classifier, within: duration.seconds(5), heap:)
+```
+
+### A wake-up whose record cannot be acted on sets its occurrence aside
+
+`backlog.Backlog` has `set_aside_occurrence(tx, occurrence, reason)`. The
+runtime calls it, beside `set_aside`, when a wake-up's record cannot be acted
+on: the occurrence leaves every queue and `waiting`, and its other wake-ups are
+set aside. An implementation of `Backlog` other than the in-memory store's adds
+it.
+
 ### The core range accepts 0.2
 
 `decisions_otp` accepts `decisions` below 0.3.0, so it runs with core 0.2.0. The stress suite (`decisions_otp/stress`) attaches its own handler
