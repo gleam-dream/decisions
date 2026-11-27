@@ -16,7 +16,10 @@ The repository holds three packages:
 | `decisions_otp`      | `integrations/decisions_otp`      | The process-safe in-memory store, the supervised runtime, isolated model calls, parallel replay and subscriptions.                |
 | `decisions_postgres` | `integrations/decisions_postgres` | The storage port over PostgreSQL, its migrations, the Grind workers for wake-ups and settlements, `NOTIFY` and the queue queries. |
 
-The core is released to Hex. The integrations are released as Git tags of this
+The core is released to Hex: pushing a signed `v<version>` tag on the version
+bump's merge commit runs `.github/workflows/release.yml`, which stages the
+release on hex.pm for a maintainer's approval (staged publishing is on). The
+integrations are released as Git tags of this
 repository (`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`), not on Hex.
 An integration's release commit replaces its path dependency on the root
 (`decisions = { path = "../.." }`) with the core's Hex version range.
