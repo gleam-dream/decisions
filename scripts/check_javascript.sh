@@ -66,7 +66,9 @@ fn reply_codec() -> wire.Codec(Reply) {
 
 pub fn main() -> Nil {
   let store = memory.new()
-  let point = decisions.point("check.reply", reply_codec())
+  let point =
+    decisions.point("check.reply", reply_codec())
+    |> decisions.signal(fact.number("score"))
   let desk =
     decisions.desk(
       point,

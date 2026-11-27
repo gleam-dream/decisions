@@ -146,6 +146,33 @@ policy.new(
   condition. A policy stored by 0.1 does not decode; publish each version
   again in the new form. A stored policy that `new` refuses does not decode.
 
+### Each fact has one source: signals, answers and output facts
+
+A point declares a consulted point's answer with `decisions.answer`, apart
+from the model's signals. In 0.1 both were declared with `signal` and read
+from one list, so a model's signal with the answer's name stood in for the
+consulted point and could skip the consult.
+
+```gleam
+// Before (0.1)
+decisions.point("billing.payment", codec) |> decisions.signal(cleared)
+
+// After (0.2)
+decisions.point("billing.payment", codec)
+|> decisions.answer(cleared, from: "compliance")
+```
+
+- `recommend` refuses a recommendation whose signals hold a fact not declared
+  with `signal`, or of another type, with `InvalidFacts` (`Poisoned`). Declare
+  every signal the model sends.
+- `inform` accepts a fact only when it is declared as an answer from the
+  point that informs.
+- Declaring a name again, with `fact`, `signal` or `answer`, replaces its
+  earlier declaration.
+- `decisions.facts_of(point, output)` is replaced by
+  `decisions.policy_facts(point, recommendation, informed:)`, which reads each
+  fact from its declared source only.
+
 ## decisions_otp 0.2.0
 
 ### A handler belongs to the process that attached it
