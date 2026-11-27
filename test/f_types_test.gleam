@@ -4,12 +4,13 @@
 import decisions
 import decisions/fact
 import decisions/policy.{
-  AnyoneHolding, Ask, AtLeast, Is, Never, Policy, Proceed, Several, When,
+  AnyoneHolding, AtLeast, Is, Never, Proceed, Several, When,
 }
 import decisions/vocabulary.{Approve, Correct, Reason, Text}
 import gleam/json
 import gleam/option.{None}
 import support/payout
+import support/policies
 import support/refund.{Refund}
 import support/world
 
@@ -17,26 +18,26 @@ import support/world
 /// A policy that arrives as data is refused when it is published.
 pub fn a_policy_that_reads_an_undeclared_fact_is_not_publishable_test() {
   let sound =
-    Policy(
+    policies.checked(
       version: 2,
       rules: [When(policy.below(payout.amount(), 100.0), Proceed(Never, None))],
-      otherwise: Ask(AnyoneHolding("finance")),
+      otherwise: AnyoneHolding("finance"),
     )
   assert decisions.publishable(payout.point(), sound) == Ok(Nil)
 
-  // The same policy as an administrator's stored JSON, with a typo, a text
-  // comparison on a number, and no approvals.
+  // The same policy as an administrator's stored JSON, with a typo and a
+  // text comparison on a number: it decodes and is refused when published.
   let stored =
-    "{\"version\":3,\"rules\":[{\"when\":{\"t\":\"at_least\",\"fact\":\"ammount\",\"limit\":100},\"then\":{\"t\":\"proceed\",\"sample\":null}},{\"when\":{\"t\":\"is\",\"fact\":\"amount\",\"value\":{\"t\":\"text\",\"v\":\"high\"}},\"then\":{\"t\":\"proceed\",\"sample\":null}}],\"otherwise\":{\"t\":\"ask\",\"eligible\":{\"t\":\"several\",\"count\":0,\"of\":{\"t\":\"anyone\",\"set\":\"finance\"}}}}"
+    "{\"version\":3,\"rules\":[{\"when\":{\"t\":\"at_least\",\"fact\":\"ammount\",\"limit\":100},\"then\":{\"t\":\"proceed\",\"sample\":null}},{\"when\":{\"t\":\"is\",\"fact\":\"amount\",\"value\":{\"t\":\"text\",\"v\":\"high\"}},\"then\":{\"t\":\"proceed\",\"sample\":null}}],\"otherwise\":{\"t\":\"anyone\",\"set\":\"finance\"}}"
   let assert Ok(decoded) = json.parse(stored, policy.decoder())
   assert decoded
-    == Policy(
+    == policies.checked(
       version: 3,
       rules: [
         When(AtLeast("ammount", 100.0), Proceed(Never, None)),
         When(Is("amount", Text("high")), Proceed(Never, None)),
       ],
-      otherwise: Ask(Several(0, AnyoneHolding("finance"))),
+      otherwise: AnyoneHolding("finance"),
     )
   assert decisions.publishable(payout.point(), decoded)
     == Error([
@@ -46,8 +47,20 @@ pub fn a_policy_that_reads_an_undeclared_fact_is_not_publishable_test() {
         declared: fact.NumberFact,
         used: fact.TextFact,
       ),
-      policy.TooFewApprovals(0),
     ])
+
+  // A policy that asks for no approval cannot be built, and does not decode.
+  assert policy.new(
+      version: 3,
+      rules: [],
+      otherwise: Several(0, AnyoneHolding("finance")),
+    )
+    == Error([policy.TooFewApprovals(0)])
+  let assert Error(_) =
+    json.parse(
+      "{\"version\":3,\"rules\":[],\"otherwise\":{\"t\":\"several\",\"count\":0,\"of\":{\"t\":\"anyone\",\"set\":\"finance\"}}}",
+      policy.decoder(),
+    )
 
   // A policy round-trips through its JSON unchanged, and compares by value.
   assert json.parse(json.to_string(policy.to_json(sound)), policy.decoder())
@@ -59,10 +72,13 @@ pub fn a_policy_that_reads_an_undeclared_fact_is_not_publishable_test() {
 pub fn a_desk_refuses_to_use_an_unpublishable_policy_test() {
   let w = world.new()
   let typo =
-    Policy(
+    policies.checked(
       version: 9,
-      rules: [When(AtLeast("ammount", 1.0), Proceed(Never, None))],
-      otherwise: Proceed(Never, None),
+      rules: [
+        When(AtLeast("ammount", 1.0), Proceed(Never, None)),
+        policy.When(policy.Always, Proceed(Never, None)),
+      ],
+      otherwise: policy.AnyoneHolding("nobody"),
     )
   assert world.in_tx(w, refund.request(
       refund.desk(typo),
@@ -79,7 +95,7 @@ pub fn a_desk_refuses_to_use_an_unpublishable_policy_test() {
 pub fn run_time_refusals_are_typed_test() {
   let w = world.new()
   let ask =
-    Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+    policies.checked(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
 
   // A point that allows no correction refuses one.
   let refunds = refund.desk(ask)

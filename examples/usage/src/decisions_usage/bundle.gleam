@@ -7,12 +7,13 @@
 // snips-start: bundle
 import decisions
 import decisions/memory.{type Memory}
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/vocabulary.{
   Approve, Manifest, ModelCall, Reason, Recommendation, Reject, RuleFired,
   Subject, Trigger,
 }
 import decisions/wire
+import decisions_usage/clinic
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -38,7 +39,9 @@ pub fn lines() -> decisions.Desk(String, Memory) {
   decisions.desk(
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("approved") },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("finance"))))
+    },
     over: memory.port(),
   )
 }
@@ -48,7 +51,15 @@ pub fn payouts() -> decisions.Desk(String, Memory) {
   decisions.desk(
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("paid") },
-    under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
+    under: fn(_) {
+      Ok(
+        clinic.well_formed(policy.new(
+          1,
+          [policy.When(policy.Always, Proceed(Never, None))],
+          AnyoneHolding("finance"),
+        )),
+      )
+    },
     over: memory.port(),
   )
 }

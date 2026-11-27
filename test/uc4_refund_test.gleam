@@ -3,20 +3,21 @@
 import decisions
 import decisions/memory
 import decisions/occurrence
-import decisions/policy.{Ask, Never, Policy, Proceed, SomeoneElseHolding, When}
+import decisions/policy.{Never, Proceed, SomeoneElseHolding, When}
 import decisions/testing
 import decisions/vocabulary.{Approve, Person, Trigger}
 import gleam/option.{None}
+import support/policies
 import support/refund.{Refund}
 import support/world
 
 /// Proceed under R$100; otherwise ask a holder of `finance` who is not the
 /// requester.
 fn policy() {
-  Policy(
+  policies.checked(
     version: 2,
     rules: [When(policy.below(refund.amount(), 100.0), Proceed(Never, None))],
-    otherwise: Ask(SomeoneElseHolding("finance")),
+    otherwise: SomeoneElseHolding("finance"),
   )
 }
 

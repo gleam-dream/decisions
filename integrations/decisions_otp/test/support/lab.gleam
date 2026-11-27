@@ -4,7 +4,7 @@ import decisions.{type Desk, type Point, Gated}
 import decisions/fact.{type Key}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, PerCent, Policy, Proceed, When,
+  type Policy, AnyoneHolding, Never, PerCent, Proceed, When,
 }
 import decisions/vocabulary.{
   type Recommender, type Subject, ApproveRejectOrCorrect, Manifest,
@@ -18,6 +18,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/time/duration.{type Duration}
+import support/policies
 
 pub const ana = Subject(kind: "person", id: "ana")
 
@@ -58,22 +59,26 @@ pub fn point(name: String, hold: Option(Duration)) -> Point(String) {
 }
 
 pub fn asking(set: String) -> Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding(set)))
+  policies.checked(version: 1, rules: [], otherwise: AnyoneHolding(set))
 }
 
 pub fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
+  policies.checked(
+    version: 1,
+    rules: [policy.When(policy.Always, Proceed(Never, hold: None))],
+    otherwise: policy.AnyoneHolding("nobody"),
+  )
 }
 
 /// Proceed at a score of 0.9 or above and sample `share` per cent; ask
 /// `support` otherwise.
 pub fn scoring(share: Int) -> Policy {
-  Policy(
+  policies.checked(
     version: 2,
     rules: [
       When(policy.at_least(score(), 0.9), Proceed(PerCent(share), hold: None)),
     ],
-    otherwise: Ask(AnyoneHolding("support")),
+    otherwise: AnyoneHolding("support"),
   )
 }
 

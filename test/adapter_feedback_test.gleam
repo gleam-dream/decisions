@@ -5,8 +5,7 @@
 import decisions.{Gated}
 import decisions/memory.{type Memory}
 import decisions/policy.{
-  AnyoneHolding, Ask, Either, Never, Policy, Proceed, Several,
-  SomeoneElseHolding,
+  AnyoneHolding, Either, Never, Proceed, Several, SomeoneElseHolding,
 }
 import decisions/store
 import decisions/testing
@@ -19,6 +18,7 @@ import gleam/list
 import gleam/option.{None}
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world
 
 fn tool() {
@@ -56,7 +56,7 @@ pub fn the_head_says_who_may_not_decide_test() {
   let bia = Validator("bia", ["finance"])
   let ask = fn(eligible) {
     let db = world.new().db
-    let desk = desk_over(memory.port(), Policy(1, [], Ask(eligible)))
+    let desk = desk_over(memory.port(), policies.checked(1, [], eligible))
     let assert Ok(w) =
       memory.transaction(db, decisions.recommend(
         desk,
@@ -116,7 +116,7 @@ pub fn a_finer_clock_is_kept_in_whole_milliseconds_test() {
         base.append(tx, id, head, entries)
       },
     )
-  let desk = desk_over(fine, Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let desk = desk_over(fine, policies.checked(1, [], AnyoneHolding("finance")))
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(
       desk,
@@ -138,7 +138,15 @@ pub fn contention_is_its_own_store_error_test() {
     store.Port(..base, append: fn(_, _, _, _) {
       Error(store.Contended("deadlock detected"))
     })
-  let desk = desk_over(contended, Policy(1, [], Proceed(Never, None)))
+  let desk =
+    desk_over(
+      contended,
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Error(refusal) =
     memory.transaction(db, decisions.recommend(
       desk,
@@ -160,7 +168,7 @@ pub fn every_refusal_is_classified_test() {
       drives: fn(_) {
         Gated(..tool(), execute: fn(_, _) { Error(decisions.Refuse("closed")) })
       },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
     )
   let assert Ok(w) =

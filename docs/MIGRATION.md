@@ -8,11 +8,11 @@ package exposes types of those libraries (`json_blueprint`'s `Codec` in
 modules, Grind's `Grind` in `decisions_postgres.new`), so an application must
 move to the same majors.
 
-| Package              | From  | To    | What changes for the application                                               |
-| -------------------- | ----- | ----- | ------------------------------------------------------------------------------ |
-| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size          |
-| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; accepts core 0.2 |
-| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; accepts core 0.2      |
+| Package              | From  | To    | What changes for the application                                                                        |
+| -------------------- | ----- | ----- | ------------------------------------------------------------------------------------------------------- |
+| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person |
+| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; accepts core 0.2                          |
+| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; accepts core 0.2                               |
 
 ## Install
 
@@ -101,6 +101,50 @@ codec.decode_json_with_limits(view.codec(output), text, limits)
 ```
 
 `view.verdict` and `wire.parse` decode with `gleam/json` and are unchanged.
+
+### A policy's default asks a person, and an unknown condition asks it
+
+A policy's `otherwise` is now an `Eligible`: who is asked when no rule holds.
+A policy proceeds or consults only through a rule whose condition holds. A
+condition over an absent or mistyped fact is unknown, and the first unknown
+condition stops the reading: the policy asks `otherwise`, whatever the later
+rules say. In 0.1 an unknown condition only failed to match, so a policy whose
+default proceeded released a recommendation that lacked the fact it tested.
+
+`Policy` is opaque. Build it with `policy.new`, which refuses what no point
+could use (fewer than one approval, a nested `Several`, an empty `Either`, a
+sample outside 0 to 100, a hold of zero or less) with `List(Malformed)`. Read
+it with `policy.version`, `policy.rules` and `policy.otherwise`. A default that
+proceeded or consulted becomes a last rule with the new `Always` condition.
+
+```gleam
+// Before (0.1)
+Policy(
+  version: 1,
+  rules: [When(policy.at_least(risk, 0.5), Ask(AnyoneHolding("risk")))],
+  otherwise: Proceed(Never, None),
+)
+
+// After (0.2): the same policy, and a missing or mistyped risk asks `risk`.
+policy.new(
+  version: 1,
+  rules: [
+    When(policy.at_least(risk, 0.5), Ask(AnyoneHolding("risk"))),
+    When(policy.Always, Proceed(Never, None)),
+  ],
+  otherwise: AnyoneHolding("risk"),
+)
+```
+
+- A policy that would consult the same point twice now asks `otherwise`.
+- `policy.Fault` keeps `UndeclaredFact` and `WrongKind`, which `publishable`
+  and `inform` report. `TooFewApprovals`, `SampleOutOfRange`, `NestedSeveral`,
+  `EmptyEither` and `NonPositiveHold` move to `policy.Malformed`, described by
+  `policy.describe_malformed`. `Unpublishable` no longer carries them.
+- The stored JSON changes: `otherwise` holds an eligibility (`{"t": "anyone",
+"set": "finance"}`) instead of an outcome, and `{"t": "always"}` is a
+  condition. A policy stored by 0.1 does not decode; publish each version
+  again in the new form. A stored policy that `new` refuses does not decode.
 
 ## decisions_otp 0.2.0
 

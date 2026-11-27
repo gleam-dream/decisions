@@ -4,7 +4,7 @@
 //// processes and the invariant checker.
 
 import decisions.{type Desk, type Gated, type Released, Gated}
-import decisions/policy.{type Policy, AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{type Policy, AnyoneHolding, Never, Proceed}
 import decisions/store
 import decisions/testing
 import decisions/vocabulary.{
@@ -27,6 +27,7 @@ import grind
 import grind/queue
 import grind/worker
 import pog
+import support/policies
 
 @external(erlang, "kit_ffi", "getenv")
 fn getenv(name: String) -> Result(String, Nil)
@@ -275,11 +276,15 @@ pub fn finance(subject: String) -> Validator {
 }
 
 pub fn ask() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  policies.checked(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
 pub fn proceed() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(sample: Never, hold: None))
+  policies.checked(
+    version: 1,
+    rules: [policy.When(policy.Always, Proceed(sample: Never, hold: None))],
+    otherwise: policy.AnyoneHolding("nobody"),
+  )
 }
 
 pub type Spec {

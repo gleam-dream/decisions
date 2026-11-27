@@ -4,7 +4,7 @@
 
 import decisions
 import decisions/occurrence
-import decisions/policy.{Policy, Proceed}
+import decisions/policy.{Proceed}
 import decisions/vocabulary.{Approve, Reason, Reject}
 import decisions_postgres.{Refused}
 import gleam/erlang/process
@@ -13,6 +13,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/time/duration
 import kit
+import support/policies
 
 /// A1: forty validators decide one refund at once, twenty approving and
 /// twenty rejecting, while eight processes deliver its wake-up and one
@@ -137,10 +138,12 @@ pub fn withdraw_races_the_wake_up_test() {
   let spec =
     kit.Spec(
       ..kit.spec("a3"),
-      policy: Policy(
+      policy: policies.checked(
         version: 1,
-        rules: [],
-        otherwise: Proceed(sample: policy.Never, hold: None),
+        rules: [
+          policy.When(policy.Always, Proceed(sample: policy.Never, hold: None)),
+        ],
+        otherwise: policy.AnyoneHolding("nobody"),
       ),
       hold: Some(duration.milliseconds(40)),
     )

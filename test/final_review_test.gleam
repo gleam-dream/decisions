@@ -7,7 +7,7 @@ import decisions/learning
 import decisions/memory.{type Memory}
 import decisions/occurrence
 import decisions/policy.{
-  All, AnyoneHolding, Ask, Consult, Either, Never, Not, Policy, Proceed, Several,
+  All, AnyoneHolding, Ask, Consult, Either, Never, Not, Proceed, Several,
   SomeoneElseHolding, When,
 }
 import decisions/store
@@ -22,6 +22,7 @@ import gleam/option.{None}
 import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world
 
 const ana = Validator("ana", ["finance"])
@@ -91,36 +92,30 @@ fn effects(db: Memory) -> List(String) {
   world.all(db, "effects")
 }
 
-/// R1. A `Several` inside a `Several`, and an empty `Either`, are refused.
-pub fn r1_nested_several_and_empty_either_are_unpublishable_test() {
-  let nested =
-    Policy(1, [], Ask(Several(1, Several(3, AnyoneHolding("finance")))))
-  assert policy.check(nested, declared: []) == Error([policy.NestedSeveral])
-  let through_either =
-    Policy(
+/// R1. A `Several` inside a `Several`, and an empty `Either`, cannot be
+/// built.
+pub fn r1_nested_several_and_empty_either_cannot_be_built_test() {
+  assert policy.new(1, [], Several(1, Several(3, AnyoneHolding("finance"))))
+    == Error([policy.NestedSeveral])
+  assert policy.new(
       1,
       [],
-      Ask(Several(
-        2,
-        Either([Several(3, AnyoneHolding("f")), AnyoneHolding("h")]),
-      )),
+      Several(2, Either([Several(3, AnyoneHolding("f")), AnyoneHolding("h")])),
     )
-  assert policy.check(through_either, declared: [])
     == Error([policy.NestedSeveral])
-  assert policy.check(Policy(1, [], Ask(Either([]))), declared: [])
+  assert policy.new(1, [], Either([])) == Error([policy.EmptyEither])
+  assert policy.new(
+      1,
+      [When(policy.Always, Ask(Either([])))],
+      AnyoneHolding("f"),
+    )
     == Error([policy.EmptyEither])
-  // The desk refuses to use such a policy.
-  let db = fresh()
-  assert recommend(db, desk_on(base_point(), nested), "100")
-    |> result.replace(Nil)
-    == Error(decisions.Unpublishable([policy.NestedSeveral]))
-  assert effects(db) == []
 }
 
 /// R2. A late wake-up reaches the outcome an on-time one would have.
 pub fn r2_a_late_wake_up_skips_no_step_that_accepts_test() {
   let ladder =
-    Policy(
+    policies.checked(
       1,
       [
         When(
@@ -128,7 +123,7 @@ pub fn r2_a_late_wake_up_skips_no_step_that_accepts_test() {
           Proceed(Never, None),
         ),
       ],
-      Ask(AnyoneHolding("finance")),
+      AnyoneHolding("finance"),
     )
   let desk = desk_on(base_point(), ladder)
   let db = fresh()
@@ -146,7 +141,14 @@ pub fn r2_a_late_wake_up_skips_no_step_that_accepts_test() {
 pub fn r3_the_check_sees_what_is_about_to_be_released_test() {
   let db = fresh()
   let desk =
-    desk_on(base_point(), Policy(1, [], Proceed(Never, None)))
+    desk_on(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
     |> decisions.checking(with: fn(tx, release: decisions.ToRelease(String)) {
       world.push(tx, "checked", release.output <> "@" <> release.key)
       Error(decisions.Refuse("balance does not cover"))
@@ -162,10 +164,10 @@ pub fn r3_the_check_sees_what_is_about_to_be_released_test() {
 pub fn r4_disposition_neither_loses_work_nor_loops_test() {
   let db = fresh()
   let p =
-    Policy(
+    policies.checked(
       1,
       [When(policy.waited(30), Consult("other.point"))],
-      Ask(AnyoneHolding("finance")),
+      AnyoneHolding("finance"),
     )
   let desk = desk_on(base_point(), p)
   let assert Ok(w) = recommend(db, desk, "a")
@@ -204,10 +206,10 @@ fn store_conflict() {
 pub fn r5_open_refuses_whom_decide_would_refuse_test() {
   let db = fresh()
   let p =
-    Policy(
+    policies.checked(
       1,
       [],
-      Ask(Either([SomeoneElseHolding("finance"), AnyoneHolding("head")])),
+      Either([SomeoneElseHolding("finance"), AnyoneHolding("head")]),
     )
   let desk = desk_on(base_point(), p)
   let assert Ok(w) =
@@ -233,10 +235,10 @@ pub fn r5_open_refuses_whom_decide_would_refuse_test() {
 pub fn r6_a_step_re_evaluates_the_standing_approvals_test() {
   let db = fresh()
   let p =
-    Policy(
+    policies.checked(
       1,
       [When(policy.waited(60), Ask(AnyoneHolding("finance")))],
-      Ask(Several(2, AnyoneHolding("finance"))),
+      Several(2, AnyoneHolding("finance")),
     )
   let desk = desk_on(base_point(), p)
   let assert Ok(w) = recommend(db, desk, "100")
@@ -257,7 +259,7 @@ pub fn r7_an_expired_partial_quorum_is_not_already_decided_test() {
   let desk =
     desk_on(
       base_point() |> decisions.valid_for(duration.minutes(30)),
-      Policy(1, [], Ask(Several(2, AnyoneHolding("finance")))),
+      policies.checked(1, [], Several(2, AnyoneHolding("finance"))),
     )
   let assert Ok(w) = recommend(db, desk, "100")
   let assert Ok(_) = approve(db, desk, w.id, ana)
@@ -280,10 +282,10 @@ pub fn r7_an_expired_partial_quorum_is_not_already_decided_test() {
 pub fn r8_the_card_reports_approvals_per_alternative_test() {
   let db = fresh()
   let p =
-    Policy(
+    policies.checked(
       1,
       [],
-      Ask(Either([Several(2, AnyoneHolding("finance")), AnyoneHolding("head")])),
+      Either([Several(2, AnyoneHolding("finance")), AnyoneHolding("head")]),
     )
   let desk = desk_on(base_point(), p)
   let assert Ok(w) = recommend(db, desk, "100")
@@ -304,7 +306,7 @@ pub fn r9_the_tally_judges_only_what_people_let_through_test() {
   let quorum =
     desk_on(
       base_point() |> decisions.valid_for(duration.minutes(30)),
-      Policy(1, [], Ask(Several(2, AnyoneHolding("finance")))),
+      policies.checked(1, [], Several(2, AnyoneHolding("finance"))),
     )
   let assert Ok(w) = recommend(db, quorum, "100")
   let assert Ok(_) = approve(db, quorum, w.id, ana)
@@ -314,7 +316,7 @@ pub fn r9_the_tally_judges_only_what_people_let_through_test() {
   let held =
     desk_on(
       base_point() |> decisions.with_hold(duration.hours(1)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let assert Ok(h) = recommend(db, held, "200")
   let assert Ok(_) = approve(db, held, h.id, ana)
@@ -344,7 +346,7 @@ pub fn r10_an_unsure_guard_at_a_wake_up_is_tried_again_test() {
           }
         })
       },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
     )
   let assert Ok(w) = recommend(db, desk, "100")
@@ -367,7 +369,7 @@ fn up_desk() -> Desk(String, Memory) {
   decisions.desk(
     base_point() |> decisions.with_hold(duration.minutes(5)),
     drives: fn(_) { tool() },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
     over: memory.port(),
   )
 }
@@ -376,12 +378,10 @@ fn up_desk() -> Desk(String, Memory) {
 /// holding both sets counts once (the reviewer's s1).
 pub fn r12_cross_alternative_approvals_do_not_add_up_test() {
   let p =
-    Policy(
+    policies.checked(
       1,
       [],
-      Ask(
-        Either([Several(2, AnyoneHolding("a")), Several(2, AnyoneHolding("b"))]),
-      ),
+      Either([Several(2, AnyoneHolding("a")), Several(2, AnyoneHolding("b"))]),
     )
   let desk = desk_on(base_point(), p)
   let db = fresh()
@@ -400,15 +400,13 @@ pub fn r12_cross_alternative_approvals_do_not_add_up_test() {
 /// excludes them (the reviewer's s2).
 pub fn r12_the_requester_is_credited_only_where_admitted_test() {
   let p =
-    Policy(
+    policies.checked(
       1,
       [],
-      Ask(
-        Either([
-          Several(2, SomeoneElseHolding("f")),
-          Several(2, AnyoneHolding("h")),
-        ]),
-      ),
+      Either([
+        Several(2, SomeoneElseHolding("f")),
+        Several(2, AnyoneHolding("h")),
+      ]),
     )
   let desk = desk_on(base_point(), p)
   let db = fresh()
@@ -442,7 +440,13 @@ pub fn r12_guard_check_then_executor_test() {
           },
         )
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
+      under: fn(_) {
+        Ok(policies.checked(
+          1,
+          [policy.When(policy.Always, Proceed(Never, None))],
+          policy.AnyoneHolding("nobody"),
+        ))
+      },
       over: memory.port(),
     )
     |> decisions.checking(with: fn(tx, _) {
@@ -468,7 +472,7 @@ fn flaky_desk(in_tool: Bool) -> Desk(String, Memory) {
           }
         })
       },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
     )
   case in_tool {

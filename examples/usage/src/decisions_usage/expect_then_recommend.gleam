@@ -8,7 +8,7 @@
 // snips-start: expect-then-recommend
 import decisions
 import decisions/memory.{type Memory}
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
 }
@@ -19,7 +19,9 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
   decisions.desk(
     clinic.refund_point() |> decisions.superseded_by("statement_corrected"),
     drives: fn(_) { clinic.refund_fee() },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("finance"))))
+    },
     over: memory.port(),
   )
 }

@@ -5,9 +5,7 @@ import decisions/fact
 import decisions/learning
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{
-  All, AnyoneHolding, Ask, Consult, Never, Not, Policy, Proceed, When,
-}
+import decisions/policy.{All, AnyoneHolding, Consult, Never, Not, Proceed, When}
 import decisions/vocabulary.{
   Agent, Approve, Manifest, ModelCall, ParentOccurrence, Receipt, Recommendation,
   Ref, Trigger,
@@ -16,6 +14,7 @@ import decisions/wire
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
+import support/policies
 import support/refund.{type Refund, Refund}
 import support/world.{type World}
 
@@ -26,7 +25,7 @@ fn opinion() {
 /// Version 3: consult the reviewing model; proceed when it approves and the
 /// amount is under R$500; otherwise ask a person.
 fn policy() {
-  Policy(
+  policies.checked(
     version: 3,
     rules: [
       When(Not(policy.known(opinion())), Consult("billing.refund_review")),
@@ -38,7 +37,7 @@ fn policy() {
         Proceed(Never, None),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
+    otherwise: AnyoneHolding("finance"),
   )
 }
 
@@ -78,7 +77,11 @@ fn review() -> Desk(String, Memory) {
       )
     },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never, None)))
+      Ok(policies.checked(
+        version: 1,
+        rules: [policy.When(policy.Always, Proceed(Never, None))],
+        otherwise: policy.AnyoneHolding("nobody"),
+      ))
     },
     over: memory.port(),
   )

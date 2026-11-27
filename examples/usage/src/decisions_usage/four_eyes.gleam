@@ -8,7 +8,7 @@ import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  AnyoneHolding, Ask, Either, Policy, Several, SomeoneElseHolding, When,
+  AnyoneHolding, Ask, Either, Several, SomeoneElseHolding, When,
 }
 import decisions/vocabulary.{
   type Validator, Agent, Approve, Manifest, Recommendation, RunAnswer, Trigger,
@@ -27,7 +27,7 @@ pub const rui = Validator(subject: "rui", holds: ["managers"])
 
 pub fn policy() -> policy.Policy {
   let large = policy.at_least(clinic.amount(), 10_000.0)
-  Policy(
+  clinic.well_formed(policy.new(
     version: 1,
     rules: [
       When(
@@ -39,8 +39,8 @@ pub fn policy() -> policy.Policy {
       ),
       When(large, Ask(Several(2, SomeoneElseHolding("finance")))),
     ],
-    otherwise: Ask(SomeoneElseHolding("finance")),
-  )
+    otherwise: SomeoneElseHolding("finance"),
+  ))
 }
 
 pub fn desk() -> decisions.Desk(Refund, Memory) {

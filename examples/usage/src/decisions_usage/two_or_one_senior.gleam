@@ -6,7 +6,7 @@
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Either, Policy, Several}
+import decisions/policy.{AnyoneHolding, Either, Several}
 import decisions/vocabulary.{
   type Validator, Agent, Approve, Manifest, Recommendation, RunAnswer, Trigger,
   Validator,
@@ -21,16 +21,16 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
     clinic.refund_point(),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
-      Ok(Policy(
-        version: 1,
-        rules: [],
-        otherwise: Ask(
-          Either([
+      Ok(
+        clinic.well_formed(policy.new(
+          version: 1,
+          rules: [],
+          otherwise: Either([
             Several(2, AnyoneHolding("finance")),
             AnyoneHolding("head_of_finance"),
           ]),
-        ),
-      ))
+        )),
+      )
     },
     over: memory.port(),
   )

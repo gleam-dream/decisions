@@ -16,20 +16,29 @@
 //// }
 ////
 //// let amount = fact.number("amount")
-//// let refunds =
-////   Policy(
+//// let assert Ok(refunds) =
+////   policy.new(
 ////     version: 2,
 ////     rules: [
 ////       When(OwnAct, Proceed(Never, None)),
 ////       When(policy.below(amount, 100.0), Proceed(Never, None)),
 ////     ],
-////     otherwise: Ask(AnyoneHolding("finance")),
+////     otherwise: AnyoneHolding("finance"),
 ////   )
 //// ```
 ////
-//// The first rule whose condition holds decides; `otherwise` decides when
-//// none does. A condition over an absent fact is unknown, stays unknown
-//// under `Not`, and never matches, so what is unknown never proceeds.
+//// The rules are read in order. The first rule whose condition holds
+//// decides. A condition over an absent or mistyped fact is unknown, stays
+//// unknown under `Not`, and stops the reading: the policy then asks whoever
+//// `otherwise` admits, as it does when no rule holds. So a policy proceeds
+//// only through a rule whose condition holds, and what is unknown never
+//// proceeds.
+////
+//// `new` refuses a policy that cannot be used whatever the point: fewer
+//// than one approval, a nested `Several`, an `Either` with no alternative,
+//// a sample outside 0 to 100, or a hold of zero or less. So a `Policy`
+//// value is always well formed, and `decoder` refuses a stored policy that
+//// is not.
 ////
 //// Open questions, recorded here because a policy cannot yet say them:
 ////
@@ -60,9 +69,11 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration.{type Duration}
 
-/// One version of a point's policy.
-pub type Policy {
-  Policy(version: Int, rules: List(Rule), otherwise: Outcome)
+/// One version of a point's policy: its rules, read in order, and who is
+/// asked when no rule holds or a rule's condition is unknown. Build it with
+/// `new`.
+pub opaque type Policy {
+  Policy(version: Int, rules: List(Rule), otherwise: Eligible)
 }
 
 /// "When this condition holds, this is the outcome."
@@ -86,7 +97,7 @@ pub type Outcome {
   /// Ask the decision point named `point` first. Its final output returns
   /// as facts through `decisions.inform`, and the policy current at that
   /// moment is read again with them. A policy that would consult the same
-  /// point twice falls to `otherwise`. A later answer (a `Step`) that
+  /// point twice asks `otherwise`. A later answer (a `Step`) that
   /// consults asks the point the same way; consulting drops the remaining
   /// steps.
   Consult(point: String)
@@ -117,7 +128,7 @@ pub type Eligible {
   /// `count` different validators, each admitted by `of`, approving the
   /// output that stands. A correction replaces that output, and approvals
   /// of the earlier output stop counting. `of` may hold `Either`, but no
-  /// `Several` at any depth: `check` refuses that with `NestedSeveral`,
+  /// `Several` at any depth: `new` refuses that with `NestedSeveral`,
   /// because approvals are counted once, by the outer count.
   Several(count: Int, of: Eligible)
 }
@@ -132,8 +143,11 @@ pub type Condition {
   AtLeast(fact: String, limit: Float)
   /// The fact equals `value`. Build it with `is`.
   Is(fact: String, value: Fact)
-  /// The fact is present, such as a consulted point's answer.
+  /// The fact is present, such as a consulted point's answer. It is never
+  /// unknown.
   Known(fact: String)
+  /// Always holds: a rule that decides whatever the facts.
+  Always
   /// Every condition holds.
   All(List(Condition))
   /// At least one condition holds.
@@ -148,14 +162,19 @@ pub type Step {
   Step(after: Int, outcome: Outcome)
 }
 
-/// Why a policy cannot be published for a point.
+/// Why a policy cannot be published for a point, or why facts do not fit
+/// the facts a point declares.
 pub type Fault {
-  /// The policy reads a fact the point never declares. It would never
-  /// match and would silently ask.
+  /// The policy reads a fact the point never declares. It would always be
+  /// unknown and would silently ask.
   UndeclaredFact(fact: String)
   /// The policy compares a fact as one type and the point declares
   /// another.
   WrongKind(fact: String, declared: Kind, used: Kind)
+}
+
+/// Why `new` refuses a policy, whatever the point.
+pub type Malformed {
   /// `Several` asks for fewer than one approval.
   TooFewApprovals(count: Int)
   /// `PerCent` is outside 0 to 100.
@@ -169,6 +188,41 @@ pub type Fault {
   EmptyEither
   /// A `Proceed` holds for zero or a negative number of milliseconds.
   NonPositiveHold(milliseconds: Int)
+}
+
+// -- Building a policy ----------------------------------------------------------
+
+/// A policy, or every reason it cannot be used whatever the point. The
+/// facts it reads are checked against a point by `check`.
+pub fn new(
+  version version: Int,
+  rules rules: List(Rule),
+  otherwise otherwise: Eligible,
+) -> Result(Policy, List(Malformed)) {
+  let faults =
+    list.flatten([
+      list.flat_map(rules, fn(rule) { outcome_faults(rule.then) }),
+      eligible_faults(otherwise),
+    ])
+  case faults {
+    [] -> Ok(Policy(version:, rules:, otherwise:))
+    faults -> Error(faults)
+  }
+}
+
+/// The policy's version, recorded on every `policy_applied` entry.
+pub fn version(policy: Policy) -> Int {
+  policy.version
+}
+
+/// The policy's rules, in the order they are read.
+pub fn rules(policy: Policy) -> List(Rule) {
+  policy.rules
+}
+
+/// Who is asked when no rule holds or a rule's condition is unknown.
+pub fn otherwise(policy: Policy) -> Eligible {
+  policy.otherwise
 }
 
 // -- Conditions over typed keys -----------------------------------------------------
@@ -201,15 +255,27 @@ pub fn waited(minutes: Int) -> Condition {
 
 // -- Reading the policy ---------------------------------------------------------------
 
-/// What the policy says for this recommender and these facts.
+/// What the policy says for this recommender and these facts: the outcome
+/// of the first rule whose condition holds, or `Ask(otherwise)` when a
+/// condition read before it is unknown or no rule holds.
 pub fn evaluate(policy: Policy, by: Recommender, facts: Facts) -> Outcome {
-  let matching =
-    list.find(policy.rules, fn(rule) {
-      holds(rule.condition, by, facts) == Some(True)
-    })
-  case matching {
-    Ok(When(then: outcome, ..)) -> outcome
-    Error(Nil) -> policy.otherwise
+  first_holding(policy.rules, by, facts, Ask(policy.otherwise))
+}
+
+fn first_holding(
+  rules: List(Rule),
+  by: Recommender,
+  facts: Facts,
+  otherwise: Outcome,
+) -> Outcome {
+  case rules {
+    [] -> otherwise
+    [When(condition:, then:), ..rest] ->
+      case holds(condition, by, facts) {
+        Holds -> then
+        Fails -> first_holding(rest, by, facts, otherwise)
+        Unknown -> otherwise
+      }
   }
 }
 
@@ -302,9 +368,8 @@ pub fn reads(policy: Policy) -> List(String) {
   |> list.unique
 }
 
-/// Refuse a policy that reads a fact not in `declared`, compares a fact as
-/// the wrong type, asks for fewer than one approval, or samples outside 0
-/// to 100 per cent. Every fault is listed. `waited_minutes` is always
+/// Refuse a policy that reads a fact not in `declared` or compares a fact
+/// as the wrong type. Every fault is listed. `waited_minutes` is always
 /// declared.
 pub fn check(
   policy: Policy,
@@ -329,10 +394,7 @@ pub fn check(
       }
     })
     |> list.unique
-  let outcome_faults =
-    [policy.otherwise, ..list.map(policy.rules, fn(rule) { rule.then })]
-    |> list.flat_map(outcome_faults)
-  case list.append(fact_faults, outcome_faults) {
+  case fact_faults {
     [] -> Ok(Nil)
     faults -> Error(faults)
   }
@@ -349,6 +411,12 @@ pub fn describe(fault: Fault) -> String {
       <> kind_name(used)
       <> " but the point declares it as "
       <> kind_name(declared)
+  }
+}
+
+/// Why `new` refused a policy, as one line of text, for an operator.
+pub fn describe_malformed(malformed: Malformed) -> String {
+  case malformed {
     TooFewApprovals(count:) ->
       "asks for " <> int.to_string(count) <> " approvals"
     SampleOutOfRange(per_cent:) ->
@@ -368,7 +436,7 @@ fn kind_name(kind: Kind) -> String {
   }
 }
 
-fn outcome_faults(outcome: Outcome) -> List(Fault) {
+fn outcome_faults(outcome: Outcome) -> List(Malformed) {
   case outcome {
     Proceed(sample:, hold:) ->
       list.flatten([
@@ -392,11 +460,11 @@ fn outcome_faults(outcome: Outcome) -> List(Fault) {
   }
 }
 
-fn eligible_faults(eligible: Eligible) -> List(Fault) {
+fn eligible_faults(eligible: Eligible) -> List(Malformed) {
   faults_within(eligible, False)
 }
 
-fn faults_within(eligible: Eligible, inside_several: Bool) -> List(Fault) {
+fn faults_within(eligible: Eligible, inside_several: Bool) -> List(Malformed) {
   case eligible {
     AnyoneHolding(_) | SomeoneElseHolding(_) -> []
     Either([]) -> [EmptyEither]
@@ -424,7 +492,7 @@ fn conditions(policy: Policy) -> List(Condition) {
 /// condition fixes one.
 fn uses(condition: Condition) -> List(#(String, Option(Kind))) {
   case condition {
-    OwnAct -> []
+    OwnAct | Always -> []
     Below(fact: name, ..) | AtLeast(fact: name, ..) -> [
       #(name, Some(fact.NumberFact)),
     ]
@@ -452,42 +520,74 @@ fn limits(condition: Condition) -> List(Int) {
     -> [float.round(float.ceiling(limit))]
     All(of) | AnyOf(of) -> list.flat_map(of, limits)
     Not(inner) -> limits(inner)
-    OwnAct | Below(..) | AtLeast(..) | Is(..) | Known(..) -> []
+    OwnAct | Always | Below(..) | AtLeast(..) | Is(..) | Known(..) -> []
   }
 }
 
-/// `None` when a fact the condition reads is absent.
-fn holds(condition: Condition, by: Recommender, facts: Facts) -> Option(Bool) {
+/// Whether a condition holds, fails, or cannot be told.
+type Truth {
+  Holds
+  Fails
+  /// A fact the condition reads is absent or of another type.
+  Unknown
+}
+
+fn truth(held: Bool) -> Truth {
+  case held {
+    True -> Holds
+    False -> Fails
+  }
+}
+
+fn holds(condition: Condition, by: Recommender, facts: Facts) -> Truth {
   case condition {
+    Always -> Holds
     OwnAct ->
       case by {
-        Person(_) -> Some(True)
-        _ -> Some(False)
+        Person(_) -> Holds
+        _ -> Fails
       }
     Below(fact: name, limit:) ->
-      number(facts, name) |> option.map(fn(n) { n <. limit })
+      case number(facts, name) {
+        Some(n) -> truth(n <. limit)
+        None -> Unknown
+      }
     AtLeast(fact: name, limit:) ->
-      number(facts, name) |> option.map(fn(n) { n >=. limit })
+      case number(facts, name) {
+        Some(n) -> truth(n >=. limit)
+        None -> Unknown
+      }
     Is(fact: name, value:) ->
-      list.key_find(facts, name)
-      |> option.from_result
-      |> option.map(fn(found) { found == value })
-    Known(fact: name) -> Some(list.key_find(facts, name) != Error(Nil))
-    Not(inner) -> holds(inner, by, facts) |> option.map(fn(held) { !held })
+      case list.key_find(facts, name) {
+        Ok(found) if found == value -> Holds
+        Ok(found) ->
+          case fact.kind_of(found) == fact.kind_of(value) {
+            True -> Fails
+            False -> Unknown
+          }
+        Error(Nil) -> Unknown
+      }
+    Known(fact: name) -> truth(list.key_find(facts, name) != Error(Nil))
+    Not(inner) ->
+      case holds(inner, by, facts) {
+        Holds -> Fails
+        Fails -> Holds
+        Unknown -> Unknown
+      }
     All(of) -> {
       let results = list.map(of, holds(_, by, facts))
-      case list.contains(results, Some(False)), list.contains(results, None) {
-        True, _ -> Some(False)
-        False, True -> None
-        False, False -> Some(True)
+      case list.contains(results, Fails), list.contains(results, Unknown) {
+        True, _ -> Fails
+        False, True -> Unknown
+        False, False -> Holds
       }
     }
     AnyOf(of) -> {
       let results = list.map(of, holds(_, by, facts))
-      case list.contains(results, Some(True)), list.contains(results, None) {
-        True, _ -> Some(True)
-        False, True -> None
-        False, False -> Some(False)
+      case list.contains(results, Holds), list.contains(results, Unknown) {
+        True, _ -> Holds
+        False, True -> Unknown
+        False, False -> Fails
       }
     }
   }
@@ -515,11 +615,12 @@ pub fn to_json(policy: Policy) -> Json {
         ])
       }),
     ),
-    #("otherwise", outcome_to_json(policy.otherwise)),
+    #("otherwise", eligible_to_json(policy.otherwise)),
   ])
 }
 
-/// Decodes a policy written by `to_json`.
+/// Decodes a policy written by `to_json`. A policy `new` refuses does not
+/// decode.
 pub fn decoder() -> Decoder(Policy) {
   use version <- decode.field("version", decode.int)
   use rules <- decode.field(
@@ -530,8 +631,11 @@ pub fn decoder() -> Decoder(Policy) {
       decode.success(When(condition: when, then:))
     }),
   )
-  use otherwise <- decode.field("otherwise", outcome_decoder())
-  decode.success(Policy(version:, rules:, otherwise:))
+  use otherwise <- decode.field("otherwise", eligible_decoder())
+  case new(version:, rules:, otherwise:) {
+    Ok(policy) -> decode.success(policy)
+    Error(_) -> decode.failure(Policy(version:, rules:, otherwise:), "Policy")
+  }
 }
 
 /// An outcome as JSON.
@@ -643,6 +747,7 @@ pub fn step_decoder() -> Decoder(Step) {
 fn condition_to_json(condition: Condition) -> Json {
   case condition {
     OwnAct -> wire.tagged("own_act", [])
+    Always -> wire.tagged("always", [])
     Below(fact: name, limit:) ->
       wire.tagged("below", [
         #("fact", json.string(name)),
@@ -671,6 +776,7 @@ fn condition_decoder() -> Decoder(Condition) {
   use tag <- decode.field("t", decode.string)
   case tag {
     "own_act" -> decode.success(OwnAct)
+    "always" -> decode.success(Always)
     "below" -> {
       use name <- decode.field("fact", decode.string)
       use limit <- decode.field("limit", wire.number_decoder())

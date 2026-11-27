@@ -7,9 +7,7 @@ import decisions/entry
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{
-  AnyoneHolding, Ask, Never, OwnAct, Policy, Proceed, When,
-}
+import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/store
 import decisions/vocabulary.{
   type Ref, Agent, Approve, Manifest, Person, Recommendation, Ref, RunAnswer,
@@ -21,19 +19,20 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/refund.{Refund}
 import support/reply
 import support/world
 
 fn ask() {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  policies.checked(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
 fn own_act_proceeds() {
-  Policy(
+  policies.checked(
     version: 1,
     rules: [When(OwnAct, Proceed(Never, None))],
-    otherwise: Ask(AnyoneHolding("finance")),
+    otherwise: AnyoneHolding("finance"),
   )
 }
 
@@ -281,10 +280,10 @@ pub fn defect_7_the_head_carries_due_arrival_and_approvals_test() {
   let desk =
     refund.desk_of(
       refund.point() |> decisions.valid_for(duration.hours(2)),
-      Policy(
+      policies.checked(
         version: 1,
         rules: [],
-        otherwise: Ask(policy.Several(2, AnyoneHolding("finance"))),
+        otherwise: policy.Several(2, AnyoneHolding("finance")),
       ),
     )
   let waiting = request(desk, w, "fee-7")

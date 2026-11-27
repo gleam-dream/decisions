@@ -6,7 +6,7 @@ import decisions/learning
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{AnyoneHolding, Ask, Never, Proceed}
 import decisions/store
 import decisions/testing
 import decisions/vocabulary.{
@@ -20,6 +20,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world
 
 const ana = Validator("ana", ["finance"])
@@ -82,7 +83,11 @@ fn supersede(db: Memory, d) {
 }
 
 fn undo_window() {
-  Policy(1, [], Proceed(Never, Some(duration.minutes(30))))
+  policies.checked(
+    1,
+    [policy.When(policy.Always, Proceed(Never, Some(duration.minutes(30))))],
+    policy.AnyoneHolding("nobody"),
+  )
 }
 
 // -- 1. The undo window in the policy -------------------------------------------
@@ -93,12 +98,17 @@ pub fn a_proceed_hold_is_stored_with_the_policy_and_checked_test() {
     == Ok(p)
   // A stored policy without it has no hold.
   let stored =
-    "{\"version\":1,\"rules\":[],\"otherwise\":{\"t\":\"proceed\",\"sample\":null}}"
+    "{\"version\":1,\"rules\":[{\"when\":{\"t\":\"always\"},\"then\":{\"t\":\"proceed\",\"sample\":null}}],\"otherwise\":{\"t\":\"anyone\",\"set\":\"nobody\"}}"
   assert json.parse(stored, policy.decoder())
-    == Ok(Policy(1, [], Proceed(Never, None)))
-  assert policy.check(
-      Policy(1, [], Proceed(Never, Some(duration.seconds(0)))),
-      declared: [],
+    == Ok(policies.checked(
+      1,
+      [policy.When(policy.Always, Proceed(Never, None))],
+      policy.AnyoneHolding("nobody"),
+    ))
+  assert policy.new(
+      1,
+      [policy.When(policy.Always, Proceed(Never, Some(duration.seconds(0))))],
+      policy.AnyoneHolding("nobody"),
     )
     == Error([policy.NonPositiveHold(0)])
 }
@@ -108,10 +118,13 @@ pub fn a_policy_hold_holds_only_what_the_policy_lets_proceed_test() {
   let d =
     desk(
       point(),
-      Policy(
+      policies.checked(
         1,
-        [policy.When(policy.OwnAct, Ask(AnyoneHolding("finance")))],
-        Proceed(Never, Some(duration.minutes(30))),
+        [
+          policy.When(policy.OwnAct, Ask(AnyoneHolding("finance"))),
+          policy.When(policy.Always, Proceed(Never, Some(duration.minutes(30)))),
+        ],
+        policy.AnyoneHolding("nobody"),
       ),
     )
   let assert Ok(by_policy) =
@@ -173,7 +186,7 @@ pub fn a_held_human_approval_is_superseded_and_released_never_test() {
   let d =
     desk(
       point() |> decisions.with_hold(duration.minutes(10)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(d, _, proposal("80")))
@@ -197,7 +210,15 @@ pub fn a_held_human_approval_is_superseded_and_released_never_test() {
 
 pub fn a_released_occurrence_is_not_superseded_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Proceed(Never, None)))
+  let d =
+    desk(
+      point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(released) =
     memory.transaction(db, decisions.recommend(d, _, proposal("80")))
   let assert occurrence.Released(..) = released.status
@@ -229,7 +250,15 @@ fn commit(db: Memory, d, key: String) {
 
 pub fn an_expected_key_superseded_while_the_model_runs_is_refused_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Proceed(Never, None)))
+  let d =
+    desk(
+      point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(Nil) = admit(db, d, "owner:req-1")
   // While the model runs for req-1, req-2 arrives.
   let assert Ok(decisions.Supersession(
@@ -252,7 +281,15 @@ pub fn an_expected_key_superseded_while_the_model_runs_is_refused_test() {
 
 pub fn a_failed_attempt_in_between_changes_nothing_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Proceed(Never, None)))
+  let d =
+    desk(
+      point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(Nil) = admit(db, d, "owner:req-3")
   let assert Ok([_]) =
     memory.transaction(db, decisions.record_failure(
@@ -282,7 +319,7 @@ pub fn a_failed_attempt_in_between_changes_nothing_test() {
 
 pub fn expect_is_safe_to_repeat_and_then_recommends_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(point(), policies.checked(1, [], AnyoneHolding("finance")))
   let assert Ok(Nil) = admit(db, d, "owner:req-4")
   let assert Ok(Nil) = admit(db, d, "owner:req-4")
   assert list.length(memory.entries(db, "owner:req-4")) == 1
@@ -316,7 +353,15 @@ pub fn expect_is_safe_to_repeat_and_then_recommends_test() {
 
 pub fn the_account_of_a_release_carries_its_key_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Proceed(Never, None)))
+  let d =
+    desk(
+      point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(released) =
     memory.transaction(db, decisions.recommend(d, _, proposal("80")))
   assert occurrence.account(released)
@@ -329,7 +374,7 @@ pub fn the_account_of_a_release_carries_its_key_test() {
 
 pub fn a_candidate_is_judged_under_a_candidate_policy_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(point(), policies.checked(1, [], AnyoneHolding("finance")))
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(d, _, proposal("80")))
   let assert Ok(done) =
@@ -352,7 +397,11 @@ pub fn a_candidate_is_judged_under_a_candidate_policy_test() {
     learning.candidate_under(
       example,
       candidate:,
-      policy: Policy(2, [], Proceed(Never, None)),
+      policy: policies.checked(
+        2,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
       point: point(),
     )
   assert recommended.output == "75"
@@ -361,7 +410,7 @@ pub fn a_candidate_is_judged_under_a_candidate_policy_test() {
 
 pub fn a_model_failure_carries_its_evidence_onto_the_attempt_test() {
   let db = world.new().db
-  let d = desk(point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(point(), policies.checked(1, [], AnyoneHolding("finance")))
   let exchange = Ref("llm_exchange", "call-1", "abc")
   let failure = model.with_evidence(model.Undecodable("not JSON"), [exchange])
   assert model.retryable(failure)

@@ -7,9 +7,7 @@ import decisions/learning
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{
-  AnyoneHolding, Ask, Either, Never, Policy, Proceed, Several, When,
-}
+import decisions/policy.{AnyoneHolding, Either, Never, Proceed, Several, When}
 import decisions/store
 import decisions/testing
 import decisions/view
@@ -26,6 +24,7 @@ import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
 import json/blueprint/codec as blueprint
+import support/policies
 import support/world
 
 const felipe = Validator("felipe", ["finance"])
@@ -85,15 +84,13 @@ fn same(ref: Ref) -> String {
 // -- A. `Either` around `Several` --------------------------------------------------
 
 fn finance_or_head() {
-  Policy(
+  policies.checked(
     1,
     [],
-    Ask(
-      Either([
-        Several(2, AnyoneHolding("finance")),
-        AnyoneHolding("head_of_finance"),
-      ]),
-    ),
+    Either([
+      Several(2, AnyoneHolding("finance")),
+      AnyoneHolding("head_of_finance"),
+    ]),
   )
 }
 
@@ -146,7 +143,7 @@ pub fn b_finance_may_withdraw_what_the_policy_let_proceed_test() {
       base_point()
         |> decisions.signal(fact_small())
         |> decisions.withdrawn_by("finance"),
-      Policy(
+      policies.checked(
         1,
         [
           When(
@@ -154,7 +151,7 @@ pub fn b_finance_may_withdraw_what_the_policy_let_proceed_test() {
             Proceed(Never, Some(duration.minutes(30))),
           ),
         ],
-        Ask(AnyoneHolding("finance")),
+        AnyoneHolding("finance"),
       ),
     )
   let assert Ok(held) =
@@ -194,7 +191,7 @@ pub fn b_without_withdrawn_by_only_the_decider_may_test() {
   let d =
     desk(
       base_point() |> decisions.with_hold(duration.minutes(30)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let w = recommend(db, d, "80")
   let assert Ok(held) = decide(db, d, w.id, felipe, Approve)
@@ -223,7 +220,7 @@ pub fn c_a_proceed_hold_takes_the_place_of_the_points_hold_test() {
       base_point()
         |> decisions.signal(fact_small())
         |> decisions.with_hold(duration.minutes(5)),
-      Policy(
+      policies.checked(
         1,
         [
           When(
@@ -231,7 +228,7 @@ pub fn c_a_proceed_hold_takes_the_place_of_the_points_hold_test() {
             Proceed(Never, Some(duration.minutes(30))),
           ),
         ],
-        Ask(AnyoneHolding("finance")),
+        AnyoneHolding("finance"),
       ),
     )
   // The policy's own hold wins for what it lets proceed ...
@@ -328,7 +325,7 @@ pub fn d_a_handler_failure_says_what_a_runtime_does_test() {
       drives: fn(_) {
         Gated(..tool(), execute: fn(_, _) { Error(decisions.Refuse("closed")) })
       },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
     )
   let w = recommend(db, refusing, "x")
@@ -342,7 +339,7 @@ pub fn d_a_handler_failure_says_what_a_runtime_does_test() {
 
 pub fn e_a_provider_failure_is_recorded_with_its_evidence_test() {
   let db = world.new().db
-  let d = desk(base_point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(base_point(), policies.checked(1, [], AnyoneHolding("finance")))
   let failure = model.ProviderFailed(provider: "anthropic", reason: "HTTP 529")
   assert model.retryable(failure)
   let exchange = Ref("llm_exchange", "call-9", "a1b2")
@@ -372,7 +369,10 @@ pub fn e_a_provider_failure_is_recorded_with_its_evidence_test() {
 pub fn f_the_card_document_has_a_codec_and_a_schema_test() {
   let db = world.new().db
   let d =
-    desk(base_point(), Policy(1, [], Ask(Several(2, AnyoneHolding("finance")))))
+    desk(
+      base_point(),
+      policies.checked(1, [], Several(2, AnyoneHolding("finance"))),
+    )
   let w = recommend(db, d, "12000")
   let assert Ok(_) =
     decide(db, d, w.id, felipe, Correct("11000", Reason("amount", None)))
@@ -405,7 +405,7 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
       base_point()
         |> decisions.with_hold(duration.minutes(5))
         |> decisions.valid_for(duration.hours(1)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let refusing =
     decisions.desk(
@@ -416,7 +416,13 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
           Error(decisions.Refuse("account closed"))
         })
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
+      under: fn(_) {
+        Ok(policies.checked(
+          1,
+          [policy.When(policy.Always, Proceed(Never, None))],
+          policy.AnyoneHolding("nobody"),
+        ))
+      },
       over: memory.port(),
     )
   // Waiting.
@@ -507,7 +513,14 @@ pub fn i_a_release_check_records_its_evidence_test() {
   let db = world.new().db
   let balance = Ref("balance", "clinica-x", "r7")
   let d =
-    desk(base_point(), Policy(1, [], Proceed(Never, None)))
+    desk(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
     |> decisions.checking(with: fn(_tx, release: decisions.ToRelease(String)) {
       case release.output {
         "too much" -> Error(decisions.Refuse("the balance does not cover it"))
@@ -570,7 +583,15 @@ pub fn k_sampling_is_uniform_over_sequential_and_random_keys_test() {
   })
   // The desk samples by the same rule.
   let db = world.new().db
-  let d = desk(base_point(), Policy(1, [], Proceed(policy.PerCent(50), None)))
+  let d =
+    desk(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(policy.PerCent(50), None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   list.each(list.take(sequential, 40), fn(id) {
     let assert Ok(made) =
       memory.transaction(db, decisions.recommend_once(
@@ -587,7 +608,7 @@ pub fn k_sampling_is_uniform_over_sequential_and_random_keys_test() {
 
 pub fn l_open_refuses_a_card_nobody_can_use_test() {
   let db = world.new().db
-  let d = desk(base_point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(base_point(), policies.checked(1, [], AnyoneHolding("finance")))
   let w = recommend(db, d, "a")
   let assert Ok(_) = decide(db, d, w.id, felipe, Approve)
   assert memory.transaction(db, decisions.open(
@@ -599,7 +620,15 @@ pub fn l_open_refuses_a_card_nobody_can_use_test() {
     ))
     |> result.replace(Nil)
     == Error(decisions.AlreadyDecided("felipe"))
-  let proceeding = desk(base_point(), Policy(1, [], Proceed(Never, None)))
+  let proceeding =
+    desk(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let p = recommend(db, proceeding, "b")
   assert memory.transaction(db, decisions.open(
       proceeding,
@@ -617,7 +646,7 @@ pub fn l_open_refuses_a_card_nobody_can_use_test() {
 fn superseded_desk() {
   desk(
     base_point() |> decisions.superseded_by("newer_message"),
-    Policy(1, [], Ask(AnyoneHolding("finance"))),
+    policies.checked(1, [], AnyoneHolding("finance")),
   )
 }
 
@@ -716,7 +745,7 @@ pub fn n_what_a_candidate_policy_would_do_with_an_example_test() {
         Error(Nil) -> 0.0
       }
     })
-  let d = desk(point, Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let d = desk(point, policies.checked(1, [], AnyoneHolding("finance")))
   let w = recommend(db, d, "80")
   let assert Ok(done) = decide(db, d, w.id, felipe, Approve)
   let assert Ok(example) =
@@ -730,10 +759,10 @@ pub fn n_what_a_candidate_policy_would_do_with_an_example_test() {
       ),
     )
   let candidate =
-    Policy(
+    policies.checked(
       2,
       [When(policy.below(amount, 100.0), Proceed(Never, None))],
-      Ask(AnyoneHolding("finance")),
+      AnyoneHolding("finance"),
     )
   assert learning.answer_under(example, policy: candidate, point:)
     == Proceed(Never, None)
@@ -744,7 +773,14 @@ pub fn n_what_a_candidate_policy_would_do_with_an_example_test() {
 pub fn o_a_release_check_reads_the_context_test() {
   let db = world.new().db
   let d =
-    desk(base_point(), Policy(1, [], Proceed(Never, None)))
+    desk(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
     |> decisions.checking(with: fn(_, release: decisions.ToRelease(String)) {
       case release.context.refs {
         [Ref(kind: "request", revision: "1", ..)] -> Ok([])

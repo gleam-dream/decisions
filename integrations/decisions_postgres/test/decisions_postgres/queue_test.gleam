@@ -2,7 +2,7 @@
 //// volume, that each is served by its index.
 
 import decisions
-import decisions/policy.{AnyoneHolding, Ask, PerCent, Policy, Proceed, Several}
+import decisions/policy.{AnyoneHolding, PerCent, Proceed, Several}
 import decisions/store
 import decisions/vocabulary.{Approve, Subject, Validator}
 import decisions_postgres
@@ -14,6 +14,7 @@ import gleam/string
 import gleam/time/duration
 import kit
 import pog
+import support/policies
 
 /// A queue across points: the soonest due first, those without a due time
 /// last, arrival order within one due time. Left out: another set's
@@ -23,7 +24,7 @@ pub fn a_page_orders_by_due_time_and_leaves_out_what_is_not_mine_test() {
   let #(name, store) = kit.store()
   let set = kit.tag("finance")
   let ask = fn(eligible) {
-    Policy(version: 1, rules: [], otherwise: Ask(eligible))
+    policies.checked(version: 1, rules: [], otherwise: eligible)
   }
   let short =
     kit.Spec(
@@ -124,10 +125,12 @@ pub fn counts_subjects_reviews_and_positions_test() {
   let sampled =
     kit.Spec(
       ..kit.spec("sampled"),
-      policy: Policy(
+      policy: policies.checked(
         version: 1,
-        rules: [],
-        otherwise: Proceed(sample: PerCent(100), hold: None),
+        rules: [
+          policy.When(policy.Always, Proceed(sample: PerCent(100), hold: None)),
+        ],
+        otherwise: policy.AnyoneHolding("nobody"),
       ),
     )
   let waiting = kit.spec("counted")
@@ -186,10 +189,12 @@ pub fn point_pages_reviews_and_exports_test() {
   let sampled =
     kit.Spec(
       ..kit.spec("sampled_all"),
-      policy: Policy(
+      policy: policies.checked(
         version: 1,
-        rules: [],
-        otherwise: Proceed(sample: PerCent(100), hold: None),
+        rules: [
+          policy.When(policy.Always, Proceed(sample: PerCent(100), hold: None)),
+        ],
+        otherwise: policy.AnyoneHolding("nobody"),
       ),
     )
   let one_desk = kit.desk(store, one)

@@ -8,7 +8,7 @@ import decisions/fact
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, OwnAct, PerCent, Policy, Proceed, When,
+  type Policy, AnyoneHolding, Never, OwnAct, PerCent, Proceed, When,
 }
 import decisions/vocabulary.{
   type Fact, Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
@@ -36,17 +36,17 @@ pub fn point() -> decisions.Point(Refund) {
 
 /// Rung 1: a person's own act proceeds; anything else asks finance.
 pub fn assisted() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 1,
     rules: [When(OwnAct, Proceed(Never, None))],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Rung 2: small refunds the classifier is sure of proceed, and one in ten
 /// of those is sampled for a review after the fact.
 pub fn confident() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 2,
     rules: [
       When(OwnAct, Proceed(Never, None)),
@@ -58,15 +58,15 @@ pub fn confident() -> Policy {
         Proceed(PerCent(10), None),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Rung 3: the same refunds proceed with a thirty-minute undo window
 /// instead of a sample: each is held, and released when the window ends
 /// unless finance withdraws it first.
 pub fn undoable() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 3,
     rules: [
       When(OwnAct, Proceed(Never, None)),
@@ -78,8 +78,8 @@ pub fn undoable() -> Policy {
         Proceed(Never, Some(duration.minutes(30))),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Publishing a version is a write, refused when the policy reads a fact
@@ -162,9 +162,11 @@ pub fn run() -> List(String) {
   let fifth = status(arrive(store, "fee-5", 8000, 0.99))
   // A version that reads a misspelt fact is never stored.
   let typo =
-    Policy(..confident(), version: 4, rules: [
-      When(policy.AtLeast("confidense", 0.9), Proceed(Never, None)),
-    ])
+    clinic.well_formed(policy.new(
+      version: 4,
+      rules: [When(policy.AtLeast("confidense", 0.9), Proceed(Never, None))],
+      otherwise: policy.otherwise(confident()),
+    ))
   let refused = case publish(store, typo) {
     Error([policy.UndeclaredFact("confidense")]) -> "refused"
     _ -> "published"

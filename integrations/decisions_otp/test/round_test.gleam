@@ -26,6 +26,7 @@ import gleam/string
 import gleam/time/duration
 import sinal
 import support/lab
+import support/policies
 
 fn quick(config: runtime.Config(tx)) -> runtime.Config(tx) {
   runtime.Config(..config, poll: duration.milliseconds(5))
@@ -506,10 +507,10 @@ pub fn a_wake_up_that_cannot_consult_is_set_aside_test() {
   let desk =
     lab.desk(
       lab.point("review.consulting", None),
-      policy.Policy(
+      policies.checked(
         version: 1,
         rules: [policy.When(policy.waited(60), policy.Consult("other.point"))],
-        otherwise: policy.Ask(policy.AnyoneHolding("finance")),
+        otherwise: policy.AnyoneHolding("finance"),
       ),
     )
   recommend(s, desk, "c-1")

@@ -45,7 +45,7 @@ import decisions/entry
 import decisions/fact.{type Key}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{type Policy, AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{type Policy, AnyoneHolding, Never, Proceed}
 import decisions/store.{type Stored}
 import decisions/testing
 import decisions/vocabulary.{
@@ -401,11 +401,15 @@ fn point(name: String, hold: Option(Duration)) -> decisions.Point(String) {
 }
 
 fn asking(set: String) -> Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding(set)))
+  well_formed(version: 1, rules: [], otherwise: AnyoneHolding(set))
 }
 
 fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
+  well_formed(
+    version: 1,
+    rules: [policy.When(policy.Always, Proceed(Never, hold: None))],
+    otherwise: policy.AnyoneHolding("nobody"),
+  )
 }
 
 /// A desk whose gated tool adds `key=output` to the table named after
@@ -3317,4 +3321,14 @@ fn stress_proposal(key: String, output: String) -> decisions.Proposal(String) {
       reads: [],
     ),
   )
+}
+
+/// A policy this module writes as a literal, which is well formed.
+fn well_formed(
+  version version: Int,
+  rules rules: List(policy.Rule),
+  otherwise otherwise: policy.Eligible,
+) -> Policy {
+  let assert Ok(made) = policy.new(version:, rules:, otherwise:)
+  made
 }

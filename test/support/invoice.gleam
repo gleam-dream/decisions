@@ -5,9 +5,7 @@ import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/fact
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{
-  AnyoneHolding, Ask, Never, OwnAct, Policy, Proceed, When,
-}
+import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/vocabulary.{
   type Explanation, type Manifest, Agent, ApproveRejectOrCorrect, ParentRun,
   Recommendation, Trigger,
@@ -18,6 +16,7 @@ import gleam/list
 import gleam/option.{None}
 import gleam/string
 import json/blueprint/codec
+import support/policies
 import support/world.{type World}
 
 pub type Invoice {
@@ -76,10 +75,10 @@ pub fn desk() -> Desk(Invoice, Memory) {
     point(),
     drives: fn(_) { issue_nfse() },
     under: fn(_) {
-      Ok(Policy(
+      Ok(policies.checked(
         version: 1,
         rules: [When(OwnAct, Proceed(Never, None))],
-        otherwise: Ask(AnyoneHolding("operators")),
+        otherwise: AnyoneHolding("operators"),
       ))
     },
     over: memory.port(),

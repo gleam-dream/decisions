@@ -3,7 +3,7 @@
 //// `otp-runtime`.
 
 import decisions
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/wire
 import decisions_otp/runtime
 import decisions_otp/store
@@ -29,7 +29,8 @@ pub fn refund_desk() -> decisions.Desk(String, store.Tx) {
       )
     },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+      policy.new(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
+      |> result.replace_error("the policy is malformed")
     },
     over: store.port(),
   )

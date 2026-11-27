@@ -3,7 +3,7 @@
 //// against the test cluster.
 
 import decisions
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/wire
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
@@ -56,11 +56,8 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
       decisions.point("billing.fee_refund", wire.text()),
       drives: refund_tool,
       under: fn(_) {
-        Ok(Policy(
-          version: 1,
-          rules: [],
-          otherwise: Ask(AnyoneHolding("finance")),
-        ))
+        policy.new(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
+        |> result.replace_error("the policy is malformed")
       },
       over: decisions_postgres.port(store),
     )

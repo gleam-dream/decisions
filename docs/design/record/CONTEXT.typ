@@ -34,7 +34,7 @@
   (slug: "term-signal", title: [Signal], body: [A declared fact that arrives beside the output, such as a model's score or a consulted point's answer.]),
   (slug: "term-policy", title: [Policy], body: [One version of the data that holds every condition for proceeding without a person: a version number, ordered rules, and a default outcome. It reads only the recommender and declared facts.]),
   (slug: "term-policy-version", title: [Policy version], body: [The number that names one published policy. Every entry that records a policy answer records the version that gave it.]),
-  (slug: "term-publishable", title: [Publishable policy], body: [A policy that reads only facts its point declares, each as its declared type, asks for at least one approval, and samples between 0 and 100 per cent. The desk refuses to use a policy that is not publishable.]),
+  (slug: "term-publishable", title: [Publishable policy], body: [A policy that reads only facts its point declares, each as its declared type. A policy is always well formed, since `policy.new` refuses one that asks for no approval or samples outside 0 to 100. The desk refuses to use a policy that is not publishable.]),
   (slug: "term-outcome", title: [Policy outcome], body: [What a policy says about a recommendation: proceed with a sample, ask whoever an eligibility admits, or consult another decision point.]),
   (slug: "term-timeline", title: [Timeline], body: [A policy's answer now and each later answer it will give as the occurrence goes on waiting, computed once when the policy is applied and kept on the record as steps.]),
   (slug: "term-step", title: [Step], body: [One later answer of a timeline: after a whole number of minutes waited, the policy says a given outcome.]),

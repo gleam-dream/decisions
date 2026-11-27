@@ -165,6 +165,7 @@ here. The gated tool's executor accepts nothing but a released refund.
 import decisions.{type Gated, type Point, Gated}
 import decisions/fact
 import decisions/memory.{type Memory}
+import decisions/policy.{type Policy}
 import decisions/vocabulary.{ApproveRejectOrCorrect, Subject, Validator}
 import decisions/wire
 import gleam/int
@@ -231,7 +232,7 @@ message delivered twice is one occurrence.
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Agent, Approve, Manifest, Recommendation, Ref, RunAnswer, Trigger,
 }
@@ -240,7 +241,11 @@ import gleam/result
 
 /// Version 1 of the policy: always ask a holder of `finance`.
 pub fn always_ask() -> policy.Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  clinic.well_formed(policy.new(
+    version: 1,
+    rules: [],
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// The desk binds the point to its gated tool, its policy and a store. It
@@ -314,9 +319,10 @@ application the same desk runs over `decisions_postgres.port(store)` or
 ## Policy as data, and the autonomy ladder
 
 A policy is a versioned value: rules over the recommender and declared facts,
-and a default outcome. Publishing a version is a write wherever you keep it;
-the desk reads it in your transaction and refuses one that fails
-`decisions.publishable`. One point climbs from "a person's own act proceeds,
+and who is asked by default. `policy.new` refuses a policy that cannot be used
+at any point, such as one that asks for no approval. Publishing a version is a
+write wherever you keep it; the desk reads it in your transaction and refuses
+one that fails `decisions.publishable`. One point climbs from "a person's own act proceeds,
 anything else asks" to "small refunds the classifier is sure of proceed, one
 in ten sampled for review" without a code change; demoting it is publishing a
 stricter version.
@@ -330,7 +336,7 @@ import decisions/fact
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, OwnAct, PerCent, Policy, Proceed, When,
+  type Policy, AnyoneHolding, Never, OwnAct, PerCent, Proceed, When,
 }
 import decisions/vocabulary.{
   type Fact, Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
@@ -358,17 +364,17 @@ pub fn point() -> decisions.Point(Refund) {
 
 /// Rung 1: a person's own act proceeds; anything else asks finance.
 pub fn assisted() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 1,
     rules: [When(OwnAct, Proceed(Never, None))],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Rung 2: small refunds the classifier is sure of proceed, and one in ten
 /// of those is sampled for a review after the fact.
 pub fn confident() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 2,
     rules: [
       When(OwnAct, Proceed(Never, None)),
@@ -380,15 +386,15 @@ pub fn confident() -> Policy {
         Proceed(PerCent(10), None),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Rung 3: the same refunds proceed with a thirty-minute undo window
 /// instead of a sample: each is held, and released when the window ends
 /// unless finance withdraws it first.
 pub fn undoable() -> Policy {
-  Policy(
+  clinic.well_formed(policy.new(
     version: 3,
     rules: [
       When(OwnAct, Proceed(Never, None)),
@@ -400,8 +406,8 @@ pub fn undoable() -> Policy {
         Proceed(Never, Some(duration.minutes(30))),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
-  )
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// Publishing a version is a write, refused when the policy reads a fact
@@ -469,8 +475,10 @@ pub fn arrive(
 
 <!-- prettier-ignore-end -->
 
-A condition over an absent fact never matches, so what is unknown never
-proceeds. Every `policy_applied` entry records the version that gave it.
+A policy proceeds only through a rule whose condition holds. A condition over
+an absent or mistyped fact is unknown, and an unknown condition stops the
+reading: the policy asks its default, whatever the rules after it say. So what
+is unknown never proceeds. Every `policy_applied` entry records the version that gave it.
 
 ## Cards across requests
 
@@ -548,7 +556,7 @@ import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  AnyoneHolding, Ask, Either, Policy, Several, SomeoneElseHolding, When,
+  AnyoneHolding, Ask, Either, Several, SomeoneElseHolding, When,
 }
 import decisions/vocabulary.{
   type Validator, Agent, Approve, Manifest, Recommendation, RunAnswer, Trigger,
@@ -567,7 +575,7 @@ pub const rui = Validator(subject: "rui", holds: ["managers"])
 
 pub fn policy() -> policy.Policy {
   let large = policy.at_least(clinic.amount(), 10_000.0)
-  Policy(
+  clinic.well_formed(policy.new(
     version: 1,
     rules: [
       When(
@@ -579,8 +587,8 @@ pub fn policy() -> policy.Policy {
       ),
       When(large, Ask(Several(2, SomeoneElseHolding("finance")))),
     ],
-    otherwise: Ask(SomeoneElseHolding("finance")),
-  )
+    otherwise: SomeoneElseHolding("finance"),
+  ))
 }
 
 pub fn desk() -> decisions.Desk(Refund, Memory) {
@@ -662,7 +670,7 @@ records the decision sets its validator held.
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Either, Policy, Several}
+import decisions/policy.{AnyoneHolding, Either, Several}
 import decisions/vocabulary.{
   type Validator, Agent, Approve, Manifest, Recommendation, RunAnswer, Trigger,
   Validator,
@@ -677,16 +685,16 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
     clinic.refund_point(),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
-      Ok(Policy(
-        version: 1,
-        rules: [],
-        otherwise: Ask(
-          Either([
+      Ok(
+        clinic.well_formed(policy.new(
+          version: 1,
+          rules: [],
+          otherwise: Either([
             Several(2, AnyoneHolding("finance")),
             AnyoneHolding("head_of_finance"),
           ]),
-        ),
-      ))
+        )),
+      )
     },
     over: memory.port(),
   )
@@ -726,7 +734,7 @@ released.
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed, When}
+import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
 }
@@ -740,17 +748,19 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
     autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
-      Ok(Policy(
-        version: 1,
-        rules: [
-          When(
-            policy.at_least(autonomy_ladder.confidence(), 0.95),
-            // Proceed, with a thirty-minute undo window.
-            Proceed(Never, Some(duration.minutes(30))),
-          ),
-        ],
-        otherwise: Ask(AnyoneHolding("finance")),
-      ))
+      Ok(
+        clinic.well_formed(policy.new(
+          version: 1,
+          rules: [
+            When(
+              policy.at_least(autonomy_ladder.confidence(), 0.95),
+              // Proceed, with a thirty-minute undo window.
+              Proceed(Never, Some(duration.minutes(30))),
+            ),
+          ],
+          otherwise: AnyoneHolding("finance"),
+        )),
+      )
     },
     over: memory.port(),
   )
@@ -807,12 +817,13 @@ ended before it was recommended, cannot join it: `BadBundle` says which.
 ```gleam
 import decisions
 import decisions/memory.{type Memory}
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/vocabulary.{
   Approve, Manifest, ModelCall, Reason, Recommendation, Reject, RuleFired,
   Subject, Trigger,
 }
 import decisions/wire
+import decisions_usage/clinic
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -838,7 +849,9 @@ pub fn lines() -> decisions.Desk(String, Memory) {
   decisions.desk(
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("approved") },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("finance"))))
+    },
     over: memory.port(),
   )
 }
@@ -848,7 +861,15 @@ pub fn payouts() -> decisions.Desk(String, Memory) {
   decisions.desk(
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("paid") },
-    under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
+    under: fn(_) {
+      Ok(
+        clinic.well_formed(policy.new(
+          1,
+          [policy.When(policy.Always, Proceed(Never, None))],
+          AnyoneHolding("finance"),
+        )),
+      )
+    },
     over: memory.port(),
   )
 }
@@ -947,7 +968,7 @@ has been expected and not yet recommended has the head status `pending`; `decisi
 ```gleam
 import decisions
 import decisions/memory.{type Memory}
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
 }
@@ -958,7 +979,9 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
   decisions.desk(
     clinic.refund_point() |> decisions.superseded_by("statement_corrected"),
     drives: fn(_) { clinic.refund_fee() },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("finance"))))
+    },
     over: memory.port(),
   )
 }
@@ -1069,11 +1092,12 @@ again". See [ADR 0054](https://github.com/gleam-dream/decisions/blob/main/docs/a
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
 }
 import decisions/wire
+import decisions_usage/clinic
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 
@@ -1088,7 +1112,9 @@ pub fn desk() -> decisions.Desk(String, Memory) {
         execute: fn(_, _) { Ok(Nil) },
       )
     },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("support"))))
+    },
     over: memory.port(),
   )
 }
@@ -1545,7 +1571,8 @@ pub fn refund_desk() -> decisions.Desk(String, store.Tx) {
       )
     },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+      policy.new(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
+      |> result.replace_error("the policy is malformed")
     },
     over: store.port(),
   )
@@ -1672,11 +1699,8 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
       decisions.point("billing.fee_refund", wire.text()),
       drives: refund_tool,
       under: fn(_) {
-        Ok(Policy(
-          version: 1,
-          rules: [],
-          otherwise: Ask(AnyoneHolding("finance")),
-        ))
+        policy.new(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
+        |> result.replace_error("the policy is malformed")
       },
       over: decisions_postgres.port(store),
     )
