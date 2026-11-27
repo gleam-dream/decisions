@@ -1,7 +1,7 @@
 # Decisions PostgreSQL integration instructions
 
 - This is a nested package in [decisions](../../AGENTS.md). Use the parent dev shell, design-gate pin and the parent's local `issues/` tracker; this package has no independent flake, gate copy or tracker.
-- It holds the storage port over PostgreSQL, its migrations, the Grind workers for wake-ups and settlements, `NOTIFY` and the queue queries. It depends on the core's Hex release (`decisions = ">= 0.1.1 and < 0.3.0"`), so its tests run against the published core, not the working tree; it is itself released by Git tag, not on Hex. It also depends on `pog`, `pgo`, `grind` and `sinal`, with the `pog` and `pgo` ranges equal to Grind's; `decisions_otp` is a dev-dependency only, for the shared stress scenarios and scale workloads.
+- It holds the storage port over PostgreSQL, its migrations, the Grind workers for wake-ups and settlements, `NOTIFY` and the queue queries. Until core 0.2.0 is on Hex it depends on the working-tree core (`decisions = { path = "../.." }`); its release commit puts back the Hex range `>= 0.2.0 and < 0.3.0`, and its tests then run against the published core; it is itself released by Git tag, not on Hex. It also depends on `pog`, `pgo`, `grind` and `sinal`, with the `pog` and `pgo` ranges equal to Grind's; `decisions_otp` is a dev-dependency only, for the shared stress scenarios and scale workloads.
 - The application owns the connection pool. Do not add pool startup or shutdown to this package.
 - Run database tests only through the parent's `scripts/test-postgres.sh`. It creates a throwaway PostgreSQL 16 cluster, passes its URL in `DECISIONS_TEST_DATABASE_URL`, and removes the cluster on exit. Plain `gleam test` has no database URL. Never select another database for verification.
 

@@ -90,10 +90,10 @@ import decisions_otp/backlog.{
 import decisions_otp/internal/owner.{type Change, type Message, Change}
 import decisions_otp/internal/rows.{
   type Buffer, type Key, type Lock, type Row, AppKey, AppRow, AsideKey, AsideRow,
-  EntryKey, EntryRow, EvidenceKey, EvidenceRow, HeadKey, HeadRow, IndexRow,
-  NoticeKey, NoticeRow, OccurrenceLock, PendingKey, PendingRow, PointKey,
-  QueueKey, ReviewKey, SettledKey, TriggerKey, TriggerRow, WaitingKey, WakeKey,
-  WakeRow,
+  BundleKey, EntryKey, EntryRow, EvidenceKey, EvidenceRow, HeadKey, HeadRow,
+  IndexRow, NoticeKey, NoticeRow, OccurrenceLock, PendingKey, PendingRow,
+  PointKey, QueueKey, ReviewKey, SettledKey, TriggerKey, TriggerRow, WaitingKey,
+  WakeKey, WakeRow,
 }
 import decisions_otp/live.{type Hint, type Topic}
 import gleam/bool
@@ -648,7 +648,29 @@ pub fn port() -> Port(Tx) {
     new_id: fn(tx: Tx) {
       "occ-" <> int.to_string(rows.next(tx.store.tables.counters, "id"))
     },
+    members: members,
   )
+}
+
+fn members(
+  tx: Tx,
+  bundle: String,
+) -> Result(List(#(String, Head)), StoreError) {
+  use store, open <- within(tx)
+  stable(store, fn() {
+    rows.scan(store.tables.rows, open.buffer, BundleKey(bundle, ""))
+    |> list.filter_map(fn(pair) {
+      case pair.0 {
+        BundleKey(id:, ..) ->
+          case rows.read(store.tables.rows, open.buffer, HeadKey(id, 0)) {
+            Ok(HeadRow(head:, ..)) -> Ok(#(id, head))
+            _ -> Error(Nil)
+          }
+        _ -> Error(Nil)
+      }
+    })
+  })
+  |> Ok
 }
 
 fn load(tx: Tx, id: String) -> Result(List(Stored), StoreError) {
@@ -761,6 +783,10 @@ fn index(open: Open, id: String, old: Option(Head), new: Head) -> Nil {
   case new.review_pending {
     True -> rows.put(open.buffer, ReviewKey(new.point, id), IndexRow)
     False -> Nil
+  }
+  case new.bundle {
+    Some(bundle) -> rows.put(open.buffer, BundleKey(bundle.key, id), IndexRow)
+    None -> Nil
   }
   list.each(new.awaiting, fn(set) {
     rows.put(open.buffer, QueueKey(set, queue_order(id, new)), IndexRow)

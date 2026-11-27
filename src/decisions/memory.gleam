@@ -130,6 +130,7 @@ pub fn port() -> Port(Memory) {
       raw_put(tx, "next_id", int.to_string(next))
       "occ-" <> int.to_string(next)
     },
+    members: fn(tx, bundle) { Ok(members(tx, bundle)) },
   )
 }
 
@@ -359,6 +360,17 @@ fn waiting(tx: Memory, point: String, subject: Subject) -> List(String) {
   |> list.sort(string.compare)
 }
 
+fn members(tx: Memory, bundle: String) -> List(#(String, Head)) {
+  heads(tx)
+  |> list.filter(fn(pair) {
+    case { pair.1 }.bundle {
+      Some(of) -> of.key == bundle
+      None -> False
+    }
+  })
+  |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+}
+
 fn schedule(
   tx: Memory,
   point: String,
@@ -421,6 +433,7 @@ fn head_to_json(head: Head) -> Json {
     #("approved", json.array(head.approved, json.string)),
     #("may_not_decide", json.array(head.may_not_decide, json.string)),
     #("review_pending", json.bool(head.review_pending)),
+    #("bundle", wire.optional(head.bundle, wire.bundle)),
   ])
 }
 
@@ -443,6 +456,11 @@ fn head_decoder() -> Decoder(Head) {
     decode.list(decode.string),
   )
   use review_pending <- decode.field("review_pending", decode.bool)
+  use bundle <- decode.optional_field(
+    "bundle",
+    None,
+    decode.optional(wire.bundle_decoder()),
+  )
   decode.success(Head(
     point:,
     subject:,
@@ -453,6 +471,7 @@ fn head_decoder() -> Decoder(Head) {
     approved:,
     may_not_decide:,
     review_pending:,
+    bundle:,
   ))
 }
 

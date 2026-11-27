@@ -10,7 +10,7 @@ import gleam/list
 import gleam/string
 import stress_target
 
-const count = 25
+const count = 26
 
 fn run(index: Int) -> Nil {
   let assert Ok(scenario) = list.drop(stress.scenarios(), index) |> list.first
@@ -122,4 +122,8 @@ pub fn scenario_23_test() {
 
 pub fn scenario_24_test() {
   run(24)
+}
+
+pub fn scenario_25_test() {
+  run(25)
 }

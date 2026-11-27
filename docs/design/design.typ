@@ -57,7 +57,7 @@
   )
 ])
 
-#section(title: "The invariants and what holds each", lead: "Eight properties hold over every record in every store; each has a named mechanism.", body: [
+#section(title: "The invariants and what holds each", lead: "Nine properties hold over every record in every store; each has a named mechanism.", body: [
   #md-table(3, (
     [*Invariant*], [*Statement*], [*Held by*],
     [I1], [At most one release per occurrence; when an audit counts effects, the gated tool's effects equal the released occurrences.], [Type: an executor accepts only a released output, which only the desk builds, for the executor alone; the release check receives a value no executor accepts. Port contract: `append` refuses a second `released` entry. Database constraint: the unique index `decisions_entries_one_release`.],
@@ -68,9 +68,10 @@
     [I6], [A settled occurrence has exactly one settlement notice; an unsettled one has none.], [Desk check: `settled` is called in the transaction in which the status becomes settled, and only then. Database constraint: `decisions_settled_once`.],
     [I7], [Entries are numbered 1, 2, 3 and so on and their times never decrease, so the record as known earlier is a prefix of the record now.], [Desk check: the clock is read after the lock and never earlier than the last entry. Port contract: `append` refuses a repeated number and a gap. Database constraints: the primary key and the foreign key `decisions_entries_no_gap`.],
     [I8], [The head equals the head the record implies, field by field.], [Desk check: the desk derives the head from the folded occurrence and writes it with every append. Port contract: `append` replaces the head with the entries in one write.],
+    [I9], [The members of a bundle agree on its size and are no more than it.], [Desk check: admission refuses a member whose size differs from a recorded member's and one beyond the size, reading `members` first. Two concurrent admissions can still exceed it; the bundle then never completes and the check reports it (#adr(58)). Database constraint: `decisions_occurrences_bundle` keeps a head's key and size whole.],
   ))
   #points(
-    [`decisions/testing.check` checks all eight over any store through its inspection, after a race, a random walk, a kill or a restart. Its I3, I4 and I5 are stated above as the code checks them; #adr(12) records why I4 counts per standing output.],
+    [`decisions/testing.check` checks all nine over any store through its inspection, after a race, a random walk, a kill or a restart. Its I3, I4 and I5 are stated above as the code checks them; #adr(12) records why I4 counts per standing output.],
     [I1 bounds the database effect exactly. An effect outside the database is bounded by the release key: the outside system deduplicates by it, and an uncertain outcome is settled by looking the effect up by it (#adr(7)).],
   )
 ])

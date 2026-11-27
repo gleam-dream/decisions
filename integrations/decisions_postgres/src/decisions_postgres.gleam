@@ -262,9 +262,9 @@ pub fn following(store: Store, point: String) -> Store {
 ///   the queue rows and a `NOTIFY` on channel `decisions_changed`. The
 ///   database refuses a repeated sequence number, a gap and a second
 ///   release, which the port reports as `store.Conflict`. An occurrence id
-///   or point name longer than `max_name_bytes` (255) is refused at once
-///   with a `store.Conflict` that says so. With no entries, the head is
-///   replaced.
+///   point name or bundle key longer than `max_name_bytes` (255) is
+///   refused at once with a `store.Conflict` that says so. With no
+///   entries, the head is replaced.
 /// - `schedule` keeps the pending wake-ups whose time is still wanted,
 ///   removes the others, and admits a Grind job for each new one.
 /// - `settled` admits the notice, and a Grind job for it when the point
@@ -272,6 +272,9 @@ pub fn following(store: Store, point: String) -> Store {
 /// - `atomically` is a savepoint.
 /// - `now` is the database's clock to the millisecond.
 /// - `new_id` is a UUID version 7 made on this node.
+/// - `members` reads the heads of a bundle through the partial index
+///   `decisions_occurrences_bundle`, without a lock, set-aside records
+///   included.
 pub fn port(store: Store) -> Port(pog.Connection) {
   Port(
     load: fn(tx, id) { load(store, tx, id) },
@@ -284,6 +287,7 @@ pub fn port(store: Store) -> Port(pog.Connection) {
     atomically:,
     now: fn(tx) { clock(store, tx) },
     new_id: fn(_) { sql.new_id() },
+    members:,
   )
 }
 
@@ -337,16 +341,21 @@ fn append(
       <> int.to_string(max_name_bytes),
     )
   }
+  let bundle_key = option.map(head.bundle, fn(bundle) { bundle.key })
+  let bundle_size = option.map(head.bundle, fn(bundle) { bundle.size })
+  let key = option.unwrap(bundle_key, "")
   case
     string.byte_size(id) > max_name_bytes,
-    string.byte_size(head.point) > max_name_bytes
+    string.byte_size(head.point) > max_name_bytes,
+    string.byte_size(key) > max_name_bytes
   {
-    True, _ -> Error(too_long("the occurrence id", id))
-    _, True -> Error(too_long("the point name", head.point))
-    False, False ->
+    True, _, _ -> Error(too_long("the occurrence id", id))
+    _, True, _ -> Error(too_long("the point name", head.point))
+    _, _, True -> Error(too_long("the bundle key", key))
+    False, False, False ->
       // With no entries the head is still replaced, as the port says.
       pog.query(
-        "SELECT decisions_append($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        "SELECT decisions_append($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
       )
       |> pog.parameter(pog.text(id))
       |> pog.parameter(pog.text(head.point))
@@ -363,10 +372,33 @@ fn append(
       |> pog.parameter(pog.array(sql.at, list.map(entries, fn(e) { e.at })))
       |> pog.parameter(pog.array(pog.text, list.map(entries, fn(e) { e.kind })))
       |> pog.parameter(pog.array(pog.text, list.map(entries, fn(e) { e.event })))
+      |> pog.parameter(pog.nullable(pog.text, bundle_key))
+      |> pog.parameter(pog.nullable(pog.int, bundle_size))
       |> sql.run(tx)
       |> result.replace(Nil)
   }
 }
+
+fn members(
+  tx: pog.Connection,
+  bundle: String,
+) -> Result(List(#(String, Head)), StoreError) {
+  pog.query("SELECT id, " <> head_columns <> "
+     FROM decisions_occurrences WHERE bundle_key = $1 ORDER BY id")
+  |> pog.parameter(pog.text(bundle))
+  |> pog.returning({
+    use id <- decode.field(0, decode.string)
+    use head <- decode.then(head_decoder_from(1))
+    decode.success(#(id, head))
+  })
+  |> sql.run(tx)
+}
+
+/// The columns `head_decoder_from` reads, in its order.
+const head_columns =
+  "point, subject_kind, subject_id, status, awaiting,
+                decisions_ms(due), decisions_ms(arrived), approved,
+                may_not_decide, review_pending, bundle_key, bundle_size"
 
 fn waiting(
   tx: pog.Connection,
@@ -579,10 +611,7 @@ pub fn inspection() -> Inspection(pog.Connection) {
     },
     head: fn(tx, id) {
       pog.query(
-        "SELECT point, subject_kind, subject_id, status, awaiting,
-                decisions_ms(due), decisions_ms(arrived), approved,
-                may_not_decide, review_pending
-         FROM decisions_occurrences WHERE id = $1",
+        "SELECT " <> head_columns <> " FROM decisions_occurrences WHERE id = $1",
       )
       |> pog.parameter(pog.text(id))
       |> pog.returning(head_decoder())
@@ -617,16 +646,27 @@ pub fn inspection() -> Inspection(pog.Connection) {
 }
 
 fn head_decoder() -> decode.Decoder(Head) {
-  use point <- decode.field(0, decode.string)
-  use kind <- decode.field(1, decode.string)
-  use id <- decode.field(2, decode.string)
-  use status <- decode.field(3, status_decoder())
-  use awaiting <- decode.field(4, decode.list(decode.string))
-  use due <- decode.field(5, decode.optional(sql.time()))
-  use arrived <- decode.field(6, sql.time())
-  use approved <- decode.field(7, decode.list(decode.string))
-  use may_not_decide <- decode.field(8, decode.list(decode.string))
-  use review_pending <- decode.field(9, decode.bool)
+  head_decoder_from(0)
+}
+
+/// A head from the `head_columns`, starting at column `at`.
+fn head_decoder_from(at: Int) -> decode.Decoder(Head) {
+  use point <- decode.field(at, decode.string)
+  use kind <- decode.field(at + 1, decode.string)
+  use id <- decode.field(at + 2, decode.string)
+  use status <- decode.field(at + 3, status_decoder())
+  use awaiting <- decode.field(at + 4, decode.list(decode.string))
+  use due <- decode.field(at + 5, decode.optional(sql.time()))
+  use arrived <- decode.field(at + 6, sql.time())
+  use approved <- decode.field(at + 7, decode.list(decode.string))
+  use may_not_decide <- decode.field(at + 8, decode.list(decode.string))
+  use review_pending <- decode.field(at + 9, decode.bool)
+  use bundle_key <- decode.field(at + 10, decode.optional(decode.string))
+  use bundle_size <- decode.field(at + 11, decode.optional(decode.int))
+  let bundle = case bundle_key, bundle_size {
+    Some(key), Some(size) -> Some(vocabulary.Bundle(key:, size:))
+    _, _ -> None
+  }
   decode.success(Head(
     point:,
     subject: Subject(kind:, id:),
@@ -637,6 +677,7 @@ fn head_decoder() -> decode.Decoder(Head) {
     approved:,
     may_not_decide:,
     review_pending:,
+    bundle:,
   ))
 }
 

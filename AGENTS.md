@@ -19,8 +19,11 @@ The repository holds three packages:
 The core is released to Hex. The integrations are released as Git tags of this
 repository (`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`), not on Hex.
 An integration's release commit replaces its path dependency on the root
-(`decisions = { path = "../.." }`) with the core's Hex version range;
-both have done so, and test against the published core. The core never depends on an integration. The design
+(`decisions = { path = "../.." }`) with the core's Hex version range.
+Both currently depend on the working-tree core: they need core 0.2.0
+(bundles, `store.Port.members`), which is not yet on Hex. Publish core
+0.2.0, then release `decisions_otp-v0.2.0` and `decisions_postgres-v0.3.0`
+in that order, each moving to `decisions = ">= 0.2.0 and < 0.3.0"`. The core never depends on an integration. The design
 layer under `docs/design/` owns the contracts and the vocabulary, `docs/adr/`
 records the rationale, and `docs/COVERAGE.md` maps repository parts to their
 design owners.

@@ -14,6 +14,7 @@
 //// | I6 | A settled occurrence has exactly one settlement notice, an unsettled one none |
 //// | I7 | Entries are numbered 1, 2, 3 and so on, and their times never decrease, so the record as known earlier is a prefix of the record now |
 //// | I8 | The head equals the head the record implies (`occurrence.head`), field by field |
+//// | I9 | The members of a bundle among the audited points agree on its size, and are no more than it |
 ////
 //// I4 differs from STRESS.md's "one deciding verdict per validator per
 //// occurrence" on purpose. A correction replaces the output that stands,
@@ -45,6 +46,8 @@ import decisions/entry.{type Entry}
 import decisions/occurrence.{type Occurrence}
 import decisions/store.{type Head, type Inspection, type Notice, type Wake}
 import decisions/vocabulary.{Correct}
+import gleam/bool
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -125,6 +128,7 @@ pub fn check(
   let violations =
     list.flat_map(all, fn(pair) { pair.1 })
     |> list.append(list.flat_map(seen, fn(seen) { seen.violations }))
+    |> list.append(bundles(tx, inspect, audits))
   case violations {
     [] ->
       Ok(Summary(
@@ -134,6 +138,93 @@ pub fn check(
       ))
     _ -> Error(violations)
   }
+}
+
+/// I9: group the audited records by the bundle their heads name.
+fn bundles(
+  tx: tx,
+  inspect: Inspection(tx),
+  audits: List(Audit(tx)),
+) -> List(Violation) {
+  let read =
+    list.flat_map(audits, fn(audit) {
+      case inspect.occurrences(tx, audit.point) {
+        Ok(ids) ->
+          list.map(ids, fn(id) {
+            case inspect.head(tx, id) {
+              Ok(Some(store.Head(bundle: Some(bundle), ..))) ->
+                Ok(#(bundle.key, #(id, bundle.size)))
+              Ok(_) -> Error(None)
+              Error(error) ->
+                Error(
+                  Some(Violation(
+                    invariant: "I9",
+                    occurrence: id,
+                    detail: "its head could not be read: "
+                      <> store.describe(error),
+                  )),
+                )
+            }
+          })
+        Error(error) -> [
+          Error(
+            Some(Violation(
+              invariant: "I9",
+              occurrence: audit.point,
+              detail: "its records could not be listed: "
+                <> store.describe(error),
+            )),
+          ),
+        ]
+      }
+    })
+  let unread =
+    list.filter_map(read, fn(one) {
+      case one {
+        Error(Some(violation)) -> Ok(violation)
+        _ -> Error(Nil)
+      }
+    })
+  let members =
+    list.filter_map(read, fn(one) { result.map_error(one, fn(_) { Nil }) })
+  use <- bool.guard(unread != [], unread)
+  members
+  |> list.group(fn(pair) { pair.0 })
+  |> dict.to_list
+  |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+  |> list.flat_map(fn(group) {
+    let #(key, pairs) = group
+    let found =
+      list.map(pairs, fn(pair) { pair.1 })
+      |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+    let sizes = list.unique(list.map(found, fn(member) { member.1 }))
+    let violation = fn(detail) {
+      let assert [#(first, _), ..] = found
+      [Violation(invariant: "I9", occurrence: first, detail:)]
+    }
+    case sizes {
+      [size] ->
+        case list.length(found) > size {
+          True ->
+            violation(
+              "bundle "
+              <> key
+              <> " holds "
+              <> int.to_string(list.length(found))
+              <> " members but its size is "
+              <> int.to_string(size),
+            )
+          False -> []
+        }
+      _ ->
+        violation(
+          "the members of bundle "
+          <> key
+          <> " record different sizes: "
+          <> string.inspect(found),
+        )
+    }
+  })
 }
 
 fn check_point(

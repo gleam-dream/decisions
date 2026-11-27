@@ -181,6 +181,7 @@
     [B7], [A model that raises and one that hangs: a typed failure within the deadline, on the record.],
     [Own deadline], [Four keys expected with one deadline of their own, the store restarted before it: each expires once at the deadline, a late recommendation is recorded expired, a late failure and a late verdict are refused.],
     [Every notice], [Records that ended before they began (superseded, lapsed at their own deadline), lapsed records recommended late before and after their wake-up, and one rejected: the runtime hands each settlement notice to the point's follower exactly once, none dropped or set aside.],
+    [Bundles], [Bundles of five, each admitted in one transaction, every member decided at once from its own process after a random wait: the follower that sees a bundle complete recommends its follow-on under a key derived from the bundle, so each bundle starts exactly one follow-on, never none and never two (#adr(58)).],
   ))
   #points(
     [A race starts every process at a gate and releases them in shuffled order. A crash is `process.kill` at a named kill point. Every scenario ends with the invariant check over the points it used.],

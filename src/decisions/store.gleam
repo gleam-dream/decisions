@@ -3,7 +3,7 @@
 //// store; `decisions/memory` is the one in this package, and
 //// `decisions/conformance` checks any adapter against the contract below.
 ////
-//// The port has eight functions. Each exists because a guarantee rests on
+//// The port has nine functions. Each exists because a guarantee rests on
 //// the store and the core cannot provide it alone:
 ////
 //// | Function | Why it exists |
@@ -16,6 +16,7 @@
 //// | `atomically` | A savepoint around the guard and the gated tool, so a tool that writes and then refuses leaves nothing behind |
 //// | `now` | The store's clock, read after the lock |
 //// | `new_id` | An id for an occurrence admitted without a key |
+//// | `members` | Finds the occurrences of a bundle across every point, so whoever follows them can tell when all have settled |
 ////
 //// The port offers no way to take, acknowledge or postpone a wake-up or a
 //// notice. Delivery belongs to the runtime that drives the desk: the
@@ -29,7 +30,7 @@
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 
-import decisions/vocabulary.{type Ref, type Subject}
+import decisions/vocabulary.{type Bundle, type Ref, type Subject}
 import gleam/option.{type Option}
 import gleam/time/timestamp.{type Timestamp}
 
@@ -77,6 +78,10 @@ pub type Head {
     may_not_decide: List(String),
     /// Sampled, released, and not yet reviewed.
     review_pending: Bool,
+    /// The bundle the occurrence belongs to, `None` for one proposed
+    /// alone and for a record that has not begun. `members` finds the
+    /// occurrences of a bundle by it.
+    bundle: Option(Bundle),
   )
 }
 
@@ -152,6 +157,16 @@ pub fn is_waiting(status: Status) -> Bool {
   case status {
     Pending | Recommended | Awaiting | Held -> True
     Accepted | Released | Rejected | Expired | Withdrawn | Refused -> False
+  }
+}
+
+/// Whether an occurrence with this status has settled: nothing changes its
+/// outcome any more. A record that has not begun is `Pending`, not
+/// settled; one superseded or lapsed before it began is `Expired`.
+pub fn is_settled(status: Status) -> Bool {
+  case status {
+    Released | Rejected | Expired | Withdrawn | Refused -> True
+    Pending | Recommended | Awaiting | Accepted | Held -> False
   }
 }
 
@@ -245,6 +260,11 @@ pub type Port(tx) {
     now: fn(tx) -> Timestamp,
     /// A new, unique occurrence id.
     new_id: fn(tx) -> String,
+    /// The ids and heads of every occurrence, of any point, whose head
+    /// names the bundle with this key, in ascending id order. It reads what
+    /// is committed and what this transaction wrote, and takes no lock. A
+    /// record set aside as poison is still returned, with the head it had.
+    members: fn(tx, String) -> Result(List(#(String, Head)), StoreError),
   )
 }
 

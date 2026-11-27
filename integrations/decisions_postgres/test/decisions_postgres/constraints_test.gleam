@@ -23,6 +23,7 @@ fn first(env: kit.Env) -> String {
       approved: [],
       may_not_decide: [],
       review_pending: False,
+      bundle: option.None,
     )
   let port = decisions_postgres.port(env.store)
   let assert Ok(Nil) =

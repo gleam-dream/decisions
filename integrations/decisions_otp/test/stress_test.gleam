@@ -142,7 +142,11 @@ pub fn every_settlement_notice_reaches_the_follower_test() {
   run("every settlement notice reaches the follower")
 }
 
+pub fn each_bundle_starts_exactly_one_follow_on_test() {
+  run("each bundle starts exactly one follow-on")
+}
+
 /// Every scenario has a test above.
 pub fn every_scenario_is_run_test() {
-  assert list.length(stress.names()) == 25
+  assert list.length(stress.names()) == 26
 }

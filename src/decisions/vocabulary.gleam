@@ -51,6 +51,14 @@ pub type Parent {
   ParentOccurrence(id: String)
 }
 
+/// The bundle an occurrence belongs to: the occurrences one recommendation
+/// proposed together, each judged, released and measured on its own.
+/// `key` names the bundle and `size` is how many occurrences it holds, so
+/// a reader can tell a bundle that is complete from one still arriving.
+pub type Bundle {
+  Bundle(key: String, size: Int)
+}
+
 /// What recommended. Agreement and accuracy are counted per value of this
 /// type, so a new version is a new value.
 pub type Recommender {

@@ -83,5 +83,5 @@ pub fn migrate_again_and_at_once_applies_each_step_once_test() {
       [],
       decode.list(decode.int),
     )
-  assert versions == [1]
+  assert versions == [1, 2]
 }

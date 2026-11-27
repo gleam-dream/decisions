@@ -18,7 +18,9 @@
 //// settles, and keeps every invariant of `decisions/testing`. Loading
 //// a subject lock (`decisions.subject_lock`) stores nothing and changes
 //// no `waiting` answer, and two admissions about one subject, one after
-//// the other, see each other. This
+//// the other, see each other. `members` returns the records of a bundle,
+//// of every point, in id order and with their heads as last written, and
+//// a desk admits a bundle whole and tells when it is complete. This
 //// package's own tests break an in-memory adapter in each of these clauses
 //// in turn and show that the check naming it fails.
 ////
@@ -67,8 +69,8 @@ import decisions/store.{
 }
 import decisions/testing
 import decisions/vocabulary.{
-  Approve, Manifest, OwnAct, Person, Recommendation, Ref, Subject, Trigger,
-  Validator,
+  Approve, Bundle, Manifest, OwnAct, Person, Reason, Recommendation, Ref, Reject,
+  Subject, Trigger, Validator,
 }
 import decisions/wire
 import gleam/int
@@ -142,6 +144,11 @@ pub fn checks() -> List(Check(tx)) {
       "a subject lock stores nothing and orders two admissions",
       subject_lock,
     ),
+    Check(
+      "members returns a bundle's records of every point, in id order",
+      bundle_members,
+    ),
+    Check("a desk admits a bundle and tells when it is complete", desk_bundle),
   ]
 }
 
@@ -486,6 +493,7 @@ fn head_round_trip(adapter: Adapter(tx)) -> Result(Nil, String) {
       approved: ["bia"],
       may_not_decide: ["felipe", "bia"],
       review_pending: False,
+      bundle: Some(Bundle(key: fresh_id(adapter, "bundle"), size: 3)),
     )
   let second =
     Head(
@@ -543,6 +551,7 @@ fn pending_due(adapter: Adapter(tx)) -> Result(Nil, String) {
       approved: [],
       may_not_decide: [],
       review_pending: False,
+      bundle: None,
     )
   use Nil <- result.try(
     append(adapter, adapter.handle, id, written, [stored(1, "expected")]),
@@ -995,6 +1004,113 @@ fn subject_lock(adapter: Adapter(tx)) -> Result(Nil, String) {
   invariants(adapter, desk)
 }
 
+/// The records of a bundle, of every point, in ascending id whatever the
+/// order they were written in, each with the head it was last given; never
+/// a record of another bundle or of none.
+fn bundle_members(adapter: Adapter(tx)) -> Result(Nil, String) {
+  let key = fresh_id(adapter, "bundle")
+  let other = fresh_id(adapter, "bundle")
+  let point = fresh_id(adapter, "point")
+  let in = fn(bundle, point) {
+    Head(..head(adapter, point), bundle: Some(Bundle(key: bundle, size: 3)))
+  }
+  let c = #(fresh_id(adapter, "m3"), in(key, point))
+  let a = #(fresh_id(adapter, "m1"), in(key, point <> ".other"))
+  let b = #(fresh_id(adapter, "m2"), in(key, point))
+  let elsewhere = [
+    #(fresh_id(adapter, "m-other"), in(other, point)),
+    #(fresh_id(adapter, "m-none"), head(adapter, point)),
+  ]
+  use Nil <- result.try(
+    list.try_each(list.append([c, a, b], elsewhere), fn(pair) {
+      append(adapter, adapter.handle, pair.0, pair.1, [stored(1, "recommended")])
+    }),
+  )
+  // A member's head replaced later comes back as replaced.
+  let settled = #(b.0, Head(..b.1, status: store.Released))
+  use Nil <- result.try(
+    append(adapter, adapter.handle, settled.0, settled.1, [
+      stored(2, "released"),
+    ]),
+  )
+  use found <- result.try(
+    adapter.port.members(adapter.handle, key)
+    |> result.map_error(store.describe),
+  )
+  let expected =
+    [c, a, settled]
+    |> list.sort(fn(x, y) { string.compare(x.0, y.0) })
+  use Nil <- result.try(expect(
+    found == expected,
+    "members returned " <> string.inspect(found),
+  ))
+  use none <- result.try(
+    adapter.port.members(adapter.handle, fresh_id(adapter, "bundle"))
+    |> result.map_error(store.describe),
+  )
+  expect(none == [], "an unknown bundle has members " <> string.inspect(none))
+}
+
+/// A desk admits two members in one transaction; the bundle is complete
+/// only once both have settled, and a second admission adds nothing.
+fn desk_bundle(adapter: Adapter(tx)) -> Result(Nil, String) {
+  let #(desk, name) = conformance_desk(adapter, ask(), None, None)
+  let bia = Validator("bia", ["finance"])
+  let key = fresh_id(adapter, "bundle")
+  let items = [
+    #(key <> "/1", proposal(name)),
+    #(key <> "/2", proposal(name)),
+  ]
+  let admit = fn() {
+    adapter.transaction(fn(tx) {
+      decisions.recommend_bundle(desk, tx, bundle: key, items:)
+      |> result.replace(Nil)
+      |> result.map_error(decisions.describe)
+    })
+  }
+  let complete = fn() {
+    decisions.members(desk, adapter.handle, bundle: key)
+    |> result.map(fn(members) {
+      #(list.length(members), decisions.is_complete(members))
+    })
+    |> result.map_error(decisions.describe)
+  }
+  let decide = fn(id, verdict) {
+    adapter.transaction(fn(tx) {
+      {
+        use card <- result.try(
+          decisions.open(desk, tx, occurrence: id, by: bia, latest: fn(ref) {
+            ref.revision
+          }),
+        )
+        decisions.decide(desk, tx, card, verdict)
+      }
+      |> result.replace(Nil)
+      |> result.map_error(decisions.describe)
+    })
+  }
+  use Nil <- result.try(admit())
+  use Nil <- result.try(admit())
+  use seen <- result.try(complete())
+  use Nil <- result.try(expect(
+    seen == #(2, False),
+    "after admission the bundle read " <> string.inspect(seen),
+  ))
+  use Nil <- result.try(decide(key <> "/1", Approve))
+  use seen <- result.try(complete())
+  use Nil <- result.try(expect(
+    seen == #(2, False),
+    "with one member settled the bundle read " <> string.inspect(seen),
+  ))
+  use Nil <- result.try(decide(key <> "/2", Reject(Reason("wrong", None))))
+  use seen <- result.try(complete())
+  use Nil <- result.try(expect(
+    seen == #(2, True),
+    "with both settled the bundle read " <> string.inspect(seen),
+  ))
+  invariants(adapter, desk)
+}
+
 fn invariants(
   adapter: Adapter(tx),
   desk: Desk(String, tx),
@@ -1099,6 +1215,7 @@ fn head(adapter: Adapter(tx), point: String) -> Head {
     approved: [],
     may_not_decide: [],
     review_pending: False,
+    bundle: None,
   )
 }
 

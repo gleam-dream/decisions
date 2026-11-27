@@ -518,6 +518,7 @@ pub fn the_transaction_helper_classifies_failures_test() {
       approved: [],
       may_not_decide: [],
       review_pending: False,
+      bundle: option.None,
     )
   let first = [
     store.Stored(

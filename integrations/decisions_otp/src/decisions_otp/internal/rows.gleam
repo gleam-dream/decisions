@@ -35,6 +35,9 @@ pub type Key {
   SettledKey(point: String, at: #(Int, Int, String))
   /// Released, sampled and not yet reviewed.
   ReviewKey(point: String, id: String)
+  /// One row per occurrence that belongs to a bundle, so `members` reads
+  /// a bundle in id order.
+  BundleKey(bundle: String, id: String)
 }
 
 /// Where a settlement notice stands.

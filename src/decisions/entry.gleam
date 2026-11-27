@@ -24,9 +24,9 @@ import decisions/model.{type Failure}
 import decisions/policy.{type Outcome, type Step}
 import decisions/store.{type Stored, Stored}
 import decisions/vocabulary.{
-  type Assessment, type Effect, type ExpiryCause, type Facts, type Manifest,
-  type Parent, type Recommendation, type Ref, type Subject, type Trigger,
-  type Verdict,
+  type Assessment, type Bundle, type Effect, type ExpiryCause, type Facts,
+  type Manifest, type Parent, type Recommendation, type Ref, type Subject,
+  type Trigger, type Verdict,
 }
 import decisions/wire.{type Codec}
 import gleam/dynamic/decode.{type Decoder}
@@ -81,6 +81,9 @@ pub type Event(output) {
     context: Manifest,
     recommendation: Recommendation(output),
     valid_until: Option(Timestamp),
+    /// The bundle the occurrence belongs to, when it was proposed with
+    /// others. A record written before bundles existed has none.
+    bundle: Option(Bundle),
   )
   /// A consulted decision point's final output, as facts.
   Informed(from: String, facts: Facts)
@@ -236,21 +239,30 @@ fn event_to_json(event: Event(o), output: Codec(o)) -> Result(Json, String) {
       context:,
       recommendation:,
       valid_until:,
+      bundle:,
     ) -> {
       use recommendation <- result.map(wire.recommendation(
         recommendation,
         output,
       ))
-      json.object([
-        #("point", json.string(point)),
-        #("trigger", wire.trigger(trigger)),
-        #("parent", wire.optional(parent, wire.parent)),
-        #("subject", wire.subject(subject)),
-        #("requester", wire.optional(requester, json.string)),
-        #("context", wire.manifest(context)),
-        #("recommendation", recommendation),
-        #("valid_until", wire.optional(valid_until, wire.time)),
-      ])
+      json.object(list.append(
+        [
+          #("point", json.string(point)),
+          #("trigger", wire.trigger(trigger)),
+          #("parent", wire.optional(parent, wire.parent)),
+          #("subject", wire.subject(subject)),
+          #("requester", wire.optional(requester, json.string)),
+          #("context", wire.manifest(context)),
+          #("recommendation", recommendation),
+          #("valid_until", wire.optional(valid_until, wire.time)),
+        ],
+        // Written only when present, so a record outside a bundle keeps
+        // the bytes it had before bundles existed.
+        case bundle {
+          Some(bundle) -> [#("bundle", wire.bundle(bundle))]
+          None -> []
+        },
+      ))
     }
     Informed(from:, facts:) ->
       Ok(
@@ -376,6 +388,11 @@ fn event_decoder(kind: String, output: Codec(o)) -> Decoder(Event(o)) {
         "valid_until",
         decode.optional(wire.time_decoder()),
       )
+      use bundle <- decode.optional_field(
+        "bundle",
+        None,
+        decode.optional(wire.bundle_decoder()),
+      )
       decode.success(Recommended(
         point:,
         trigger:,
@@ -385,6 +402,7 @@ fn event_decoder(kind: String, output: Codec(o)) -> Decoder(Event(o)) {
         context:,
         recommendation:,
         valid_until:,
+        bundle:,
       ))
     }
     "informed" -> {
