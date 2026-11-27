@@ -43,7 +43,10 @@ fn policy() {
 
 /// Consulting queues the review, as a job would carry it.
 fn outer() -> Desk(Refund, Memory) {
-  refund.desk_of(refund.point() |> decisions.signal(opinion()), policy())
+  refund.desk_of(
+    refund.point() |> decisions.answer(opinion(), from: "billing.refund_review"),
+    policy(),
+  )
   |> decisions.consulting(with: fn(tx, consultation) {
     Ok(world.push(tx, "reviews_to_run", consultation.occurrence))
   })

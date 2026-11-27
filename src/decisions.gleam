@@ -112,8 +112,7 @@ pub opaque type Point(output) {
     name: String,
     output: Codec(output),
     verdicts: Verdicts,
-    facts: List(#(String, Kind, fn(output) -> Fact)),
-    signals: List(#(String, Kind)),
+    facts: List(#(String, Source(output))),
     hold: Option(Duration),
     validity: Option(Duration),
     superseded_by: List(String),
@@ -131,7 +130,6 @@ pub fn point(name: String, output: Codec(output)) -> Point(output) {
     output:,
     verdicts: ApproveOrReject,
     facts: [],
-    signals: [],
     hold: None,
     validity: None,
     superseded_by: [],
@@ -145,21 +143,59 @@ pub fn allowing(point: Point(o), verdicts: Verdicts) -> Point(o) {
   Point(..point, verdicts:)
 }
 
-/// Declare a fact of the output, such as an amount, that a policy may read.
-/// `from` computes it from the recommended output.
-pub fn fact(point: Point(o), key: Key(a), from: fn(o) -> a) -> Point(o) {
-  Point(..point, facts: [
-    #(fact.name(key), fact.kind(key), fn(output) {
-      fact.wrap(key, from(output))
-    }),
-    ..point.facts
-  ])
+/// Where a declared fact comes from. Each name a point declares has one
+/// source.
+type Source(output) {
+  /// Computed from the recommended output.
+  FromOutput(kind: Kind, compute: fn(output) -> Fact)
+  /// Carried by the recommendation, beside its output.
+  FromSignal(kind: Kind)
+  /// Returned by the consulted point named `point`, through `inform`.
+  FromAnswer(kind: Kind, point: String)
 }
 
-/// Declare a fact that arrives beside the output, such as a model's score
-/// in its signals or a consulted point's answer, that a policy may read.
+/// Declare a fact of the output, such as an amount, that a policy may read.
+/// `from` computes it from the recommended output. Declaring a name again,
+/// with this or with `signal` or `answer`, replaces its earlier
+/// declaration, so each fact has one source.
+pub fn fact(point: Point(o), key: Key(a), from: fn(o) -> a) -> Point(o) {
+  declare(
+    point,
+    key,
+    FromOutput(kind: fact.kind(key), compute: fn(output) {
+      fact.wrap(key, from(output))
+    }),
+  )
+}
+
+/// Declare a fact the recommendation carries beside its output in its
+/// signals, such as a model's score, that a policy may read. `recommend`
+/// refuses a recommendation whose signals hold a fact not declared with
+/// `signal`, or of another type, with `InvalidFacts`. Declaring a name
+/// again replaces its earlier declaration.
 pub fn signal(point: Point(o), key: Key(a)) -> Point(o) {
-  Point(..point, signals: [#(fact.name(key), fact.kind(key)), ..point.signals])
+  declare(point, key, FromSignal(kind: fact.kind(key)))
+}
+
+/// Declare a fact that the consulted point named `from` returns through
+/// `inform`, such as a compliance check's verdict, that a policy may read.
+/// `inform` accepts it only from that point, and no recommendation can
+/// carry it as a signal. Declaring a name again replaces its earlier
+/// declaration.
+pub fn answer(
+  point: Point(o),
+  key: Key(a),
+  from consulted: String,
+) -> Point(o) {
+  declare(point, key, FromAnswer(kind: fact.kind(key), point: consulted))
+}
+
+fn declare(point: Point(o), key: Key(a), source: Source(o)) -> Point(o) {
+  let name = fact.name(key)
+  Point(..point, facts: [
+    #(name, source),
+    ..list.filter(point.facts, fn(declared) { declared.0 != name })
+  ])
 }
 
 /// A wait between every acceptance and its release, during which the
@@ -220,17 +256,81 @@ pub fn verdicts(point: Point(o)) -> Verdicts {
 
 /// Every fact a policy for this point may read, with its type.
 pub fn declared(point: Point(o)) -> List(#(String, Kind)) {
-  list.append(
-    list.map(point.facts, fn(declared) { #(declared.0, declared.1) }),
-    point.signals,
-  )
-  |> list.reverse
+  list.reverse(point.facts)
+  |> list.map(fn(declared) { #(declared.0, kind_of_source(declared.1)) })
 }
 
-/// The facts the point computes from an output.
-pub fn facts_of(point: Point(o), output: o) -> Facts {
-  list.reverse(point.facts)
-  |> list.map(fn(declared) { #(declared.0, declared.2(output)) })
+fn kind_of_source(source: Source(o)) -> Kind {
+  case source {
+    FromOutput(kind:, ..) | FromSignal(kind:) | FromAnswer(kind:, ..) -> kind
+  }
+}
+
+/// The facts a policy reads about a recommendation: the facts the point
+/// computes from its output, the declared signals it carries, and the
+/// declared answers consulted points returned (`informed`). Each fact is
+/// taken only from the source its point declares, so a signal never
+/// stands for an output fact or a consulted point's answer.
+pub fn policy_facts(
+  point: Point(o),
+  recommendation: Recommendation(o),
+  informed informed: Facts,
+) -> Facts {
+  let from = fn(facts: Facts, keep: fn(Source(o)) -> Bool) {
+    list.filter(facts, fn(named) {
+      case list.key_find(point.facts, named.0) {
+        Ok(source) -> keep(source)
+        Error(Nil) -> False
+      }
+    })
+  }
+  list.flatten([
+    list.filter_map(list.reverse(point.facts), fn(declared) {
+      case declared.1 {
+        FromOutput(compute:, ..) ->
+          Ok(#(declared.0, compute(recommendation.output)))
+        FromSignal(..) | FromAnswer(..) -> Error(Nil)
+      }
+    }),
+    from(recommendation.signals, fn(source) {
+      case source {
+        FromSignal(..) -> True
+        FromOutput(..) | FromAnswer(..) -> False
+      }
+    }),
+    from(informed, fn(source) {
+      case source {
+        FromAnswer(..) -> True
+        FromOutput(..) | FromSignal(..) -> False
+      }
+    }),
+  ])
+}
+
+/// The faults of facts that arrive from one source: each must be declared
+/// with that source and its declared type.
+fn fact_faults(
+  point: Point(o),
+  facts: Facts,
+  from source: fn(Source(o)) -> Bool,
+) -> List(Fault) {
+  list.filter_map(facts, fn(named) {
+    let #(name, value) = named
+    case list.key_find(point.facts, name) {
+      Ok(declared) ->
+        case source(declared), kind_of_source(declared) == fact.kind_of(value) {
+          False, _ -> Ok(policy.UndeclaredFact(name))
+          True, True -> Error(Nil)
+          True, False ->
+            Ok(policy.WrongKind(
+              fact: name,
+              declared: kind_of_source(declared),
+              used: fact.kind_of(value),
+            ))
+        }
+      Error(Nil) -> Ok(policy.UndeclaredFact(name))
+    }
+  })
 }
 
 /// Whether a policy may be published for this point: it reads only facts
@@ -563,8 +663,10 @@ pub type Refusal {
   NotSettled
   /// The occurrence is not waiting for an answer from this point.
   NotConsulting
-  /// A consulted point's answer holds facts the point does not declare,
-  /// or of the wrong type.
+  /// A recommendation's signals, or a consulted point's answer, hold facts
+  /// the point does not declare from that source, or of the wrong type: a
+  /// signal must be declared with `signal`, an answer with `answer` from
+  /// the point that gives it.
   InvalidFacts(faults: List(Fault))
   /// The guard or the gated tool refused in the verdict's own
   /// transaction. Roll the transaction back, then pass `rollback` to
@@ -784,7 +886,7 @@ pub fn describe(refusal: Refusal) -> String {
     NotSettled -> "the occurrence has not settled yet"
     NotConsulting -> "the occurrence is not waiting for an answer from there"
     InvalidFacts(faults:) ->
-      "the answer's facts are not declared: "
+      "the facts are not declared from their source: "
       <> string.join(list.map(faults, policy.describe), "; ")
     ToolRefused(reason:, ..) -> reason
     ToolUnsure(reason:) -> "the tool could not tell: " <> reason
@@ -1338,6 +1440,14 @@ fn begin(
   pending: Option(occurrence.Pending),
   now: Timestamp,
 ) -> Result(Occurrence(o), Refusal) {
+  let faults =
+    fact_faults(desk.point, proposal.recommendation.signals, from: fn(source) {
+      case source {
+        FromSignal(..) -> True
+        FromOutput(..) | FromAnswer(..) -> False
+      }
+    })
+  use Nil <- result.try(check(faults == [], InvalidFacts(faults)))
   use Nil <- result.try(admits_member(desk, tx, id, proposal.bundle))
   use Nil <- result.try(case proposal.bundle, pending {
     Some(bundle), Some(occurrence.Pending(ended: Some(_), ..)) ->
@@ -2124,22 +2234,11 @@ pub fn inform(
   use Nil <- result.try(live(draft))
   case draft.occurrence.status {
     occurrence.Recommended(consulting: Some(point)) if point == from -> {
-      let declared = declared(desk.point)
       let faults =
-        list.filter_map(facts, fn(named) {
-          let #(name, value) = named
-          case list.key_find(declared, name) {
-            Error(Nil) -> Ok(policy.UndeclaredFact(name))
-            Ok(kind) ->
-              case kind == fact.kind_of(value) {
-                True -> Error(Nil)
-                False ->
-                  Ok(policy.WrongKind(
-                    fact: name,
-                    declared: kind,
-                    used: fact.kind_of(value),
-                  ))
-              }
+        fact_faults(desk.point, facts, from: fn(source) {
+          case source {
+            FromAnswer(point:, ..) -> point == from
+            FromOutput(..) | FromSignal(..) -> False
           }
         })
       use Nil <- result.try(check(faults == [], InvalidFacts(faults)))
@@ -2286,7 +2385,7 @@ fn wake_occurrence(
                   }
                 outcome -> outcome
               }
-              answer(desk, tx, draft, version, outcome, rest) |> moved
+              act_on(desk, tx, draft, version, outcome, rest) |> moved
             }
             _, _ -> next()
           }
@@ -2606,11 +2705,7 @@ fn settle(
     publishable(desk.point, published) |> result.map_error(Unpublishable),
   )
   let facts =
-    list.flatten([
-      facts_of(desk.point, current.recommendation.output),
-      current.recommendation.signals,
-      current.informed,
-    ])
+    policy_facts(desk.point, current.recommendation, informed: current.informed)
   let #(outcome, later) =
     policy.timeline(
       published,
@@ -2627,7 +2722,7 @@ fn settle(
       }
     _ -> #(outcome, later)
   }
-  answer(desk, tx, draft, policy.version(published), outcome, later)
+  act_on(desk, tx, draft, policy.version(published), outcome, later)
 }
 
 /// Act on one answer of the policy, the first or a later one: record it
@@ -2635,7 +2730,7 @@ fn settle(
 /// wait when it asks, and ask the consulted point when it consults. A
 /// consulting answer drops the later steps: when the consulted point
 /// answers, the policy is read again.
-fn answer(
+fn act_on(
   desk: Desk(o, tx),
   tx: tx,
   draft: Draft(o),

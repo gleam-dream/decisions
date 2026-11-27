@@ -65,15 +65,24 @@ pub fn a_missing_signal_asks_a_person_test() {
   assert made.status == occurrence.Awaiting(eligible: AnyoneHolding("risk"))
 }
 
-pub fn a_mistyped_signal_asks_a_person_test() {
+/// A signal of another type than the point declares never reaches the
+/// policy: the recommendation is refused.
+pub fn a_mistyped_signal_is_refused_test() {
   let db = memory.new()
-  let assert Ok(made) =
-    memory.transaction(db, decisions.recommend(
+  assert memory.transaction(db, decisions.recommend(
       risky_desk(),
       _,
       proposal([#("risk", Text("0.9"))]),
     ))
-  assert made.status == occurrence.Awaiting(eligible: AnyoneHolding("risk"))
+    == Error(
+      decisions.InvalidFacts([
+        policy.WrongKind(
+          fact: "risk",
+          declared: fact.NumberFact,
+          used: fact.TextFact,
+        ),
+      ]),
+    )
 }
 
 pub fn a_known_low_risk_proceeds_test() {

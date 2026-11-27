@@ -351,11 +351,11 @@ pub fn answer_under(
 ) -> Outcome {
   let known = example.known
   let facts =
-    list.flatten([
-      decisions.facts_of(point, known.recommendation.output),
-      known.recommendation.signals,
-      known.informed,
-    ])
+    decisions.policy_facts(
+      point,
+      known.recommendation,
+      informed: known.informed,
+    )
   policy.timeline(candidate, known.recommendation.by, facts, waited: 0).0
 }
 
@@ -378,11 +378,7 @@ pub fn candidate_under(
     sources(example),
   ))
   let facts =
-    list.flatten([
-      decisions.facts_of(point, recommendation.output),
-      recommendation.signals,
-      known.informed,
-    ])
+    decisions.policy_facts(point, recommendation, informed: known.informed)
   #(
     recommendation,
     policy.timeline(policy_version, recommendation.by, facts, waited: 0).0,

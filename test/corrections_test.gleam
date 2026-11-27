@@ -311,7 +311,7 @@ pub fn c6_only_a_recorded_showing_decides_and_only_the_consulted_point_answers_t
       policy.AnyoneHolding("nobody"),
     )
   let desk =
-    desk_with(base_point() |> decisions.signal(risk), p)
+    desk_with(base_point() |> decisions.answer(risk, from: "risk"), p)
     |> decisions.consulting(fn(_, _) { Ok(Nil) })
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(desk, _, proposal("100")))
@@ -554,7 +554,7 @@ pub fn c13_inform_applies_and_records_the_current_version_test() {
       policy.AnyoneHolding("nobody"),
     )
   }
-  let point = base_point() |> decisions.signal(risk)
+  let point = base_point() |> decisions.answer(risk, from: "risk")
   let first =
     desk_with(point, version(1)) |> decisions.consulting(fn(_, _) { Ok(Nil) })
   let second = desk_with(point, version(2))
