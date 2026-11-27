@@ -3,6 +3,10 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
+> **Breaking:** decisions_otp 0.2.0 requires Sinal 0.2, which detaches a
+> handler when the process that attached it exits. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md).
+
 The BEAM around [`decisions`](https://github.com/gleam-dream/decisions/blob/main/README.md): everything that needs
 processes, and nothing that keeps the truth. The record stays in the store.
 Every process this package starts acts on rows and keeps none, so each can be

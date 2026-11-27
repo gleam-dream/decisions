@@ -35,7 +35,7 @@
 //// holds only what it was built from, and derives its encoder, decoder and
 //// schema on each call. For how to write a json_blueprint codec that stays
 //// small when copied, see json_blueprint's
-//// [codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
+//// [codec practice](https://github.com/gleam-dream/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 

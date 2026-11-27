@@ -7,6 +7,11 @@ description = "Decision points for Gleam: a model recommends, a policy proceeds 
 repository = { type = "github", user = "gleam-dream", repo = "decisions" }
 internal_modules = ["decisions/internal", "decisions/internal/*"]
 
+[[documentation.pages]]
+title = "Migrating to 0.2"
+path = "migration.html"
+source = "./docs/MIGRATION.md"
+
 [dependencies]
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
