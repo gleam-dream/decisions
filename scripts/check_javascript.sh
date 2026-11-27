@@ -78,7 +78,8 @@ pub fn main() -> Nil {
         })
       },
       under: fn(_) {
-        Ok(policy.Policy(version: 1, rules: [], otherwise: policy.Ask(policy.AnyoneHolding("ops"))))
+        policy.new(version: 1, rules: [], otherwise: policy.AnyoneHolding("ops"))
+        |> result.replace_error("the policy is malformed")
       },
       over: memory.port(),
     )

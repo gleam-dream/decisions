@@ -4,9 +4,7 @@
 import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{
-  AnyoneHolding, Ask, Never, OwnAct, Policy, Proceed, When,
-}
+import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/vocabulary.{
   type Manifest, Agent, ApproveRejectOrCorrect, ParentRun, Recommendation,
   RunAnswer, Trigger,
@@ -18,6 +16,7 @@ import gleam/order
 import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world.{type World}
 
 pub const draft_text = "O DAS vence dia 20."
@@ -59,10 +58,10 @@ pub fn desk() -> Desk(String, Memory) {
     point(),
     drives: fn(_) { send_message() },
     under: fn(_) {
-      Ok(Policy(
+      Ok(policies.checked(
         version: 1,
         rules: [When(OwnAct, Proceed(Never, None))],
-        otherwise: Ask(AnyoneHolding("operators")),
+        otherwise: AnyoneHolding("operators"),
       ))
     },
     over: memory.port(),

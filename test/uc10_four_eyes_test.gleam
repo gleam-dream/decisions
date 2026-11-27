@@ -4,18 +4,19 @@
 import decisions
 import decisions/memory
 import decisions/occurrence
-import decisions/policy.{Ask, Policy, Several, SomeoneElseHolding, When}
+import decisions/policy.{Ask, Several, SomeoneElseHolding, When}
 import decisions/testing
 import decisions/vocabulary.{Approve, Correct, Reason, Reject}
 import gleam/list
 import gleam/option.{None}
 import support/payout.{Payout}
+import support/policies
 import support/world
 
 /// At or above 10 000.00, two different holders of `finance` who did not
 /// ask; below, one. The whole rule is data.
 fn policy() {
-  Policy(
+  policies.checked(
     version: 1,
     rules: [
       When(
@@ -23,7 +24,7 @@ fn policy() {
         Ask(Several(2, SomeoneElseHolding("finance"))),
       ),
     ],
-    otherwise: Ask(SomeoneElseHolding("finance")),
+    otherwise: SomeoneElseHolding("finance"),
   )
 }
 

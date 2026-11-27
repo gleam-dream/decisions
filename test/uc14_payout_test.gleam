@@ -9,7 +9,7 @@ import decisions.{type Desk, type Gated, Gated}
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   type Ref, Approve, NotPerformed, Performed, Ref, Uncertain,
 }
@@ -23,6 +23,7 @@ import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
 import support/payout.{type Payout, Payout}
+import support/policies
 import support/world.{type World}
 
 /// The provider keeps one payout per key, whatever it is sent.
@@ -139,7 +140,11 @@ fn desk() -> Desk(Payout, Memory) {
     payout.point(),
     drives: fn(_) { pay_at_provider() },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+      Ok(policies.checked(
+        version: 1,
+        rules: [],
+        otherwise: AnyoneHolding("finance"),
+      ))
     },
     over: memory.port(),
   )

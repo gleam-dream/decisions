@@ -6,7 +6,7 @@
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Agent, Approve, Manifest, Recommendation, Ref, RunAnswer, Trigger,
 }
@@ -15,7 +15,11 @@ import gleam/result
 
 /// Version 1 of the policy: always ask a holder of `finance`.
 pub fn always_ask() -> policy.Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  clinic.well_formed(policy.new(
+    version: 1,
+    rules: [],
+    otherwise: AnyoneHolding("finance"),
+  ))
 }
 
 /// The desk binds the point to its gated tool, its policy and a store. It

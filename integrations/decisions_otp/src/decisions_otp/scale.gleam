@@ -19,7 +19,7 @@ import decisions/learning.{Archive}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, PerCent, Policy, Proceed, When,
+  type Policy, AnyoneHolding, Never, PerCent, Proceed, When,
 }
 import decisions/store
 import decisions/vocabulary.{
@@ -84,20 +84,24 @@ fn desk(
 }
 
 fn proceeding() -> Policy {
-  Policy(version: 1, rules: [], otherwise: Proceed(Never, hold: None))
+  well_formed(
+    version: 1,
+    rules: [policy.When(policy.Always, Proceed(Never, hold: None))],
+    otherwise: policy.AnyoneHolding("nobody"),
+  )
 }
 
 fn asking(set: String) -> Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding(set)))
+  well_formed(version: 1, rules: [], otherwise: AnyoneHolding(set))
 }
 
 fn scoring(share: Int) -> Policy {
-  Policy(
+  well_formed(
     version: 2,
     rules: [
       When(policy.at_least(score(), 0.9), Proceed(PerCent(share), hold: None)),
     ],
-    otherwise: Ask(AnyoneHolding("support")),
+    otherwise: AnyoneHolding("support"),
   )
 }
 
@@ -661,4 +665,14 @@ fn read_all(
     )
     |> result.map_error(decisions.describe)
   })
+}
+
+/// A policy this module writes as a literal, which is well formed.
+fn well_formed(
+  version version: Int,
+  rules rules: List(policy.Rule),
+  otherwise otherwise: policy.Eligible,
+) -> Policy {
+  let assert Ok(made) = policy.new(version:, rules:, otherwise:)
+  made
 }

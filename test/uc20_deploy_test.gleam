@@ -5,7 +5,7 @@ import decisions.{type Desk, type Point, Gated}
 import decisions/fact.{type Key}
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed, When}
+import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
   Approve, Manifest, Recommendation, Ref, RuleFired, Rules, Subject, Superseded,
   Trigger, Validator,
@@ -15,6 +15,7 @@ import gleam/int
 import gleam/option.{None}
 import gleam/time/duration
 import json/blueprint/codec
+import support/policies
 import support/world.{type World}
 
 type Promotion {
@@ -55,10 +56,10 @@ fn point() -> Point(Promotion) {
 /// One policy serves both environments, because the environment is a fact
 /// of the output.
 fn policy() {
-  Policy(
+  policies.checked(
     version: 1,
     rules: [When(policy.is(environment(), "staging"), Proceed(Never, None))],
-    otherwise: Ask(AnyoneHolding("release-managers")),
+    otherwise: AnyoneHolding("release-managers"),
   )
 }
 

@@ -62,7 +62,7 @@ import decisions.{type Desk, Gated}
 import decisions/internal/rescue
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{AnyoneHolding, Ask, Never, Proceed}
 import decisions/store.{
   type Head, type Inspection, type Port, type Stored, Conflict, Head, Notice,
   Stored,
@@ -842,7 +842,7 @@ fn early_wake(adapter: Adapter(tx)) -> Result(Nil, String) {
 fn desk_wakes(adapter: Adapter(tx)) -> Result(Nil, String) {
   let name = fresh_id(adapter, "conformance.point")
   let escalating =
-    Policy(
+    well_formed(
       version: 1,
       rules: [
         policy.When(
@@ -852,7 +852,7 @@ fn desk_wakes(adapter: Adapter(tx)) -> Result(Nil, String) {
           ),
         ),
       ],
-      otherwise: Ask(AnyoneHolding("finance")),
+      otherwise: AnyoneHolding("finance"),
     )
   let desk =
     decisions.desk(
@@ -1154,15 +1154,25 @@ fn conformance_desk(
 }
 
 fn ask() -> policy.Policy {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  well_formed(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
 fn proceed() -> policy.Policy {
-  Policy(
+  well_formed(
     version: 1,
-    rules: [policy.When(policy.OwnAct, Proceed(Never, None))],
-    otherwise: Proceed(Never, None),
+    rules: [policy.When(policy.Always, Proceed(Never, None))],
+    otherwise: AnyoneHolding("finance"),
   )
+}
+
+/// A policy this module writes as a literal, which is well formed.
+fn well_formed(
+  version version: Int,
+  rules rules: List(policy.Rule),
+  otherwise otherwise: policy.Eligible,
+) -> policy.Policy {
+  let assert Ok(made) = policy.new(version:, rules:, otherwise:)
+  made
 }
 
 fn proposal(name: String) -> decisions.Proposal(String) {

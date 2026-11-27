@@ -10,7 +10,7 @@ import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{
-  AnyoneHolding, Ask, Consult, Never, PerCent, Policy, Proceed, Several,
+  AnyoneHolding, Ask, Consult, Never, PerCent, Proceed, Several,
   SomeoneElseHolding, When,
 }
 import decisions/store
@@ -29,6 +29,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world
 
 const ana = Validator("ana", ["finance"])
@@ -98,7 +99,7 @@ fn at(db: Memory, minutes: Int) -> Nil {
 fn four_eyes() {
   desk_with(
     base_point(),
-    Policy(1, [], Ask(Several(2, AnyoneHolding("finance")))),
+    policies.checked(1, [], Several(2, AnyoneHolding("finance"))),
   )
 }
 
@@ -161,13 +162,13 @@ pub fn c2_a_consulting_step_asks_and_wake_never_loops_test() {
     Ok(Nil)
   }
   let p =
-    Policy(
+    policies.checked(
       1,
       [
         When(policy.waited(60), Proceed(Never, None)),
         When(policy.waited(30), Consult("risk")),
       ],
-      Ask(AnyoneHolding("finance")),
+      AnyoneHolding("finance"),
     )
   let desk = desk_with(base_point(), p) |> decisions.consulting(asked)
   let assert Ok(w) =
@@ -195,7 +196,7 @@ pub fn c3_withdraw_after_the_hold_ended_is_refused_test() {
   let desk =
     desk_with(
       base_point() |> decisions.with_hold(duration.minutes(5)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(desk, _, proposal("100")))
@@ -217,7 +218,7 @@ pub fn c4_nothing_is_shown_or_written_after_the_deadline_test() {
   let desk =
     desk_with(
       base_point() |> decisions.valid_for(duration.hours(1)),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(desk, _, proposal("100")))
@@ -258,7 +259,7 @@ pub fn c5_a_refusal_is_recorded_only_from_its_token_test() {
           Error(decisions.Refuse("the ledger is closed"))
         })
       },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
     )
   let assert Ok(w) =
@@ -272,7 +273,11 @@ pub fn c5_a_refusal_is_recorded_only_from_its_token_test() {
   let other =
     desk_with(
       decisions.point("probe.other", wire.text()),
-      Policy(1, [], Proceed(Never, None)),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
     )
   assert memory.transaction(db, decisions.record_refusal(other, _, rollback))
     |> result.replace(Nil)
@@ -297,10 +302,13 @@ pub fn c6_only_a_recorded_showing_decides_and_only_the_consulted_point_answers_t
   let db = fresh()
   let risk = fact.text("risk")
   let p =
-    Policy(
+    policies.checked(
       1,
-      [When(policy.known(risk), Ask(AnyoneHolding("finance")))],
-      Consult("risk"),
+      [
+        When(policy.known(risk), Ask(AnyoneHolding("finance"))),
+        policy.When(policy.Always, Consult("risk")),
+      ],
+      policy.AnyoneHolding("nobody"),
     )
   let desk =
     desk_with(base_point() |> decisions.signal(risk), p)
@@ -346,7 +354,10 @@ pub fn c6_only_a_recorded_showing_decides_and_only_the_consulted_point_answers_t
 pub fn c7_four_eyes_cannot_be_bypassed_with_asked_by_test() {
   let db = fresh()
   let desk =
-    desk_with(base_point(), Policy(1, [], Ask(SomeoneElseHolding("finance"))))
+    desk_with(
+      base_point(),
+      policies.checked(1, [], SomeoneElseHolding("finance")),
+    )
   let own =
     decisions.proposal(
       trigger: Trigger("t", "own"),
@@ -392,7 +403,7 @@ pub fn c8_the_clock_is_read_after_the_lock_test() {
     decisions.desk(
       base_point(),
       drives: fn(_) { tool() },
-      under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+      under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: logged,
     )
   let assert Ok(w) =
@@ -427,10 +438,10 @@ pub fn c8_the_clock_is_read_after_the_lock_test() {
 pub fn c10_the_checker_sees_missing_wake_ups_and_a_wrong_head_test() {
   let db = fresh()
   let p =
-    Policy(
+    policies.checked(
       1,
       [When(policy.waited(60), Proceed(Never, None))],
-      Ask(AnyoneHolding("finance")),
+      AnyoneHolding("finance"),
     )
   let desk = desk_with(base_point(), p)
   let assert Ok(_) =
@@ -489,7 +500,15 @@ pub fn c11_each_occurrence_is_judged_once_test() {
 pub fn c12_reviews_have_an_eligibility_test() {
   let db = fresh()
   let point = base_point() |> decisions.reviewed_by("audit")
-  let desk = desk_with(point, Policy(1, [], Proceed(PerCent(100), None)))
+  let desk =
+    desk_with(
+      point,
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(PerCent(100), None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(w) =
     memory.transaction(db, decisions.recommend(
       desk,
@@ -526,10 +545,13 @@ pub fn c13_inform_applies_and_records_the_current_version_test() {
   let db = fresh()
   let risk = fact.text("risk")
   let version = fn(n) {
-    Policy(
+    policies.checked(
       n,
-      [When(policy.known(risk), Ask(AnyoneHolding("finance")))],
-      Consult("risk"),
+      [
+        When(policy.known(risk), Ask(AnyoneHolding("finance"))),
+        policy.When(policy.Always, Consult("risk")),
+      ],
+      policy.AnyoneHolding("nobody"),
     )
   }
   let point = base_point() |> decisions.signal(risk)
@@ -560,17 +582,25 @@ pub fn c13_inform_applies_and_records_the_current_version_test() {
 pub fn c14_interface_corrections_test() {
   let db = fresh()
   let failing =
-    desk_with(base_point(), Policy(1, [], Consult("risk")))
+    desk_with(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Consult("risk"))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
     |> decisions.consulting(fn(_, _) { Error("the queue is down") })
   assert memory.transaction(db, decisions.recommend(failing, _, proposal("1")))
     |> result.replace(Nil)
     == Error(decisions.ConsultFailed(point: "risk", reason: "the queue is down"))
 
-  let a = desk_with(base_point(), Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let a =
+    desk_with(base_point(), policies.checked(1, [], AnyoneHolding("finance")))
   let b =
     desk_with(
       decisions.point("probe.other", wire.text()),
-      Policy(1, [], Ask(AnyoneHolding("finance"))),
+      policies.checked(1, [], AnyoneHolding("finance")),
     )
   let assert Ok(_) =
     memory.transaction(db, decisions.recommend_once(
@@ -591,7 +621,15 @@ pub fn c14_interface_corrections_test() {
     |> result.replace(Nil)
     == Error(decisions.UnknownOccurrence)
 
-  let released = desk_with(base_point(), Policy(1, [], Proceed(Never, None)))
+  let released =
+    desk_with(
+      base_point(),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
+    )
   let assert Ok(done) =
     memory.transaction(db, decisions.recommend(released, _, proposal("1")))
   let assert Ok(last) = list.last(done.entries)
@@ -647,21 +685,36 @@ pub fn c14_interface_corrections_test() {
 /// C15. `PerCent(0)` survives storage; superseding after the deadline says
 /// the deadline ended it; a held occurrence is not superseded.
 pub fn c15_documented_behaviour_holds_test() {
-  let p = Policy(1, [], Proceed(PerCent(0), None))
+  let p =
+    policies.checked(
+      1,
+      [policy.When(policy.Always, Proceed(PerCent(0), None))],
+      policy.AnyoneHolding("nobody"),
+    )
   assert json.parse(json.to_string(policy.to_json(p)), policy.decoder())
     == Ok(p)
   assert json.parse(
-      json.to_string(policy.to_json(Policy(1, [], Proceed(Never, None)))),
+      json.to_string(
+        policy.to_json(policies.checked(
+          1,
+          [policy.When(policy.Always, Proceed(Never, None))],
+          policy.AnyoneHolding("nobody"),
+        )),
+      ),
       policy.decoder(),
     )
-    == Ok(Policy(1, [], Proceed(Never, None)))
+    == Ok(policies.checked(
+      1,
+      [policy.When(policy.Always, Proceed(Never, None))],
+      policy.AnyoneHolding("nobody"),
+    ))
 
   let db = fresh()
   let point =
     base_point()
     |> decisions.valid_for(duration.hours(1))
     |> decisions.superseded_by("new")
-  let desk = desk_with(point, Policy(1, [], Ask(AnyoneHolding("finance"))))
+  let desk = desk_with(point, policies.checked(1, [], AnyoneHolding("finance")))
   let assert Ok(_) =
     memory.transaction(db, decisions.recommend(desk, _, proposal("100")))
   at(db, 600)
@@ -680,7 +733,11 @@ pub fn c15_documented_behaviour_holds_test() {
       base_point()
         |> decisions.with_hold(duration.minutes(5))
         |> decisions.superseded_by("new"),
-      Policy(1, [], Proceed(Never, None)),
+      policies.checked(
+        1,
+        [policy.When(policy.Always, Proceed(Never, None))],
+        policy.AnyoneHolding("nobody"),
+      ),
     )
   let assert Ok(held) =
     memory.transaction(db, decisions.recommend(holding, _, proposal("100")))

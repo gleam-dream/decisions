@@ -3,7 +3,7 @@
 
 import decisions.{Gated}
 import decisions/memory.{type Memory}
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/store
 import decisions/vocabulary.{
   Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
@@ -12,6 +12,7 @@ import decisions/wire
 import gleam/list
 import gleam/result
 import gleam/string
+import support/policies
 import support/world
 
 const subject = Subject("contact", "c-1")
@@ -53,7 +54,7 @@ fn desk() {
         Ok(Nil)
       })
     },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("support"))) },
     over: watched(),
   )
 }

@@ -8,7 +8,7 @@ import decisions/learning
 import decisions/memory
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/store
 import decisions/testing
 import decisions/vocabulary.{
@@ -20,6 +20,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
+import support/policies
 import support/world.{type World}
 
 const ana = Subject("party", "ana")
@@ -41,7 +42,7 @@ fn desk_for(point) {
         Ok(Nil)
       })
     },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("support"))) },
     over: memory.port(),
   )
 }
@@ -493,10 +494,15 @@ fn proceeding_desk(point) {
       })
     },
     under: fn(_) {
-      Ok(Policy(
+      Ok(policies.checked(
         1,
-        [],
-        policy.Proceed(policy.Never, hold: Some(duration.hours(1))),
+        [
+          policy.When(
+            policy.Always,
+            policy.Proceed(policy.Never, hold: Some(duration.hours(1))),
+          ),
+        ],
+        policy.AnyoneHolding("nobody"),
       ))
     },
     over: memory.port(),
@@ -514,7 +520,11 @@ pub fn a_point_validity_of_zero_still_runs_the_policy_as_before_test() {
         })
       },
       under: fn(_) {
-        Ok(Policy(1, [], policy.Proceed(policy.Never, hold: None)))
+        Ok(policies.checked(
+          1,
+          [policy.When(policy.Always, policy.Proceed(policy.Never, hold: None))],
+          policy.AnyoneHolding("nobody"),
+        ))
       },
       over: memory.port(),
     )

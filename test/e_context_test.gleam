@@ -8,7 +8,7 @@ import decisions/model.{
   type Failure, type Model, type Reader, type Sources, NotRecorded,
 }
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/view.{Item}
 import decisions/vocabulary.{
   type Manifest, type Ref, ApproveRejectOrCorrect, Correct, Manifest, ModelCall,
@@ -23,6 +23,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world.{type World}
 
 /// What the accountant needs to pick a service code.
@@ -76,7 +77,11 @@ fn desk() -> Desk(String, Memory) {
       })
     },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+      Ok(policies.checked(
+        version: 1,
+        rules: [],
+        otherwise: AnyoneHolding("finance"),
+      ))
     },
     over: memory.port(),
   )

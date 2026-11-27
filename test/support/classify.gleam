@@ -5,9 +5,7 @@ import decisions/fact.{type Key}
 import decisions/memory.{type Memory}
 import decisions/model.{type Model, type Sources, type Stage, Sources}
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, PerCent, Policy, Proceed, When,
-}
+import decisions/policy.{type Policy, AnyoneHolding, PerCent, Proceed, When}
 import decisions/vocabulary.{
   type Manifest, type Recommendation, type Ref, ApproveRejectOrCorrect,
   Classifier, Manifest, ModelCall, Receipt, Recommendation, Ref, RuleFired,
@@ -18,6 +16,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import support/policies
 import support/world.{type World}
 
 pub fn score() -> Key(Float) {
@@ -47,15 +46,15 @@ pub fn store_class() -> Gated(String, Memory) {
 
 /// Proceed at a score of 0.9 or above and sample 5 %; below, ask.
 pub fn production() -> Policy {
-  Policy(
+  policies.checked(
     version: 1,
     rules: [When(policy.at_least(score(), 0.9), Proceed(PerCent(5), None))],
-    otherwise: Ask(AnyoneHolding("finance")),
+    otherwise: AnyoneHolding("finance"),
   )
 }
 
 pub fn always_ask() -> Policy {
-  Policy(version: 0, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  policies.checked(version: 0, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
 pub fn desk(policy: Policy) -> Desk(String, Memory) {

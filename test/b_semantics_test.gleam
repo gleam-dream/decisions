@@ -5,13 +5,14 @@
 import decisions
 import decisions/memory
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{Approve}
 import support/payout.{Payout}
+import support/policies
 import support/world
 
 fn policy() {
-  Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance")))
+  policies.checked(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
 pub fn a_trigger_delivered_three_times_is_one_occurrence_test() {

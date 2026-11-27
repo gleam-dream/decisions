@@ -6,9 +6,7 @@ import decisions/learning.{Archive}
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence.{type Occurrence}
-import decisions/policy.{
-  AnyoneHolding, Ask, Never, OwnAct, Policy, Proceed, When,
-}
+import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/vocabulary.{
   type Manifest, type Ref, Approve, ApproveRejectOrCorrect, Assessment, Correct,
   Manifest, Person, Reason, Recommendation, Ref, Reject, Right, RuleFired, Rules,
@@ -20,6 +18,7 @@ import gleam/option.{None}
 import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world
 
 const bia = Validator("bia", ["finance"])
@@ -31,10 +30,10 @@ fn desk(execute) -> Desk(String, Memory) {
       |> decisions.valid_for(duration.hours(1)),
     drives: fn(_) { Gated(name: "t", guard: fn(_, _) { Ok([]) }, execute:) },
     under: fn(_) {
-      Ok(Policy(
+      Ok(policies.checked(
         1,
         [When(OwnAct, Proceed(Never, None))],
-        Ask(AnyoneHolding("finance")),
+        AnyoneHolding("finance"),
       ))
     },
     over: memory.port(),
@@ -145,7 +144,13 @@ pub fn tally_and_replay_judge_alike_test() {
       drives: fn(_) {
         Gated(name: "t", guard: fn(_, _) { Ok([]) }, execute: ok_tool)
       },
-      under: fn(_) { Ok(Policy(1, [], Proceed(policy.PerCent(100), None))) },
+      under: fn(_) {
+        Ok(policies.checked(
+          1,
+          [policy.When(policy.Always, Proceed(policy.PerCent(100), None))],
+          policy.AnyoneHolding("nobody"),
+        ))
+      },
       over: memory.port(),
     )
   let echo_by = Rules("echo", "1")

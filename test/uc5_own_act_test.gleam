@@ -5,8 +5,7 @@ import decisions.{type Desk, Gated}
 import decisions/memory.{type Memory}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, OwnAct, Policy, Proceed,
-  SomeoneElseHolding, When,
+  type Policy, AnyoneHolding, Never, OwnAct, Proceed, SomeoneElseHolding, When,
 }
 import decisions/vocabulary.{
   Manifest, OwnAct as HerOwnAct, Person, Recommendation, Trigger,
@@ -15,6 +14,7 @@ import decisions/wire
 import gleam/json
 import gleam/option.{None, Some}
 import gleam/result
+import support/policies
 import support/world.{type World}
 
 /// The desk reads its policy from the database in the caller's
@@ -86,10 +86,10 @@ pub fn an_own_act_is_recorded_and_regated_by_the_policy_alone_test() {
   // Version 1: a person's own act proceeds at once, and is recorded.
   publish(
     w,
-    Policy(
+    policies.checked(
       version: 1,
       rules: [When(OwnAct, Proceed(Never, None))],
-      otherwise: Ask(AnyoneHolding("operators")),
+      otherwise: AnyoneHolding("operators"),
     ),
   )
   let assert Ok(first) = override(w, "ana-represents-clinica-x")
@@ -102,10 +102,10 @@ pub fn an_own_act_is_recorded_and_regated_by_the_policy_alone_test() {
   // Version 2 asks a second person. Only the policy changed.
   publish(
     w,
-    Policy(
+    policies.checked(
       version: 2,
       rules: [],
-      otherwise: Ask(SomeoneElseHolding("operators")),
+      otherwise: SomeoneElseHolding("operators"),
     ),
   )
   let assert Ok(second) = override(w, "bia-represents-clinica-y")

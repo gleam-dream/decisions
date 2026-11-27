@@ -8,7 +8,7 @@
 import decisions.{type Desk, Gated}
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/store
 import decisions/testing
 import decisions/vocabulary.{
@@ -22,6 +22,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/world.{type World}
 
 fn line_desk() -> Desk(String, Memory) {
@@ -29,7 +30,11 @@ fn line_desk() -> Desk(String, Memory) {
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("lines_paid") },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+      Ok(policies.checked(
+        version: 1,
+        rules: [],
+        otherwise: AnyoneHolding("finance"),
+      ))
     },
     over: memory.port(),
   )
@@ -42,7 +47,11 @@ fn receipt_desk() -> Desk(String, Memory) {
     decisions.point("expense.receipt", wire.text()),
     drives: fn(_) { tool("receipts_filed") },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never, None)))
+      Ok(policies.checked(
+        version: 1,
+        rules: [policy.When(policy.Always, Proceed(Never, None))],
+        otherwise: policy.AnyoneHolding("nobody"),
+      ))
     },
     over: memory.port(),
   )
@@ -53,7 +62,11 @@ fn payout_desk() -> Desk(String, Memory) {
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("payouts") },
     under: fn(_) {
-      Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never, None)))
+      Ok(policies.checked(
+        version: 1,
+        rules: [policy.When(policy.Always, Proceed(Never, None))],
+        otherwise: policy.AnyoneHolding("nobody"),
+      ))
     },
     over: memory.port(),
   )
@@ -306,7 +319,11 @@ pub fn the_invariant_checker_catches_a_bundle_that_disagrees_test() {
       decisions.point("expense.receipt", wire.text()),
       drives: fn(_) { tool("receipts_filed") },
       under: fn(_) {
-        Ok(Policy(version: 1, rules: [], otherwise: Proceed(Never, None)))
+        Ok(policies.checked(
+          version: 1,
+          rules: [policy.When(policy.Always, Proceed(Never, None))],
+          otherwise: policy.AnyoneHolding("nobody"),
+        ))
       },
       over: blind,
     )

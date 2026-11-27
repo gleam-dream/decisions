@@ -14,7 +14,7 @@
 //// ```gleam
 //// import decisions
 //// import decisions/memory
-//// import decisions/policy.{AnyoneHolding, Ask, Policy}
+//// import decisions/policy.{AnyoneHolding}
 //// import decisions/vocabulary.{Approve}
 ////
 //// let point = decisions.point("billing.fee_refund", refund_codec())
@@ -23,7 +23,8 @@
 ////     point,
 ////     drives: fn(_) { refund_fee() },
 ////     under: fn(_) {
-////       Ok(Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("finance"))))
+////       policy.new(version: 1, rules: [], otherwise: AnyoneHolding("finance"))
+////       |> result.replace_error("malformed")
 ////     },
 ////     over: memory.port(),
 ////   )
@@ -2617,16 +2618,16 @@ fn settle(
       facts,
       waited: waited_minutes(current, draft.now),
     )
-  // A policy that would consult the same point twice falls to its default.
+  // A policy that would consult the same point twice asks its default.
   let #(outcome, later) = case outcome {
     policy.Consult(point:) ->
       case was_consulted(current, point) {
-        True -> #(published.otherwise, [])
+        True -> #(policy.Ask(policy.otherwise(published)), [])
         False -> #(outcome, [])
       }
     _ -> #(outcome, later)
   }
-  answer(desk, tx, draft, published.version, outcome, later)
+  answer(desk, tx, draft, policy.version(published), outcome, later)
 }
 
 /// Act on one answer of the policy, the first or a later one: record it

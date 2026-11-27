@@ -3,22 +3,21 @@
 import decisions
 import decisions/memory
 import decisions/occurrence
-import decisions/policy.{
-  AnyoneHolding, Ask, Either, Never, Policy, Proceed, When,
-}
+import decisions/policy.{AnyoneHolding, Ask, Either, Never, Proceed, When}
 import decisions/testing
 import decisions/vocabulary.{Approve, DeadlinePassed, Person, Trigger}
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/time/duration
 import gleam/time/timestamp
+import support/policies
 import support/refund.{Refund}
 import support/world
 
 /// Unanswered for four hours, a refund also appears for `managers`. The
 /// threshold is a rule about the time waited; nothing else is new.
 fn policy() {
-  Policy(
+  policies.checked(
     version: 4,
     rules: [
       When(
@@ -26,7 +25,7 @@ fn policy() {
         Ask(Either([AnyoneHolding("finance"), AnyoneHolding("managers")])),
       ),
     ],
-    otherwise: Ask(AnyoneHolding("finance")),
+    otherwise: AnyoneHolding("finance"),
   )
 }
 
@@ -137,10 +136,10 @@ pub fn after_twenty_four_hours_it_expires_test() {
 pub fn silence_can_be_consent_when_the_policy_says_so_test() {
   let w = world.new()
   let desk =
-    desk(Policy(
+    desk(policies.checked(
       version: 5,
       rules: [When(policy.waited(60), Proceed(Never, None))],
-      otherwise: Ask(AnyoneHolding("finance")),
+      otherwise: AnyoneHolding("finance"),
     ))
   let waiting = ask(w, desk, "fee-3")
   world.at(w, duration.minutes(60))

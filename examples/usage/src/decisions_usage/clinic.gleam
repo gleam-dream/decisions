@@ -6,6 +6,7 @@
 import decisions.{type Gated, type Point, Gated}
 import decisions/fact
 import decisions/memory.{type Memory}
+import decisions/policy.{type Policy}
 import decisions/vocabulary.{ApproveRejectOrCorrect, Subject, Validator}
 import decisions/wire
 import gleam/int
@@ -74,4 +75,11 @@ pub fn refunded(store: Memory, fee: String) -> Result(Int, Nil) {
     Ok(cents) -> int.parse(cents)
     Error(Nil) -> Error(Nil)
   }
+}
+
+/// A policy the examples write as a literal. `policy.new` refuses a policy
+/// that cannot be used whatever the point; these literals are well formed.
+pub fn well_formed(made: Result(Policy, List(policy.Malformed))) -> Policy {
+  let assert Ok(policy) = made
+  policy
 }

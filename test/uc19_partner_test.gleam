@@ -6,7 +6,7 @@ import decisions.{type Desk}
 import decisions/memory.{type Memory}
 import decisions/model
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/view
 import decisions/vocabulary.{DeadlinePassed, Validator}
 import gleam/dynamic/decode
@@ -14,6 +14,7 @@ import gleam/json
 import gleam/result
 import gleam/time/duration
 import support/payout.{Payout}
+import support/policies
 import support/world.{type World}
 
 const risk_service = Validator(subject: "risk-service", holds: ["partner-risk"])
@@ -21,7 +22,11 @@ const risk_service = Validator(subject: "risk-service", holds: ["partner-risk"])
 fn desk() -> Desk(payout.Payout, Memory) {
   payout.desk_of(
     payout.point() |> decisions.valid_for(duration.hours(1)),
-    Policy(version: 1, rules: [], otherwise: Ask(AnyoneHolding("partner-risk"))),
+    policies.checked(
+      version: 1,
+      rules: [],
+      otherwise: AnyoneHolding("partner-risk"),
+    ),
   )
 }
 

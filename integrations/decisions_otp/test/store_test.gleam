@@ -3,7 +3,7 @@
 
 import decisions
 import decisions/fact
-import decisions/policy.{Ask, Policy, SomeoneElseHolding}
+import decisions/policy.{SomeoneElseHolding}
 import decisions/store as port_types
 import decisions/vocabulary.{Manifest, Recommendation, RuleFired, Rules, Trigger}
 import decisions_otp/store
@@ -13,6 +13,7 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import support/lab
+import support/policies
 
 pub fn a_lock_wait_longer_than_the_timeout_is_refused_test() {
   lab.quiet()
@@ -142,10 +143,10 @@ pub fn the_asker_does_not_see_their_own_card_test() {
   let desk =
     lab.desk(
       lab.point("billing.fee_refund", None),
-      Policy(
+      policies.checked(
         version: 1,
         rules: [],
-        otherwise: Ask(SomeoneElseHolding("finance")),
+        otherwise: SomeoneElseHolding("finance"),
       ),
     )
   let assert Ok(_) =

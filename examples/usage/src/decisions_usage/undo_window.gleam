@@ -7,7 +7,7 @@
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed, When}
+import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
 }
@@ -21,17 +21,19 @@ pub fn desk() -> decisions.Desk(Refund, Memory) {
     autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },
     under: fn(_) {
-      Ok(Policy(
-        version: 1,
-        rules: [
-          When(
-            policy.at_least(autonomy_ladder.confidence(), 0.95),
-            // Proceed, with a thirty-minute undo window.
-            Proceed(Never, Some(duration.minutes(30))),
-          ),
-        ],
-        otherwise: Ask(AnyoneHolding("finance")),
-      ))
+      Ok(
+        clinic.well_formed(policy.new(
+          version: 1,
+          rules: [
+            When(
+              policy.at_least(autonomy_ladder.confidence(), 0.95),
+              // Proceed, with a thirty-minute undo window.
+              Proceed(Never, Some(duration.minutes(30))),
+            ),
+          ],
+          otherwise: AnyoneHolding("finance"),
+        )),
+      )
     },
     over: memory.port(),
   )

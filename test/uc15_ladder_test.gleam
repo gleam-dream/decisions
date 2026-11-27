@@ -8,7 +8,7 @@ import decisions/learning.{Archive}
 import decisions/model
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
-  type Policy, AnyoneHolding, Ask, Never, OwnAct, PerCent, Policy, Proceed, When,
+  type Policy, AnyoneHolding, Never, OwnAct, PerCent, Proceed, When,
 }
 import decisions/vocabulary.{
   Approve, Assessment, Correct, Person, Reason, Recommendation, Ref, Right,
@@ -20,6 +20,7 @@ import gleam/option.{None, Some}
 import gleam/time/duration
 import gleam/time/timestamp
 import support/classify
+import support/policies
 import support/world.{type World}
 
 /// What a careful person writes. The cascade differs from it exactly when
@@ -38,12 +39,12 @@ fn version(number: Int) -> Policy {
   let finance = AnyoneHolding("finance")
   case number {
     // 1. Cold start: there is no model. A person's own act proceeds.
-    1 -> Policy(version: 1, rules: [own], otherwise: Ask(finance))
+    1 -> policies.checked(version: 1, rules: [own], otherwise: finance)
     // 2. Assisted: the person sees the recommendation.
-    2 -> Policy(version: 2, rules: [own], otherwise: Ask(finance))
+    2 -> policies.checked(version: 2, rules: [own], otherwise: finance)
     // 3. Sampled: it proceeds on a high score, and one in ten is reviewed.
     3 ->
-      Policy(
+      policies.checked(
         version: 3,
         rules: [
           own,
@@ -52,10 +53,10 @@ fn version(number: Int) -> Policy {
             Proceed(PerCent(10), None),
           ),
         ],
-        otherwise: Ask(finance),
+        otherwise: finance,
       )
     // 4. Demotion.
-    _ -> Policy(version: 4, rules: [own], otherwise: Ask(finance))
+    _ -> policies.checked(version: 4, rules: [own], otherwise: finance)
   }
 }
 

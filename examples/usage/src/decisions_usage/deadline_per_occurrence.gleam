@@ -13,11 +13,12 @@ import gleam/result
 import decisions
 import decisions/memory.{type Memory}
 import decisions/occurrence
-import decisions/policy.{AnyoneHolding, Ask, Policy}
+import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Agent, Manifest, Recommendation, RuleFired, Subject, Trigger,
 }
 import decisions/wire
+import decisions_usage/clinic
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 
@@ -32,7 +33,9 @@ pub fn desk() -> decisions.Desk(String, Memory) {
         execute: fn(_, _) { Ok(Nil) },
       )
     },
-    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("support")))) },
+    under: fn(_) {
+      Ok(clinic.well_formed(policy.new(1, [], AnyoneHolding("support"))))
+    },
     over: memory.port(),
   )
 }

@@ -6,7 +6,7 @@
 import decisions
 import decisions/fact
 import decisions/occurrence
-import decisions/policy.{Policy}
+import decisions/policy
 import decisions/store.{Head, Stored}
 import decisions/vocabulary.{Approve}
 import decisions_postgres
@@ -25,6 +25,7 @@ import grind/worker
 import kit
 import pog
 import sinal
+import support/policies
 
 pub fn a_hold_ends_and_grind_releases_it_test() {
   let #(name, store) = kit.store()
@@ -427,7 +428,7 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
 /// pending and does nothing.
 pub fn deliver_due_delivers_an_escalation_once_after_a_restart_test() {
   let escalating =
-    Policy(
+    policies.checked(
       version: 1,
       rules: [
         policy.When(
@@ -435,7 +436,7 @@ pub fn deliver_due_delivers_an_escalation_once_after_a_restart_test() {
           policy.Ask(policy.AnyoneHolding("managers")),
         ),
       ],
-      otherwise: policy.Ask(policy.AnyoneHolding("finance")),
+      otherwise: policy.AnyoneHolding("finance"),
     )
   let spec = kit.Spec(..kit.spec("escalation"), policy: escalating)
   let #(first_name, first_store) = kit.store()
@@ -517,7 +518,7 @@ pub fn deliver_due_delivers_an_escalation_once_after_a_restart_test() {
 /// instead of being delivered for ever.
 pub fn a_wake_up_that_cannot_consult_is_counted_and_set_aside_test() {
   let consulting =
-    Policy(
+    policies.checked(
       version: 1,
       rules: [
         policy.When(
@@ -525,7 +526,7 @@ pub fn a_wake_up_that_cannot_consult_is_counted_and_set_aside_test() {
           policy.Consult(point: "billing.elsewhere"),
         ),
       ],
-      otherwise: policy.Ask(policy.AnyoneHolding("finance")),
+      otherwise: policy.AnyoneHolding("finance"),
     )
   let spec = kit.Spec(..kit.spec("no_consult"), policy: consulting)
   let #(name, store) = kit.store()

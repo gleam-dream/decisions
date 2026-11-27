@@ -9,7 +9,7 @@
 
 import decisions
 import decisions/occurrence
-import decisions/policy.{Never, Policy, Proceed}
+import decisions/policy.{Never, Proceed}
 import decisions/store
 import decisions/vocabulary.{Subject, Trigger}
 import decisions_postgres
@@ -28,6 +28,7 @@ import grind/job
 import grind/worker
 import kit
 import pog
+import support/policies
 
 fn subject() -> vocabulary.Subject {
   Subject("person", kit.tag("ana"))
@@ -41,13 +42,15 @@ pub fn a_held_occurrence_superseded_releases_nothing_test() {
   let spec =
     kit.Spec(
       ..kit.spec("held_superseded"),
-      policy: Policy(
+      policy: policies.checked(
         version: 1,
-        rules: [],
-        otherwise: Proceed(
-          sample: Never,
-          hold: Some(duration.milliseconds(300)),
-        ),
+        rules: [
+          policy.When(
+            policy.Always,
+            Proceed(sample: Never, hold: Some(duration.milliseconds(300))),
+          ),
+        ],
+        otherwise: policy.AnyoneHolding("nobody"),
       ),
       superseded_by: ["closed"],
     )
