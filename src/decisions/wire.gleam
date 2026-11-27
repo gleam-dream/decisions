@@ -53,11 +53,11 @@ import decisions/vocabulary.{
   type Fact, type Facts, type Finding, type Manifest, type Parent, type Reason,
   type Recommendation, type Recommender, type Ref, type Subject, type Trigger,
   type Validator, type Verdict, type Verdicts, Agent, Approve, ApproveOrReject,
-  ApproveRejectOrCorrect, Assessment, Bundle, Classifier, Correct,
-  DeadlinePassed, Flag, Manifest, ModelCall, NotPerformed, Number, OwnAct,
-  ParentOccurrence, ParentRun, Performed, Person, Reason, Receipt,
-  Recommendation, Ref, Reject, Right, RuleFired, Rules, RunAction, RunAnswer,
-  Subject, Superseded, Text, Trigger, Uncertain, Validator, Wrong,
+  ApproveRejectOrCorrect, Assessment, Classifier, Correct, DeadlinePassed, Flag,
+  Manifest, ModelCall, NotPerformed, Number, OwnAct, ParentOccurrence, ParentRun,
+  Performed, Person, Reason, Receipt, Recommendation, Ref, Reject, Right,
+  RuleFired, Rules, RunAction, RunAnswer, Subject, Superseded, Text, Trigger,
+  Uncertain, Validator, Wrong,
 }
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
@@ -302,16 +302,23 @@ pub fn parent(parent: Parent) -> Json {
 /// A `Bundle` as JSON.
 pub fn bundle(bundle: Bundle) -> Json {
   json.object([
-    #("key", json.string(bundle.key)),
-    #("size", json.int(bundle.size)),
+    #("key", json.string(vocabulary.bundle_key(bundle))),
+    #("size", json.int(vocabulary.bundle_size(bundle))),
   ])
 }
 
-/// Decodes a `Bundle` written by `bundle`.
+/// Decodes a `Bundle` written by `bundle`. A key and size that
+/// `vocabulary.bundle` refuses do not decode.
 pub fn bundle_decoder() -> Decoder(Bundle) {
   use key <- decode.field("key", decode.string)
   use size <- decode.field("size", decode.int)
-  decode.success(Bundle(key:, size:))
+  case vocabulary.bundle(key:, size:) {
+    Ok(bundle) -> decode.success(bundle)
+    Error(_) -> {
+      let assert Ok(placeholder) = vocabulary.bundle(key: "bundle", size: 1)
+      decode.failure(placeholder, "Bundle")
+    }
+  }
 }
 
 /// Decodes a `Parent` written by `parent`.

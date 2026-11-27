@@ -341,8 +341,8 @@ fn append(
       <> int.to_string(max_name_bytes),
     )
   }
-  let bundle_key = option.map(head.bundle, fn(bundle) { bundle.key })
-  let bundle_size = option.map(head.bundle, fn(bundle) { bundle.size })
+  let bundle_key = option.map(head.bundle, vocabulary.bundle_key)
+  let bundle_size = option.map(head.bundle, vocabulary.bundle_size)
   let key = option.unwrap(bundle_key, "")
   case
     string.byte_size(id) > max_name_bytes,
@@ -663,10 +663,14 @@ fn head_decoder_from(at: Int) -> decode.Decoder(Head) {
   use review_pending <- decode.field(at + 9, decode.bool)
   use bundle_key <- decode.field(at + 10, decode.optional(decode.string))
   use bundle_size <- decode.field(at + 11, decode.optional(decode.int))
-  let bundle = case bundle_key, bundle_size {
-    Some(key), Some(size) -> Some(vocabulary.Bundle(key:, size:))
-    _, _ -> None
-  }
+  use bundle <- decode.then(case bundle_key, bundle_size {
+    Some(key), Some(size) ->
+      case vocabulary.bundle(key:, size:) {
+        Ok(bundle) -> decode.success(Some(bundle))
+        Error(_) -> decode.failure(None, "a bundle with a key and a size")
+      }
+    _, _ -> decode.success(None)
+  })
   decode.success(Head(
     point:,
     subject: Subject(kind:, id:),

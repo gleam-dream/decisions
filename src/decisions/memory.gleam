@@ -364,7 +364,7 @@ fn members(tx: Memory, bundle: String) -> List(#(String, Head)) {
   heads(tx)
   |> list.filter(fn(pair) {
     case { pair.1 }.bundle {
-      Some(of) -> of.key == bundle
+      Some(of) -> vocabulary.bundle_key(of) == bundle
       None -> False
     }
   })

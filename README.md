@@ -791,8 +791,10 @@ document. Admit each as an occurrence of its own, at its own point, so each
 is judged by its own policy, released under its own key, and measured on
 its own. Name the bundle they belong to and how many it holds:
 `decisions.recommend_bundle` does that for the items of one point, and
-`decisions.in_bundle` on each proposal for a bundle that spans points.
-Admit them in one transaction.
+`decisions.recommend_member` admits one member of a bundle that spans
+points. A member's key is the bundle's key, a slash and its item, so a
+member delivered again is found. Admission holds the bundle's lock, so
+members admitted by concurrent transactions never exceed its size.
 
 What follows the bundle, such as one payout of the approved lines, belongs
 to the point's follower. On each settlement notice it reads the bundle with
@@ -901,7 +903,7 @@ pub fn admit(
     _,
     bundle: report,
     items: list.index_map(amounts, fn(amount, n) {
-      #(report <> "/line-" <> int.to_string(n + 1), proposal(report, amount))
+      #("line-" <> int.to_string(n + 1), proposal(report, amount))
     }),
   ))
   |> result.map(list.map(_, fn(line) { line.id }))
@@ -915,19 +917,16 @@ pub fn settled(tx: Memory, line: String) -> Result(Nil, decisions.Refusal) {
   case known.bundle {
     None -> Ok(Nil)
     Some(bundle) -> {
-      use members <- result.try(decisions.members(
-        lines(),
-        tx,
-        bundle: bundle.key,
-      ))
+      let report = vocabulary.bundle_key(bundle)
+      use members <- result.try(decisions.members(lines(), tx, bundle: report))
       case decisions.is_complete(members) {
         False -> Ok(Nil)
         True ->
           decisions.recommend_once(
             payouts(),
             tx,
-            key: "payout:" <> bundle.key,
-            proposal: proposal(bundle.key, "pay " <> bundle.key),
+            key: "payout:" <> report,
+            proposal: proposal(report, "pay " <> report),
           )
           |> result.replace(Nil)
       }
@@ -1057,7 +1056,7 @@ the store clock whether or not the wake-up was delivered on time.
 | `happened` with a declared event, nothing recommended yet                                                                                | The record expires with `DeadlinePassed` rather than superseded, and is reported in `not_begun`; a later recommendation is recorded expired                                                                                                                                                                                                                                         |
 | `record_failure(_with)`, `expect`, `expect_until`, `read`, `open` and the other verbs that need an occurrence, before any recommendation | Refused with `DeadlinePassedBefore(deadline)`; nothing written                                                                                                                                                                                                                                                                                                                      |
 | `expect` or `expect_until` delivered again after the deadline                                                                            | `DeadlinePassedBefore`; an `expect_until` whose deadline had already passed answers `Ok(Nil)` the first time, the record written expired. Treat the refusal as done, not a failure, so the admitting transaction commits                                                                                                                                                            |
-| `recommend_once`                                                                                                                         | Recorded and expired at once; no policy runs, nothing is shown. A proposal in a bundle (`in_bundle`, `recommend_bundle`) is refused with `BadBundle(bundle, EndedBefore(key))` once the expiry is already recorded (its one settlement notice went out before it belonged to the bundle); before that, the member is recorded expired and admits its notice in the same transaction |
+| `recommend_once`                                                                                                                         | Recorded and expired at once; no policy runs, nothing is shown. A bundle member (`recommend_member`, `recommend_bundle`) is refused with `BadBundle(bundle, EndedBefore(key))` once the expiry is already recorded (its one settlement notice went out before it belonged to the bundle); before that, the member is recorded expired and admits its notice in the same transaction |
 | A key expected with `expect` alone                                                                                                       | No deadline until it is recommended                                                                                                                                                                                                                                                                                                                                                 |
 
 A deadline ends the wait for a decision, not a hold: an output accepted

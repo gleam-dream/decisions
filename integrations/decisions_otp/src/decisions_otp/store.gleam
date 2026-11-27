@@ -786,7 +786,12 @@ fn index(open: Open, id: String, old: Option(Head), new: Head) -> Nil {
     False -> Nil
   }
   case new.bundle {
-    Some(bundle) -> rows.put(open.buffer, BundleKey(bundle.key, id), IndexRow)
+    Some(bundle) ->
+      rows.put(
+        open.buffer,
+        BundleKey(vocabulary.bundle_key(bundle), id),
+        IndexRow,
+      )
     None -> Nil
   }
   list.each(new.awaiting, fn(set) {

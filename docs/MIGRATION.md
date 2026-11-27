@@ -206,6 +206,40 @@ let assert Ok(text) = view.verdict_to_json(verdict, codec)
   `wire.decode_assessment`, or use `wire.verdict_codec` with json_blueprint.
 - Records stored by 0.1 decode unchanged.
 
+### A bundle member is admitted under its bundle's lock and key
+
+Admitting a member of a bundle now holds the bundle's lock, so members
+admitted by concurrent transactions never exceed its size. In 0.1 two
+transactions could each see room and both commit, and the bundle then never
+completed. A member's key is scoped by its bundle, so a member delivered again
+is found.
+
+```gleam
+// Before (0.1)
+let bundle = vocabulary.Bundle(key: "report-8", size: 2)
+decisions.recommend_once(desk, tx, key: "report-8/l1",
+  proposal: proposal |> decisions.in_bundle(bundle))
+decisions.recommend_bundle(desk, tx, bundle: "report-7",
+  items: [#("report-7/l1", line_1), #("report-7/l2", line_2)])
+
+// After (0.2)
+let assert Ok(bundle) = vocabulary.bundle(key: "report-8", size: 2)
+decisions.recommend_member(desk, tx, of: bundle, item: "l1", proposal:)
+decisions.recommend_bundle(desk, tx, bundle: "report-7",
+  items: [#("l1", line_1), #("l2", line_2)])
+```
+
+- `vocabulary.Bundle` is opaque: build it with `vocabulary.bundle`, which
+  refuses an empty key or a size below one, and read it with `bundle_key` and
+  `bundle_size`.
+- `decisions.in_bundle` is removed; `recommend` and `recommend_once` admit no
+  bundle member. The member's key is `decisions.member_key(bundle, item)`;
+  expect it or record its failed attempts under that key.
+- `BundleFault` loses `NoBundleKey` and `EmptyBundle`, which are now
+  `vocabulary.MalformedBundle` (carried by `Malformed` from
+  `recommend_bundle`), and `RepeatedItem` names the item.
+- `bundle_lock_prefix` is reserved, as `subject_lock_prefix` is.
+
 ## decisions_otp 0.2.0
 
 ### A handler belongs to the process that attached it

@@ -12,8 +12,8 @@ import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/store
 import decisions/testing
 import decisions/vocabulary.{
-  type Bundle, Approve, Bundle, Manifest, Reason, Recommendation, Reject,
-  RuleFired, Rules, Trigger,
+  type Bundle, Approve, Manifest, Reason, Recommendation, Reject, RuleFired,
+  Rules, Trigger,
 }
 import decisions/wire
 import gleam/list
@@ -72,6 +72,11 @@ fn payout_desk() -> Desk(String, Memory) {
   )
 }
 
+fn bundle(key: String, size: Int) -> Bundle {
+  let assert Ok(made) = vocabulary.bundle(key:, size:)
+  made
+}
+
 fn tool(table: String) -> decisions.Gated(String, Memory) {
   Gated(name: table, guard: fn(_, _) { Ok([]) }, execute: fn(tx, released) {
     Ok(world.push(tx, table, decisions.output(released)))
@@ -99,9 +104,9 @@ fn admit_lines(w: World) -> List(String) {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "report-7", items: [
-        #("report-7/l1", proposal("l1: 30.00")),
-        #("report-7/l2", proposal("l2: 1200.00")),
-        #("report-7/l3", proposal("l3: 80.00")),
+        #("l1", proposal("l1: 30.00")),
+        #("l2", proposal("l2: 1200.00")),
+        #("l3", proposal("l3: 80.00")),
       ]),
     )
   list.map(lines, fn(line) { line.id })
@@ -137,7 +142,7 @@ pub fn every_line_is_an_occurrence_of_its_own_bundle_test() {
   assert ids == ["report-7/l1", "report-7/l2", "report-7/l3"]
   list.each(ids, fn(id) {
     let known = world.read(w, line_desk(), id)
-    assert known.bundle == Some(Bundle(key: "report-7", size: 3))
+    assert known.bundle == Some(bundle("report-7", 3))
     let assert occurrence.Awaiting(_) = known.status
   })
   assert statuses(w, "report-7")
@@ -197,20 +202,22 @@ pub fn each_line_is_judged_alone_and_the_payout_starts_once_test() {
 
 pub fn a_bundle_may_span_points_test() {
   let w = world.new()
-  let bundle = Bundle(key: "report-8", size: 2)
+  let report = bundle("report-8", 2)
   let assert Ok(_) =
     world.in_tx(w, fn(tx) {
-      use _ <- result.try(decisions.recommend_once(
+      use _ <- result.try(decisions.recommend_member(
         line_desk(),
         tx,
-        key: "report-8/l1",
-        proposal: proposal("l1: 10.00") |> decisions.in_bundle(bundle),
+        of: report,
+        item: "l1",
+        proposal: proposal("l1: 10.00"),
       ))
-      decisions.recommend_once(
+      decisions.recommend_member(
         receipt_desk(),
         tx,
-        key: "report-8/receipt",
-        proposal: proposal("receipt") |> decisions.in_bundle(bundle),
+        of: report,
+        item: "receipt",
+        proposal: proposal("receipt"),
       )
     })
   // The receipt settled at admission; the line still waits.
@@ -234,25 +241,26 @@ pub fn a_trigger_delivered_again_admits_nothing_new_test() {
 
 pub fn a_bundle_admitted_in_pieces_is_not_complete_until_all_arrive_test() {
   let w = world.new()
-  let bundle = Bundle(key: "report-9", size: 3)
-  let admit = fn(key) {
+  let report = bundle("report-9", 3)
+  let admit = fn(item) {
     let assert Ok(_) =
-      world.in_tx(w, decisions.recommend_once(
+      world.in_tx(w, decisions.recommend_member(
         receipt_desk(),
         _,
-        key:,
-        proposal: proposal(key) |> decisions.in_bundle(bundle),
+        of: report,
+        item:,
+        proposal: proposal(item),
       ))
     Nil
   }
-  admit("report-9/a")
-  admit("report-9/b")
+  admit("a")
+  admit("b")
   // Both members settled, but the bundle holds three.
   let assert Ok(members) =
     world.in_tx(w, decisions.members(receipt_desk(), _, bundle: "report-9"))
   assert list.length(members) == 2
   assert !decisions.is_complete(members)
-  admit("report-9/c")
+  admit("c")
   let assert Ok(members) =
     world.in_tx(w, decisions.members(receipt_desk(), _, bundle: "report-9"))
   assert decisions.is_complete(members)
@@ -260,29 +268,52 @@ pub fn a_bundle_admitted_in_pieces_is_not_complete_until_all_arrive_test() {
 
 pub fn a_bundle_that_contradicts_itself_is_refused_test() {
   let w = world.new()
-  let recommend = fn(key, bundle: Bundle) {
-    world.in_tx(w, decisions.recommend_once(
+  let recommend = fn(item, size) {
+    world.in_tx(w, decisions.recommend_member(
       receipt_desk(),
       _,
-      key:,
-      proposal: proposal(key) |> decisions.in_bundle(bundle),
+      of: bundle("r10", size),
+      item:,
+      proposal: proposal(item),
     ))
     |> result.map(fn(known) { known.id })
   }
-  assert recommend("r10/a", Bundle(key: "r10", size: 0))
-    == Error(decisions.BadBundle("r10", decisions.EmptyBundle))
-  assert recommend("r10/a", Bundle(key: "", size: 1))
-    == Error(decisions.BadBundle("", decisions.NoBundleKey))
-  assert recommend("r10/a", Bundle(key: "r10", size: 2)) == Ok("r10/a")
-  assert recommend("r10/b", Bundle(key: "r10", size: 3))
+  // A bundle without a key or with no room cannot be built.
+  assert vocabulary.bundle(key: "r10", size: 0) == Error(vocabulary.EmptyBundle)
+  assert vocabulary.bundle(key: "", size: 1) == Error(vocabulary.NoBundleKey)
+  assert recommend("a", 2) == Ok("r10/a")
+  assert recommend("b", 3)
     == Error(decisions.BadBundle("r10", decisions.SizeDiffers(recorded: 2)))
-  assert recommend("r10/b", Bundle(key: "r10", size: 2)) == Ok("r10/b")
-  assert recommend("r10/c", Bundle(key: "r10", size: 2))
+  assert recommend("b", 2) == Ok("r10/b")
+  assert recommend("c", 2)
     == Error(decisions.BadBundle("r10", decisions.BundleFull))
   // A member delivered again is found, not refused as a third.
-  assert recommend("r10/a", Bundle(key: "r10", size: 2)) == Ok("r10/a")
+  assert recommend("a", 2) == Ok("r10/a")
   assert decisions.disposition(decisions.BadBundle("r10", decisions.BundleFull))
     == decisions.Poisoned
+}
+
+/// A member's key is scoped by its bundle, so a member delivered again is
+/// found whichever verb asks for it.
+pub fn a_member_key_is_scoped_by_its_bundle_test() {
+  let w = world.new()
+  let report = bundle("r15", 2)
+  assert decisions.member_key(report, "a") == "r15/a"
+  let admit = fn() {
+    world.in_tx(w, decisions.recommend_member(
+      receipt_desk(),
+      _,
+      of: report,
+      item: "a",
+      proposal: proposal("a"),
+    ))
+    |> result.map(fn(known) { known.id })
+  }
+  assert admit() == Ok("r15/a")
+  assert admit() == Ok("r15/a")
+  let assert Ok(members) =
+    world.in_tx(w, decisions.members(receipt_desk(), _, bundle: "r15"))
+  assert list.length(members) == 1
 }
 
 pub fn an_unknown_bundle_has_no_members_test() {
@@ -298,7 +329,7 @@ pub fn the_bundle_survives_a_restart_test() {
   let _ = admit_lines(w)
   let w = world.restart(w)
   let known = world.read(w, line_desk(), "report-7/l2")
-  assert known.bundle == Some(Bundle(key: "report-7", size: 3))
+  assert known.bundle == Some(bundle("report-7", 3))
   assert list.length(statuses(w, "report-7")) == 3
 }
 
@@ -327,19 +358,19 @@ pub fn the_invariant_checker_catches_a_bundle_that_disagrees_test() {
       },
       over: blind,
     )
-  let admit = fn(key, size) {
+  let admit = fn(item, size) {
     let assert Ok(_) =
-      world.in_tx(w, decisions.recommend_once(
+      world.in_tx(w, decisions.recommend_member(
         desk,
         _,
-        key:,
-        proposal: proposal(key)
-          |> decisions.in_bundle(Bundle(key: "r11", size:)),
+        of: bundle("r11", size),
+        item:,
+        proposal: proposal(item),
       ))
     Nil
   }
-  admit("r11/a", 2)
-  admit("r11/b", 3)
+  admit("a", 2)
+  admit("b", 3)
   let assert Error(violations) =
     testing.check(w.db, memory.inspection(), [
       testing.audit(receipt_desk(), effects: world.effects("receipts_filed")),
@@ -356,12 +387,12 @@ pub fn an_item_key_given_twice_is_refused_test() {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "r12", items: [
-        #("r12/a", proposal("a")),
-        #("r12/a", proposal("a again")),
+        #("a", proposal("a")),
+        #("a", proposal("a again")),
       ]),
     )
   assert admitted
-    == Error(decisions.BadBundle("r12", decisions.RepeatedItem("r12/a")))
+    == Error(decisions.BadBundle("r12", decisions.RepeatedItem("a")))
   assert statuses(w, "r12") == []
 }
 
@@ -381,8 +412,8 @@ pub fn a_key_outside_the_bundle_is_refused_test() {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "r13", items: [
-        #("r13/a", proposal("a")),
-        #("r13/b", proposal("b")),
+        #("a", proposal("a")),
+        #("b", proposal("b")),
       ]),
     )
   assert admitted
@@ -392,11 +423,12 @@ pub fn a_key_outside_the_bundle_is_refused_test() {
   // A member of another size is outside too.
   let _ = admit_lines(w)
   let again =
-    world.in_tx(w, decisions.recommend_once(
+    world.in_tx(w, decisions.recommend_member(
       line_desk(),
       _,
-      key: "report-7/l1",
-      proposal: proposal("l1") |> decisions.in_bundle(Bundle("report-7", 4)),
+      of: bundle("report-7", 4),
+      item: "l1",
+      proposal: proposal("l1"),
     ))
   assert again
     == Error(decisions.BadBundle(
@@ -422,11 +454,12 @@ pub fn a_key_that_ended_before_it_was_recommended_is_refused_test() {
   world.at(w, duration.minutes(2))
   assert world.deliver_due(w, [decisions.waker(receipt_desk())]) == 1
   let late =
-    world.in_tx(w, decisions.recommend_once(
+    world.in_tx(w, decisions.recommend_member(
       receipt_desk(),
       _,
-      key: "r14/a",
-      proposal: proposal("late") |> decisions.in_bundle(Bundle("r14", 1)),
+      of: bundle("r14", 1),
+      item: "a",
+      proposal: proposal("late"),
     ))
   assert late
     == Error(decisions.BadBundle("r14", decisions.EndedBefore("r14/a")))
