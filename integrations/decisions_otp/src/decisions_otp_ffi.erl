@@ -12,12 +12,13 @@
 -export([range/4, due_triggers/3, pending_due/3, stable/2, bump_version/1,
          version/1, new_table/0, new_buffer/0, drop_buffer/1, read/3, read_committed/2,
          scan/3, scan_limit/4, scan_committed/2, scan_kind/3, scan_kind_committed/3,
-         scan_until/3, buffer_put/3, buffer_delete/2, buffer_writes/1,
+         due_wakes/3, buffer_put/3, buffer_delete/2, buffer_writes/1,
          buffer_heads/2, snapshot/1, restore/2, holds_lock/2, note_lock/2,
          apply_writes/2, all_rows/1, load_rows/2, counter/2, peek_counter/2,
          put_counter/3, claim/2, unclaim/2, attempt/1, reraise/1,
          system_ms/0, monotonic_us/0, mailbox/1, schedulers/0, quiet/0,
-         children/1, set_role/1, parent/0, identity/1, new_id/0]).
+         children/1, set_role/1, parent/0, identity/1, new_id/0,
+         spawn_bounded/2]).
 
 %% A UUID version 7: 48 bits of Unix milliseconds, then random bits. Ids made
 %% later sort later.
@@ -28,6 +29,14 @@ new_id() ->
         <<Ms:48, 7:4, RandA:12, 2:2, RandB:62>>,
     iolist_to_binary(io_lib:format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b",
                                    [A, B, C, D, E])).
+
+%% Spawn Body, unlinked, in a process the runtime kills as soon as its heap
+%% passes Megabytes. The kill is reported to monitors as `killed`; no error
+%% report is logged, since the caller reports it.
+spawn_bounded(Body, Megabytes) ->
+    Words = Megabytes * 1000000 div erlang:system_info(wordsize),
+    erlang:spawn_opt(Body, [{max_heap_size, #{size => Words, kill => true,
+                                              error_logger => false}}]).
 
 new_table() ->
     ets:new(decisions_otp_rows, [ordered_set, public, {read_concurrency, true}]).
@@ -92,10 +101,16 @@ scan_kind_committed(Table, Probe, Limit) ->
         false -> select(Table, Pattern)
     end.
 
-%% Committed rows with Probe's tag whose third key element is at most Max.
-scan_until(Table, Probe, Max) ->
-    Tag = element(1, Probe),
-    ets:select(Table, [{{{Tag, '_', '$1'}, '_'}, [{'=<', '$1', Max}], ['$_']}]).
+%% The keys of up to Limit committed wake_at_key rows whose due time is at
+%% most Now, soonest first. The keys are ordered by due time, so the walk
+%% stops at the first one not due: it costs what it returns.
+due_wakes(Table, Now, Limit) ->
+    due_wakes(Table, Now, ets:next(Table, {wake_at_key, -1.0e300, nil}), max(1, Limit), []).
+
+due_wakes(_, _, _, 0, Acc) -> lists:reverse(Acc);
+due_wakes(Table, Now, {wake_at_key, Due, _} = Key, Limit, Acc) when Due =< Now ->
+    due_wakes(Table, Now, ets:next(Table, Key), Limit - 1, [Key | Acc]);
+due_wakes(_, _, _, _, Acc) -> lists:reverse(Acc).
 
 select(Table, Pattern) ->
     ets:select(Table, [{{Pattern, '_'}, [], ['$_']}]).

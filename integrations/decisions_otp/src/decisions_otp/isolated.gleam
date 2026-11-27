@@ -1,8 +1,9 @@
 //// Model calls that cannot hurt their caller. `model` runs a model in a
-//// process of its own, held to a deadline it cannot ignore: a model that
-//// raises becomes `model.Raised`, and one that has not answered in time is
-//// killed and becomes `model.Deadline`. The caller is never taken down and
-//// never waits longer than the deadline and the time to kill.
+//// process of its own, held to a deadline and a heap limit it cannot
+//// ignore: a model that raises, or that outgrows its heap and is killed,
+//// becomes `model.Raised`, and one that has not answered in time is killed
+//// and becomes `model.Deadline`. The caller is never taken down and never
+//// waits longer than the deadline and the time to kill.
 ////
 //// `recommend` is the whole step a worker takes for a trigger: run the
 //// model isolated, outside any transaction, then either recommend under
@@ -13,7 +14,8 @@
 //// ```gleam
 //// import decisions_otp/isolated
 ////
-//// let guarded = isolated.model(classifier, within: duration.seconds(5))
+//// let assert Ok(heap) = isolated.heap_limit(megabytes: 256)
+//// let guarded = isolated.model(classifier, within: duration.seconds(5), heap:)
 //// let assert Ok(isolated.Recommended(occurrence)) =
 ////   isolated.recommend(desk, in: store.transaction(s, _), request:, model: guarded)
 //// ```
@@ -27,12 +29,34 @@ import decisions/vocabulary.{
 }
 import decisions_otp/telemetry
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import sinal
+
+/// The most heap a model's process may use, in whole megabytes, at least
+/// one. It counts the process's own heap, not binaries larger than 64
+/// bytes, which live outside it. Build it with `heap_limit`.
+pub opaque type HeapLimit {
+  HeapLimit(megabytes: Int)
+}
+
+/// A heap limit of `megabytes`; `Error(Nil)` when it is below one, so no
+/// limit can mean "none" or stop a model before it starts.
+pub fn heap_limit(megabytes megabytes: Int) -> Result(HeapLimit, Nil) {
+  case megabytes < 1 {
+    True -> Error(Nil)
+    False -> Ok(HeapLimit(megabytes:))
+  }
+}
+
+/// The heap limit in megabytes.
+pub fn heap_limit_megabytes(limit: HeapLimit) -> Int {
+  limit.megabytes
+}
 
 type Answer(output) {
   Ready(go: process.Subject(Bool))
@@ -45,7 +69,10 @@ type Answer(output) {
 /// `within` to answer. The reads it received are on its recommendation,
 /// exactly as `decisions/model.run` puts them there. A model's process
 /// that raises is `Raised(reason)`; one that has not answered within
-/// `within` is killed and is `Deadline(within)`.
+/// `within` is killed and is `Deadline(within)`. A model's process whose
+/// heap grows past `heap` is killed by the runtime at once and is
+/// `Raised`, so a model that allocates without bound cannot exhaust the
+/// node within its deadline.
 ///
 /// The model's process dies with its caller: a watcher process kills it
 /// when the caller exits, so a worker killed while its model hangs leaves
@@ -59,15 +86,27 @@ type Answer(output) {
 /// Keep the model small: build heavy heap terms, such as the codec of a
 /// structured answer, inside the model's function rather than capturing
 /// them.
-pub fn model(inner: Model(output), within within: Duration) -> Model(output) {
-  model.reporting(fn(context, sources) { call(inner, context, sources, within) })
+pub fn model(
+  inner: Model(output),
+  within within: Duration,
+  heap heap: HeapLimit,
+) -> Model(output) {
+  model.reporting(fn(context, sources) {
+    call(inner, context, sources, within, heap)
+  })
 }
+
+/// Spawn `body`, unlinked, in a process the runtime kills once its heap
+/// passes `megabytes`.
+@external(erlang, "decisions_otp_ffi", "spawn_bounded")
+fn spawn_bounded(body: fn() -> Nil, megabytes: Int) -> process.Pid
 
 fn call(
   inner: Model(output),
   context: Manifest,
   sources: Sources,
   within: Duration,
+  heap: HeapLimit,
 ) -> Result(Recommendation(output), Failure) {
   let reply = process.new_subject()
   let caller = process.self()
@@ -75,23 +114,26 @@ fn call(
   // caller dies first; the watcher is in place before `go`, so the model
   // can never outlive its caller.
   let pid =
-    process.spawn_unlinked(fn() {
-      let go = process.new_subject()
-      process.send(reply, Starting(go))
-      let on_caller = process.monitor(caller)
-      let started =
-        process.new_selector()
-        |> process.select(go)
-        |> process.select_specific_monitor(on_caller, fn(_) { False })
-        |> process.selector_receive_forever
-      case started {
-        True -> {
-          process.demonitor_process(on_caller)
-          process.send(reply, Ran(model.run(inner, context, sources)))
+    spawn_bounded(
+      fn() {
+        let go = process.new_subject()
+        process.send(reply, Starting(go))
+        let on_caller = process.monitor(caller)
+        let started =
+          process.new_selector()
+          |> process.select(go)
+          |> process.select_specific_monitor(on_caller, fn(_) { False })
+          |> process.selector_receive_forever
+        case started {
+          True -> {
+            process.demonitor_process(on_caller)
+            process.send(reply, Ran(model.run(inner, context, sources)))
+          }
+          False -> Nil
         }
-        False -> Nil
-      }
-    })
+      },
+      heap.megabytes,
+    )
   let monitor = process.monitor(pid)
   let exited = fn(down) {
     case down {
@@ -129,9 +171,15 @@ fn call(
     }
     // The answer may have arrived just before the exit was seen.
     Exited(reason) ->
-      case process.receive(reply, 0) {
-        Ok(Ran(outcome)) -> outcome
-        _ ->
+      case process.receive(reply, 0), reason {
+        Ok(Ran(outcome)), _ -> outcome
+        _, process.Killed ->
+          Error(model.Raised(
+            "the model's process was killed: its heap passed "
+            <> int.to_string(heap.megabytes)
+            <> " MB, or another process killed it",
+          ))
+        _, _ ->
           Error(model.Raised(
             "the model's process exited: " <> string.inspect(reason),
           ))

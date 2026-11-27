@@ -1,7 +1,7 @@
 //// A replay spread over processes. It has no deadline of its own: a
 //// candidate that hangs holds its worker for ever. Give a candidate a
 //// deadline by isolating it first,
-//// `replay.replay(examples, isolated.model(candidate, within: duration.seconds(5)), ..)`,
+//// `replay.replay(examples, isolated.model(candidate, within: duration.seconds(5), heap:), ..)`,
 //// so that an example it does not answer in time is unanswered with
 //// `model.Deadline`. The workers die with the caller.
 ////

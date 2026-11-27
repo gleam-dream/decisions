@@ -551,6 +551,13 @@ fn wait_until(condition: fn() -> Bool, within ms: Int) -> Bool {
   }
 }
 
+/// The heap limit of the scenarios' isolated models: far above what they
+/// use.
+fn stress_heap() -> isolated.HeapLimit {
+  let assert Ok(heap) = isolated.heap_limit(megabytes: 256)
+  heap
+}
+
 fn store_text(result: Result(a, store.StoreError)) -> Result(a, String) {
   result.map_error(result, store.describe)
 }
@@ -2785,7 +2792,7 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
         ),
       )
     })
-    |> isolated.model(within: duration.seconds(2))
+    |> isolated.model(within: duration.seconds(2), heap: stress_heap())
   let work = fn(submitted: Submitted) {
     let chosen = case submitted.payload {
       "auto" -> automatic
@@ -3025,12 +3032,9 @@ fn b6(target: Target(tx), _load: Load) -> Result(Nil, String) {
       point(unique(target, "reply"), Some(duration.minutes(1))),
       proceeding(),
     )
+  let poisoned_point = unique(target, "poisoned")
   let poisoned =
-    desk(
-      target,
-      point(unique(target, "poisoned"), Some(duration.minutes(1))),
-      proceeding(),
-    )
+    desk(target, point(poisoned_point, Some(duration.minutes(1))), proceeding())
   let failing =
     desk(target, point(unique(target, "failing"), None), proceeding())
   let keys = [unique(target, "a"), unique(target, "b")]
@@ -3155,6 +3159,17 @@ fn b6(target: Target(tx), _load: Load) -> Result(Nil, String) {
     attempts == [#("notice", 3), #("trigger", 3), #("wake-up", 0)],
     "attempts: " <> string.inspect(attempts),
   ))
+  // The record that does not decode is set aside with its wake-up: it no
+  // longer waits, so no supersession and no queue meets it again.
+  use still <- result.try(
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(tx, poisoned_point, ana) |> store_text
+    }),
+  )
+  use Nil <- result.try(expect(
+    !list.contains(still, bad),
+    "the poisoned record still waits: " <> string.inspect(still),
+  ))
   invariants(target, [healthy])
 }
 
@@ -3193,7 +3208,11 @@ fn b7(target: Target(tx), _load: Load) -> Result(Nil, String) {
       desk,
       in: within_attempted(target, _),
       request:,
-      model: isolated.model(chosen, within: duration.milliseconds(ms)),
+      model: isolated.model(
+        chosen,
+        within: duration.milliseconds(ms),
+        heap: stress_heap(),
+      ),
     )
   }
   use Nil <- result.try(case run(raises, 1000) {

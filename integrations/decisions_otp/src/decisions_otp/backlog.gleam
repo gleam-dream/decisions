@@ -21,8 +21,10 @@
 ////   trigger leaves the trigger to the next worker. It never hands out a
 ////   trigger already removed: check the row again after claiming it.
 //// - A job set aside leaves its queue and stays readable through `aside`.
-////   Setting aside acts on a **job** (a wake-up, a notice, a trigger), not
-////   on the occurrence it is about.
+////   `set_aside` acts on a **job** (a wake-up, a notice, a trigger);
+////   `set_aside_occurrence` acts on the occurrence a wake-up is about, when
+////   its record cannot be acted on, so that it leaves every queue and
+////   `waiting`, as in PostgreSQL.
 //// - `failed` counts a failed attempt in a transaction of its own and
 ////   returns how many have failed so far.
 //// - Reads outside a transaction (`due`, `undelivered`, `aside`) see only
@@ -127,6 +129,12 @@ pub type Backlog(tx) {
     /// Take a job out of its queue and keep it, with the reason, where
     /// `aside` reads it.
     set_aside: fn(tx, Job, String) -> Result(Nil, StoreError),
+    /// Set aside an occurrence whose record cannot be acted on (it no
+    /// longer decodes, for one): take it out of every queue and of the
+    /// port's `waiting`, and set aside each of its pending wake-ups, with
+    /// the reason. The runtime calls it in the transaction that sets aside
+    /// the wake-up that found the record so.
+    set_aside_occurrence: fn(tx, String, String) -> Result(Nil, StoreError),
     /// Every job set aside, oldest first.
     aside: fn() -> Result(List(Aside), StoreError),
   )

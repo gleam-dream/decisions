@@ -12,6 +12,10 @@ pub type Key {
   HeadKey(occurrence: String, unused: Int)
   /// `job` is `#(point, occurrence)`; `at` is in milliseconds.
   WakeKey(job: #(String, String), at: Int)
+  /// One row per wake-up, in the order it comes due: `due` is its time,
+  /// or the end of its backoff when that is later, in milliseconds;
+  /// `wake` is `#(point, occurrence, at)`. `due` reads only its prefix.
+  WakeAtKey(due: Int, wake: #(String, String, Int))
   NoticeKey(id: Int, unused: Int)
   /// Present while a notice waits for delivery.
   PendingKey(id: Int, unused: Int)
@@ -125,10 +129,11 @@ pub fn scan_kind_committed(
   limit: Int,
 ) -> List(#(Key, Row))
 
-/// Committed rows with `probe`'s tag whose second key field is at most
-/// `max`.
-@external(erlang, "decisions_otp_ffi", "scan_until")
-pub fn scan_until(table: Table, probe: Key, max: Int) -> List(#(Key, Row))
+/// The keys of up to `limit` committed `WakeAtKey` rows due at `now`, the
+/// soonest first. It walks the ordered table from the first such key, so
+/// it costs what it returns.
+@external(erlang, "decisions_otp_ffi", "due_wakes")
+pub fn due_wakes(table: Table, now: Int, limit: Int) -> List(Key)
 
 /// Rows whose key has `probe`'s tag and first field, in key order, at
 /// most `limit`.

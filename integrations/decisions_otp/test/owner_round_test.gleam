@@ -149,7 +149,11 @@ pub fn a_failed_model_s_evidence_is_on_the_attempt_test() {
       desk,
       in: store.transaction(s, _),
       request: request("ev-1"),
-      model: isolated.model(undecodable, within: duration.seconds(1)),
+      model: isolated.model(
+        undecodable,
+        within: duration.seconds(1),
+        heap: lab.heap(),
+      ),
     )
   assert model.evidence_of(failure) == [exchange]
   assert attempt.evidence == [exchange]

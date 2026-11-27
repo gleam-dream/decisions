@@ -803,8 +803,16 @@ fn fail(config: Config(tx), job: Job, fault: Fault, started: Int) -> Bool {
       report(config, job, reason, 0, started, telemetry.job_failed())
       False
     }
+    // The record cannot be acted on: a wake-up's occurrence goes aside
+    // with it, so it leaves every queue and `waiting`, as in PostgreSQL.
     Fault(handling: decisions.SetAside, reason:) ->
-      set_aside_now(config, job, reason)
+      case job {
+        WakeJob(wake:) ->
+          set_aside_with(config, job, reason, fn(tx) {
+            config.backlog.set_aside_occurrence(tx, wake.occurrence, reason)
+          })
+        NoticeJob(_) | TriggerJob(_) -> set_aside_now(config, job, reason)
+      }
     Fault(handling: decisions.Drop, reason:) ->
       drop(config, job, reason, started)
     Fault(handling: decisions.Backoff, reason:) ->
@@ -873,11 +881,24 @@ fn drop(config: Config(tx), job: Job, reason: String, started: Int) -> Bool {
 }
 
 fn set_aside_now(config: Config(tx), job: Job, reason: String) -> Bool {
+  set_aside_with(config, job, reason, fn(_) { Ok(Nil) })
+}
+
+/// Set a job aside, and do `also` in the same transaction.
+fn set_aside_with(
+  config: Config(tx),
+  job: Job,
+  reason: String,
+  also: fn(tx) -> Result(Nil, store.StoreError),
+) -> Bool {
   let backlog = config.backlog
   let started = monotonic_us()
   let done =
     run(config, fn(tx) {
-      backlog.set_aside(tx, job, reason)
+      use Nil <- result.try(
+        backlog.set_aside(tx, job, reason) |> result.map_error(store_fault),
+      )
+      also(tx)
       |> result.map_error(store_fault)
       |> result.replace(Counted(0))
     })

@@ -11,6 +11,7 @@ import decisions/vocabulary.{
   Recommendation, Ref, RuleFired, Subject, Trigger, Validator,
 }
 import decisions/wire
+import decisions_otp/isolated
 import decisions_otp/runtime as decisions_otp_runtime
 import decisions_otp/store.{type Store, type Tx}
 import gleam/erlang/process.{type Pid}
@@ -35,6 +36,12 @@ pub fn start() -> Store {
   quiet()
   let assert Ok(s) = store.start(config())
   s
+}
+
+/// A heap limit far above what the tests' models use.
+pub fn heap() -> isolated.HeapLimit {
+  let assert Ok(heap) = isolated.heap_limit(megabytes: 256)
+  heap
 }
 
 /// The defaults, with a retry backoff short enough for tests.

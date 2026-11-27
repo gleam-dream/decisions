@@ -8,7 +8,9 @@ import decisions/store as port_types
 import decisions/vocabulary.{Manifest, Recommendation, RuleFired, Rules, Trigger}
 import decisions_otp/store
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{None}
+import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
@@ -172,4 +174,103 @@ pub fn the_asker_does_not_see_their_own_card_test() {
   assert store.queue(s, "finance") == ["refund-1"]
   assert store.queue_for(s, lab.bia) == []
   assert store.queue_page_for(s, lab.felipe, 50) == ["refund-1"]
+}
+
+@external(erlang, "probe_ffi", "mailbox")
+fn mailbox() -> Int
+
+@external(erlang, "probe_ffi", "suspend")
+fn suspend(pid: process.Pid) -> Nil
+
+@external(erlang, "probe_ffi", "resume")
+fn resume(pid: process.Pid) -> Nil
+
+/// A lock granted just as the wait times out leaves no message behind in
+/// the waiter's mailbox. The owner is held still while the holder commits,
+/// a large commit queues behind it, and the waiter withdraws; let go, the
+/// owner grants the lock, applies the large commit, then answers the
+/// withdrawal, so the waiter has read the grant long before that answer.
+pub fn a_grant_that_races_a_withdrawal_leaves_no_message_test() {
+  lab.quiet()
+  let assert Ok(lock_timeout) = port_types.lock_timeout(milliseconds: 100)
+  let assert Ok(s) =
+    store.start(store.Config(..store.defaults(), lock_timeout:))
+  let holding = process.new_subject()
+  process.spawn(fn() {
+    let finish = process.new_subject()
+    store.transaction(s, fn(tx) {
+      let assert Ok(Nil) = store.lock(tx, "row")
+      process.send(holding, finish)
+      let assert Ok(Nil) = process.receive(finish, 5000)
+      Ok(Nil)
+    })
+  })
+  let assert Ok(finish) = process.receive(holding, 1000)
+  let filled = process.new_subject()
+  process.spawn(fn() {
+    let commit = process.new_subject()
+    store.transaction(s, fn(tx) {
+      int.range(from: 0, to: 100_000, with: Nil, run: fn(_, n) {
+        store.put(tx, "bulk", int.to_string(n), "x")
+      })
+      process.send(filled, commit)
+      let assert Ok(Nil) = process.receive(commit, 5000)
+      Ok(Nil)
+    })
+  })
+  let assert Ok(commit) = process.receive(filled, 5000)
+  let left = process.new_subject()
+  process.spawn(fn() {
+    let _ = store.transaction(s, fn(tx) { store.lock(tx, "row") })
+    // Room for a late answer to arrive.
+    process.sleep(500)
+    process.send(left, mailbox())
+  })
+  // The waiter's request is queued: hold the owner, queue the holder's
+  // commit and the large one, let the waiter time out, then let go.
+  process.sleep(10)
+  suspend(store.owner(s))
+  process.send(finish, Nil)
+  process.sleep(10)
+  process.send(commit, Nil)
+  process.sleep(200)
+  resume(store.owner(s))
+  let assert Ok(count) = process.receive(left, 5000)
+  assert count == 0
+}
+
+@external(erlang, "probe_ffi", "reductions")
+fn reductions() -> Int
+
+/// `due` reads only the wake-ups that are due: fifty times as many
+/// wake-ups set for later cost it less than three times as much.
+pub fn due_costs_what_is_due_not_what_waits_test() {
+  let s = lab.start()
+  let few = due_cost(s, "few", 1000)
+  let many = due_cost(s, "many", 49_000)
+  assert many < few * 3
+}
+
+/// Add `count` wake-ups of `occurrence`, each a whole hour later than the
+/// one before, then return the reductions of one look for what is due now.
+fn due_cost(s: store.Store, occurrence: String, count: Int) -> Int {
+  let jobs = store.backlog(s)
+  let now = store.now(s)
+  let assert Ok(Nil) =
+    store.transaction(s, fn(tx) {
+      int.range(from: 1, to: count + 1, with: Ok(Nil), run: fn(added, n) {
+        use Nil <- result.try(added)
+        jobs.add_wake(
+          tx,
+          port_types.Wake(
+            "due",
+            occurrence,
+            timestamp.add(now, duration.hours(n)),
+          ),
+        )
+      })
+    })
+  let before = reductions()
+  let assert Ok([]) = jobs.due(now, 100)
+  reductions() - before
 }
