@@ -1737,8 +1737,8 @@ Run each verb through `decisions_postgres.transaction`, `transaction_with` (a
 body that also fails with your own error), `refusing` or `decide`. They take
 the pool (`decisions_postgres.pool(name)`) and hand the body a `Tx`, the only
 value the port accepts, so a verb can never run outside a transaction, where
-its lock, the gated tool's writes and the release would commit apart; and one
-helper cannot run inside another's body. Your own statements in the same
+its lock, the gated tool's writes and the release would commit apart; and no
+helper can be handed a transaction, so none commits one early. Your own statements in the same
 transaction run on `decisions_postgres.connection(tx)`. The transaction runs at
 `READ COMMITTED`; the port refuses another isolation level with `Conflict`,
 because the subject lock relies on each statement seeing what the lock's

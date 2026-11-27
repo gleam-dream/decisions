@@ -48,7 +48,10 @@ this order:
    transaction in the shape of a verb, for
    `decisions_otp/isolated.recommend_when`'s `in:`). They take the pool and
    hand the body a `Tx`, the only value the port accepts: a verb never runs
-   outside a transaction, and one helper never runs inside another's body.
+   outside a transaction, and no helper can be handed a transaction, so none
+   commits one early. A helper called inside another's body with the pool
+   runs a separate transaction on another connection, which commits by
+   itself.
    The application's own statements in that transaction run on
    `connection(tx)`. The transaction runs at `READ COMMITTED`, the PostgreSQL
    default; the port refuses another level with `Conflict`. To admit a trigger, call `decisions.happened` and then

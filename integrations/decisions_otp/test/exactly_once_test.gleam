@@ -35,5 +35,10 @@ pub fn racing_processes_release_each_key_once_test() {
   list.each(lab.numbers(1, 20 * 8), fn(_) {
     let assert Ok(Nil) = process.receive(done, 10_000)
   })
-  assert lab.effects(s, desk) == list.length(keys)
+  // Twenty effects, each under a release key of its own: one per key,
+  // not two for one key and none for another.
+  let rows =
+    lab.within(s, store.rows(_, "race.once")) |> list.map(fn(row) { row.1 })
+  assert list.length(rows) == list.length(keys)
+  assert list.length(list.unique(rows)) == list.length(keys)
 }

@@ -294,8 +294,7 @@ logged on every occurrence; read them with `sinal.diagnostics()`. See Sinal's
 `store.handle` and `store.store_of` are removed. A verb run on the handle took
 its lock, ran the gated tool and recorded the release in three separate
 commits, so racing processes could each release the same occurrence. Only
-`store.transaction` makes a `Tx`, and it takes the `Store`, so a transaction
-cannot be opened inside another.
+`store.transaction` makes a `Tx`, and it takes the `Store`, never a `Tx`.
 
 ```gleam
 // Before (0.1)

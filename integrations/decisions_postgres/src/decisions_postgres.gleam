@@ -68,7 +68,10 @@
 //// a verb's lock, the gated tool's writes and the entry that records the
 //// release always commit together. The helpers take a `Pool`, which is
 //// made from the pool's name and is never a transaction's connection, so
-//// one helper cannot be called inside another's body. Inside a body,
+//// no helper can be handed a transaction and none commits one early. A
+//// helper called inside another's body with the pool runs a separate
+//// transaction on another connection, which commits by itself. Inside a
+//// body,
 //// `connection(tx)` is the transaction's connection for the
 //// application's own statements. Reads outside a verb
 //// (`decisions_postgres/queue`, `sweep`) take the `Pool`.
