@@ -38,6 +38,7 @@ fn head(
     approved: [],
     may_not_decide: [],
     review_pending: False,
+    bundle: None,
   )
 }
 

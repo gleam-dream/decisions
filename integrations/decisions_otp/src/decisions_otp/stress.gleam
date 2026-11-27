@@ -27,6 +27,7 @@
 //// | B7 | a model that raises and one that hangs: a typed failure within the deadline, on the record |
 //// | own deadline | four keys expected with one deadline of their own, the store restarted before it: each expires once at the deadline, a late recommendation is recorded expired, a late failure and a late verdict are refused |
 //// | every notice | a record superseded before it began, one lapsed at its own deadline, two lapsed and recommended late (before and after their wake-up), and one rejected: the runtime hands each settlement notice to the point's follower exactly once, none dropped or set aside |
+//// | bundles | a quarter of A2's queue in bundles of five, each admitted in one transaction, every member decided at once from its own process after a random wait: the follower that sees a bundle complete recommends its follow-on under a key derived from the bundle, so each bundle starts exactly one follow-on, never none and never two |
 ////
 //// A database adapter's test runs them like this:
 ////
@@ -218,6 +219,7 @@ pub fn scenarios() -> List(Scenario(tx)) {
       "every settlement notice reaches the follower, begun or not",
       every_notice,
     ),
+    Scenario("each bundle starts exactly one follow-on", bundles),
   ]
 }
 
@@ -1408,6 +1410,7 @@ fn head(target: Target(tx), name: String, status: store.Status) -> store.Head {
     approved: [],
     may_not_decide: [],
     review_pending: False,
+    bundle: None,
   )
 }
 
@@ -3159,4 +3162,159 @@ fn monotonic_us() -> Int
 
 fn monotonic_ms() -> Int {
   monotonic_us() / 1000
+}
+
+/// Bundles of five whose members settle at once: the follower of whichever
+/// member commits last sees the bundle complete, and `recommend_once`
+/// under the bundle's follow-on key turns every other follower that sees
+/// it complete into nothing. Each bundle starts exactly one follow-on.
+fn bundles(target: Target(tx), load: Load) -> Result(Nil, String) {
+  let size = 5
+  let count = int.max(4, load.a2_queue / 4)
+  let items =
+    desk(target, point(unique(target, "bundle.items"), None), asking("finance"))
+  let follow_on =
+    desk(target, point(unique(target, "bundle.follow_on"), None), proceeding())
+  let bundles = list.map(numbers(1, count), fn(_) { unique(target, "bundle") })
+  let member = fn(bundle, n) { bundle <> "/" <> int.to_string(n) }
+  use Nil <- result.try(
+    list.try_each(bundles, fn(bundle) {
+      within(target, decisions.recommend_bundle(
+        items,
+        _,
+        bundle:,
+        items: list.map(numbers(1, size), fn(n) {
+          #(
+            member(bundle, n),
+            stress_proposal(member(bundle, n), "line " <> int.to_string(n)),
+          )
+        }),
+      ))
+      |> result.replace(Nil)
+      |> result.map_error(said)
+    }),
+  )
+  let follow = fn(tx, record: decisions.Record(String)) {
+    case record {
+      decisions.Begun(occurrence: known) ->
+        case known.bundle {
+          Some(bundle) -> {
+            use members <- result.try(
+              decisions.members(items, tx, bundle: bundle.key)
+              |> result.map_error(decisions.DeskRefused),
+            )
+            case decisions.is_complete(members) {
+              False -> Ok(Nil)
+              True ->
+                decisions.recommend_once(
+                  follow_on,
+                  tx,
+                  key: "after:" <> bundle.key,
+                  proposal: stress_proposal("after:" <> bundle.key, bundle.key),
+                )
+                |> result.replace(Nil)
+                |> result.map_error(decisions.DeskRefused)
+            }
+          }
+          None -> Ok(Nil)
+        }
+      decisions.NotBegun(_) -> Ok(Nil)
+    }
+  }
+  let config =
+    runtime.config(
+      target.backlog,
+      points: [
+        runtime.point(items, settled: follow),
+        runtime.point(follow_on, settled: runtime.nothing_follows),
+      ],
+      work: nothing,
+    )
+    |> quick
+  use supervisor <- result.try(start_runtime(config))
+  let ids =
+    list.flat_map(bundles, fn(bundle) {
+      list.map(numbers(1, size), member(bundle, _))
+    })
+  let bia = Validator(subject: "bia", holds: ["finance"])
+  let decided =
+    race(ids, fn(id) {
+      process.sleep(int.random(100))
+      let verdict = case int.random(3) {
+        0 -> Reject(Reason("no", None))
+        _ -> Approve
+      }
+      until_decided(target, items, id, bia, verdict, 50)
+    })
+  let started = fn() {
+    effects(target, follow_on) |> result.map(list.length) |> result.unwrap(0)
+  }
+  let settled =
+    wait_until(
+      fn() { started() >= count && target.backlog.undelivered(100) == Ok([]) },
+      within: 30_000,
+    )
+  // Let a delivery in flight finish before counting.
+  process.sleep(50)
+  stop_runtime(supervisor)
+  use aside <- result.try(target.backlog.aside() |> store_text)
+  use Nil <- result.try(list.try_each(decided, fn(outcome) { outcome }))
+  use Nil <- result.try(expect(
+    settled,
+    "the follow-ons did not all start: "
+      <> int.to_string(started())
+      <> " of "
+      <> int.to_string(count),
+  ))
+  use Nil <- result.try(expect(
+    aside == [],
+    "jobs were set aside: " <> string.inspect(aside),
+  ))
+  use started_for <- result.try(effects(target, follow_on))
+  use Nil <- result.try(expect(
+    list.length(started_for) == count
+      && list.sort(started_for, string.compare)
+      == list.sort(
+      list.map(bundles, fn(bundle) {
+        "release:after:" <> bundle <> "=" <> bundle
+      }),
+      string.compare,
+    ),
+    "the follow-ons started were " <> string.inspect(started_for),
+  ))
+  invariants(target, [items, follow_on])
+}
+
+/// Decide `id`, trying again while the store is contended.
+fn until_decided(
+  target: Target(tx),
+  desk: Desk(String, tx),
+  id: String,
+  validator: vocabulary.Validator,
+  verdict: vocabulary.Verdict(String),
+  tries: Int,
+) -> Result(Nil, String) {
+  case within(target, open_and_decide(desk, _, id, validator, verdict)) {
+    Ok(_) -> Ok(Nil)
+    Error(_) if tries > 0 -> {
+      process.sleep(int.random(10))
+      until_decided(target, desk, id, validator, verdict, tries - 1)
+    }
+    Error(said_) -> Error("deciding " <> id <> ": " <> said(said_))
+  }
+}
+
+fn stress_proposal(key: String, output: String) -> decisions.Proposal(String) {
+  decisions.proposal(
+    trigger: Trigger("stress", key),
+    about: ana,
+    context: Manifest(refs: [Ref("input", key, "1")], renderer: "stress-1"),
+    recommending: Recommendation(
+      output:,
+      by: Rules("rules", "1"),
+      explanation: RuleFired("stress"),
+      signals: [],
+      reads: [],
+    ),
+  )
 }
