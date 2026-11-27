@@ -6,6 +6,14 @@
 //// is an object whose `"t"` field names the variant. Times are whole
 //// milliseconds since the Unix epoch.
 ////
+//// A value that holds an output (a recommendation, a verdict, an
+//// assessment) is written and read as a json_blueprint `Value`, so the
+//// point's codec keeps every number exact: an output such as the decimal
+//// `12345678901234567.89` is stored, read back and released unchanged.
+//// The other values are `gleam/json` forms. `parse` and
+//// `decisions/view.verdict` read text that a client sent strictly: within
+//// json_blueprint's default limits, refusing a key given twice.
+////
 //// Build a point's codec from a `json_blueprint` codec with `codec`, and
 //// the codec also carries the output's JSON Schema, which a card shows so
 //// that a client with none of the point's code can build a correction
@@ -39,6 +47,7 @@
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 
+import decisions/internal/exact
 import decisions/vocabulary.{
   type Assessment, type Bundle, type Effect, type ExpiryCause, type Explanation,
   type Fact, type Facts, type Finding, type Manifest, type Parent, type Reason,
@@ -53,11 +62,12 @@ import decisions/vocabulary.{
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import json/blueprint/codec as blueprint
-import json/blueprint/value
+import json/blueprint/value.{type Value}
 
 /// How a point's output type becomes JSON and comes back. Build one with
 /// `codec` (which also carries the output's schema) or `plain`.
@@ -129,22 +139,25 @@ pub fn text() -> Codec(String) {
   codec(blueprint.string())
 }
 
-/// Encode an output. An error means the codec cannot represent this
-/// value, such as a number with no exact JSON form.
-pub fn encode(codec: Codec(a), item: a) -> Result(Json, String) {
+/// Encode an output, exactly. An error means the codec refuses the value.
+pub fn encode(codec: Codec(a), item: a) -> Result(Value, String) {
   case codec {
     Blueprinted(blueprint:) ->
-      blueprint.to_json(blueprint, item)
+      blueprint.encode(blueprint, item)
       |> result.map_error(blueprint.describe_encode_error)
-    Plain(encode:, ..) -> Ok(encode(item))
+    Plain(encode:, ..) -> Ok(exact.from_json(encode(item)))
   }
 }
 
-/// The decoder of an output.
-pub fn decoder(codec: Codec(a)) -> Decoder(a) {
+/// Decode an output from a `Value`, exactly.
+pub fn decode(codec: Codec(a), raw: Value) -> Result(a, String) {
   case codec {
-    Blueprinted(blueprint:) -> blueprint.decoder(blueprint)
-    Plain(decoder:, ..) -> decoder
+    Blueprinted(blueprint:) ->
+      blueprint.decode(blueprint, raw)
+      |> result.map_error(blueprint.describe_decode_error)
+    Plain(decoder:, ..) ->
+      json.parse(value.to_string(raw), decoder)
+      |> result.replace_error("the value does not decode")
   }
 }
 
@@ -165,9 +178,14 @@ pub fn schema(codec: Codec(a)) -> Option(Json) {
   }
 }
 
-/// Decode an output from JSON text.
-pub fn parse(codec: Codec(a), text: String) -> Result(a, json.DecodeError) {
-  json.parse(text, decoder(codec))
+/// Decode an output from JSON text that a client sent: within
+/// json_blueprint's default limits (1 MiB, 128 levels deep), refusing a key
+/// given twice, with exact numbers.
+pub fn parse(
+  codec: Codec(a),
+  text: String,
+) -> Result(a, blueprint.DecodeError) {
+  blueprint.decode_json(blueprint(codec), text)
 }
 
 // -- Helpers --------------------------------------------------------------------
@@ -435,35 +453,43 @@ pub fn facts_decoder() -> Decoder(Facts) {
 
 // -- Recommendations, verdicts, assessments ------------------------------------------
 
-/// A recommendation, with the output encoded by the point's codec.
+/// A recommendation, with the output encoded exactly by the point's codec.
 pub fn recommendation(
   recommendation: Recommendation(o),
   output: Codec(o),
-) -> Result(Json, String) {
+) -> Result(Value, String) {
   use encoded <- result.map(encode(output, recommendation.output))
-  json.object([
+  value.Object([
     #("output", encoded),
-    #("by", recommender(recommendation.by)),
-    #("explanation", explanation(recommendation.explanation)),
-    #("signals", facts(recommendation.signals)),
-    #("reads", json.array(recommendation.reads, ref)),
+    #("by", exact.from_json(recommender(recommendation.by))),
+    #("explanation", exact.from_json(explanation(recommendation.explanation))),
+    #("signals", exact.from_json(facts(recommendation.signals))),
+    #("reads", exact.from_json(json.array(recommendation.reads, ref))),
   ])
 }
 
 /// Decodes a recommendation written by `recommendation`.
-pub fn recommendation_decoder(output: Codec(o)) -> Decoder(Recommendation(o)) {
-  use item <- decode.field("output", decoder(output))
-  use by <- decode.field("by", recommender_decoder())
-  use explanation <- decode.field("explanation", explanation_decoder())
-  use signals <- decode.field("signals", facts_decoder())
-  use reads <- decode.field("reads", decode.list(ref_decoder()))
-  decode.success(Recommendation(
-    output: item,
-    by:,
-    explanation:,
-    signals:,
-    reads:,
+pub fn decode_recommendation(
+  raw: Value,
+  output: Codec(o),
+) -> Result(Recommendation(o), String) {
+  use members <- result.try(exact.members(raw))
+  use item <- result.try(
+    exact.output_member(members, "output", decode(output, _)),
+  )
+  use by <- result.try(exact.member(members, "by", recommender_decoder()))
+  use explanation <- result.try(exact.member(
+    members,
+    "explanation",
+    explanation_decoder(),
   ))
+  use signals <- result.try(exact.member(members, "signals", facts_decoder()))
+  use reads <- result.try(exact.member(
+    members,
+    "reads",
+    decode.list(ref_decoder()),
+  ))
+  Ok(Recommendation(output: item, by:, explanation:, signals:, reads:))
 }
 
 /// `{"category", "note"}`.
@@ -485,35 +511,58 @@ pub fn reason_decoder() -> Decoder(Reason) {
   decode.success(Reason(category:, note:))
 }
 
-/// Tagged `approve`, `reject` or `correct`.
-pub fn verdict(verdict: Verdict(o), output: Codec(o)) -> Result(Json, String) {
+/// Tagged `approve`, `reject` or `correct`, with a corrected output encoded
+/// exactly by the point's codec.
+pub fn verdict(verdict: Verdict(o), output: Codec(o)) -> Result(Value, String) {
   case verdict {
-    Approve -> Ok(tagged("approve", []))
-    Reject(reason: why) -> Ok(tagged("reject", [#("reason", reason(why))]))
+    Approve -> Ok(exact.tagged("approve", []))
+    Reject(reason: why) ->
+      Ok(exact.tagged("reject", [#("reason", exact.from_json(reason(why)))]))
     Correct(output: item, reason: why) -> {
       use encoded <- result.map(encode(output, item))
-      tagged("correct", [#("output", encoded), #("reason", reason(why))])
+      exact.tagged("correct", [
+        #("output", encoded),
+        #("reason", exact.from_json(reason(why))),
+      ])
     }
   }
 }
 
 /// Decodes a verdict written by `verdict`. Only the point's own codec can
 /// decode a corrected output.
-pub fn verdict_decoder(output: Codec(o)) -> Decoder(Verdict(o)) {
-  use tag <- decode.field("t", decode.string)
+pub fn decode_verdict(
+  raw: Value,
+  output: Codec(o),
+) -> Result(Verdict(o), String) {
+  use members <- result.try(exact.members(raw))
+  use tag <- result.try(exact.member(members, "t", decode.string))
   case tag {
-    "approve" -> decode.success(Approve)
+    "approve" -> Ok(Approve)
     "reject" -> {
-      use reason <- decode.field("reason", reason_decoder())
-      decode.success(Reject(reason:))
+      use why <- result.map(exact.member(members, "reason", reason_decoder()))
+      Reject(reason: why)
     }
     "correct" -> {
-      use item <- decode.field("output", decoder(output))
-      use reason <- decode.field("reason", reason_decoder())
-      decode.success(Correct(output: item, reason:))
+      use item <- result.try(
+        exact.output_member(members, "output", decode(output, _)),
+      )
+      use why <- result.map(exact.member(members, "reason", reason_decoder()))
+      Correct(output: item, reason: why)
     }
-    _ -> decode.failure(Approve, "Verdict")
+    _ -> Error("unknown verdict \"" <> tag <> "\"")
   }
+}
+
+/// A verdict as a json_blueprint codec over the forms `verdict` writes, for
+/// reading a client's text with `codec.decode_json` and writing it with
+/// `codec.encode_json`. Its schema admits any JSON.
+pub fn verdict_codec(output: Codec(o)) -> blueprint.Codec(Verdict(o)) {
+  blueprint.try_map(
+    blueprint.value(),
+    decode: decode_verdict(_, output),
+    encode: verdict(_, output),
+    placeholder: Approve,
+  )
 }
 
 /// The names of the verdicts a declaration allows, as a card lists them.
@@ -527,50 +576,58 @@ pub fn verdicts(allowed: Verdicts) -> Json {
   )
 }
 
-fn finding(finding: Finding(o), output: Codec(o)) -> Result(Json, String) {
+fn finding(finding: Finding(o), output: Codec(o)) -> Result(Value, String) {
   case finding {
-    Right -> Ok(tagged("right", []))
-    Wrong(truth: None) -> Ok(tagged("wrong", [#("truth", json.null())]))
+    Right -> Ok(exact.tagged("right", []))
+    Wrong(truth: None) -> Ok(exact.tagged("wrong", [#("truth", value.Null)]))
     Wrong(truth: Some(truth)) -> {
       use encoded <- result.map(encode(output, truth))
-      tagged("wrong", [#("truth", encoded)])
+      exact.tagged("wrong", [#("truth", encoded)])
     }
   }
 }
 
-fn finding_decoder(output: Codec(o)) -> Decoder(Finding(o)) {
-  use tag <- decode.field("t", decode.string)
-  case tag {
-    "right" -> decode.success(Right)
-    "wrong" -> {
-      use truth <- decode.field("truth", decode.optional(decoder(output)))
-      decode.success(Wrong(truth:))
-    }
-    _ -> decode.failure(Right, "Finding")
+fn decode_finding(raw: Value, output: Codec(o)) -> Result(Finding(o), String) {
+  use members <- result.try(exact.members(raw))
+  use tag <- result.try(exact.member(members, "t", decode.string))
+  case tag, list.key_find(members, "truth") {
+    "right", _ -> Ok(Right)
+    "wrong", Ok(value.Null) | "wrong", Error(Nil) -> Ok(Wrong(truth: None))
+    "wrong", Ok(truth) ->
+      decode(output, truth)
+      |> result.map(fn(truth) { Wrong(truth: Some(truth)) })
+    _, _ -> Error("unknown finding \"" <> tag <> "\"")
   }
 }
 
-/// `{"finding", "evidence", "source", "known_at"}`.
+/// `{"finding", "evidence", "source", "known_at"}`, with a true output
+/// encoded exactly by the point's codec.
 pub fn assessment(
   assessment: Assessment(o),
   output: Codec(o),
-) -> Result(Json, String) {
+) -> Result(Value, String) {
   use found <- result.map(finding(assessment.finding, output))
-  json.object([
+  value.Object([
     #("finding", found),
-    #("evidence", ref(assessment.evidence)),
-    #("source", json.string(assessment.source)),
-    #("known_at", time(assessment.known_at)),
+    #("evidence", exact.from_json(ref(assessment.evidence))),
+    #("source", value.String(assessment.source)),
+    #("known_at", exact.from_json(time(assessment.known_at))),
   ])
 }
 
 /// Decodes an assessment written by `assessment`.
-pub fn assessment_decoder(output: Codec(o)) -> Decoder(Assessment(o)) {
-  use finding <- decode.field("finding", finding_decoder(output))
-  use evidence <- decode.field("evidence", ref_decoder())
-  use source <- decode.field("source", decode.string)
-  use known_at <- decode.field("known_at", time_decoder())
-  decode.success(Assessment(finding:, evidence:, source:, known_at:))
+pub fn decode_assessment(
+  raw: Value,
+  output: Codec(o),
+) -> Result(Assessment(o), String) {
+  use members <- result.try(exact.members(raw))
+  use finding <- result.try(
+    exact.output_member(members, "finding", decode_finding(_, output)),
+  )
+  use evidence <- result.try(exact.member(members, "evidence", ref_decoder()))
+  use source <- result.try(exact.member(members, "source", decode.string))
+  use known_at <- result.try(exact.member(members, "known_at", time_decoder()))
+  Ok(Assessment(finding:, evidence:, source:, known_at:))
 }
 
 /// Tagged `deadline` or `superseded`.

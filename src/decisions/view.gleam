@@ -518,21 +518,25 @@ fn passthrough(
   )
 }
 
-/// A verdict that arrived as JSON text, decoded with the point's codec. A
-/// correction whose output is not this point's output does not decode.
+/// A verdict that arrived as JSON text from a client, decoded with the
+/// point's codec. The text is read within json_blueprint's default limits
+/// (1 MiB, 128 levels deep), a key given twice is refused, and a corrected
+/// output keeps its numbers exact. A correction whose output is not this
+/// point's output does not decode.
 pub fn verdict(
   text: String,
   output: Codec(o),
-) -> Result(Verdict(o), json.DecodeError) {
-  json.parse(text, wire.verdict_decoder(output))
+) -> Result(Verdict(o), blueprint.DecodeError) {
+  blueprint.decode_json(wire.verdict_codec(output), text)
 }
 
-/// A verdict as JSON, as a client sends it back.
+/// A verdict as JSON text, as a client sends it back, with a corrected
+/// output's numbers exact.
 pub fn verdict_to_json(
   verdict: Verdict(o),
   output: Codec(o),
-) -> Result(Json, String) {
-  wire.verdict(verdict, output)
+) -> Result(String, String) {
+  wire.verdict(verdict, output) |> result.map(value.to_string)
 }
 
 /// The ticket fields of a card document, read back by a client.

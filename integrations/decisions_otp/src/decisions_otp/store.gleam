@@ -49,7 +49,8 @@
 //// **Application rows are strings.** `put`, `get`, `add` and `rows` keep
 //// text, as a database column of type text would. Keep a typed row with
 //// a codec of `decisions/wire`: write
-//// `wire.encode(codec, value) |> result.map(json.to_string)` and read it
+//// `wire.encode(codec, value) |> result.map(value.to_string)` (with
+//// `json/blueprint/value`) and read it
 //// back with `wire.parse(codec, text)`.
 ////
 //// **Reading a point's occurrences.** `occurrences_of` and

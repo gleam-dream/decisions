@@ -24,6 +24,7 @@
 //// Target-independent: builds for Erlang and JavaScript.
 
 import decisions.{type Point}
+import decisions/internal/exact
 import decisions/model.{type Failure, type Model, type Resolver}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{type Outcome, type Policy}
@@ -37,6 +38,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
+import json/blueprint/value
 
 /// Agreement is `agreed` of `judged`, from verdicts and reviews. Accuracy
 /// is `right` of `assessed`, from assessments.
@@ -214,13 +216,14 @@ pub fn example(
   Ok(Example(as_of:, known:, prompt:, context:, reads:, expansions:))
 }
 
-/// The example as a versioned `"decision-example.v1"` document, as a
-/// durable job appends it to a training lake. An error means the codec
-/// cannot encode an output the example carries.
+/// The example as a versioned `"decision-example.v1"` document, as JSON
+/// text, as a durable job appends it to a training lake. Outputs keep their
+/// numbers exact, as the point's codec writes them. An error means the
+/// codec cannot encode an output the example carries.
 pub fn example_to_json(
   example: Example(o),
   output: Codec(o),
-) -> Result(Json, String) {
+) -> Result(String, String) {
   let known = example.known
   let pair = fn(name: String, pair: #(String, String)) {
     json.object([
@@ -236,7 +239,10 @@ pub fn example_to_json(
     list.try_map(verdicts(known), fn(verdict) {
       wire.verdict(verdict.1, output)
       |> result.map(fn(encoded) {
-        json.object([#("by", json.string(verdict.0)), #("verdict", encoded)])
+        value.Object([
+          #("by", value.String(verdict.0)),
+          #("verdict", encoded),
+        ])
       })
     }),
   )
@@ -245,16 +251,17 @@ pub fn example_to_json(
   )
   use final <- result.map(case occurrence.final(known) {
     Some(final) -> wire.encode(output, final)
-    None -> Ok(json.null())
+    None -> Ok(value.Null)
   })
-  json.object([
-    #("format", json.string("decision-example.v1")),
-    #("occurrence", json.string(known.id)),
-    #("point", json.string(known.point)),
-    #("as_of", wire.time(example.as_of)),
-    #("renderer", json.string(known.context.renderer)),
-    #("prompt", json.string(example.prompt)),
-    #(
+  let plain = fn(name: String, item: Json) { #(name, exact.from_json(item)) }
+  value.Object([
+    plain("format", json.string("decision-example.v1")),
+    plain("occurrence", json.string(known.id)),
+    plain("point", json.string(known.point)),
+    plain("as_of", wire.time(example.as_of)),
+    plain("renderer", json.string(known.context.renderer)),
+    plain("prompt", json.string(example.prompt)),
+    plain(
       "context",
       json.array(example.context, fn(pair) {
         json.object([
@@ -263,7 +270,7 @@ pub fn example_to_json(
         ])
       }),
     ),
-    #(
+    plain(
       "reads",
       json.array(example.reads, fn(pair) {
         let read: Read = pair.0
@@ -276,13 +283,14 @@ pub fn example_to_json(
       }),
     ),
     #("recommendation", recommendation),
-    #("policy_version", wire.optional(known.policy_version, json.int)),
-    #("expansions", json.array(example.expansions, pair("read", _))),
-    #("notes", json.array(occurrence.notes(known), pair("by", _))),
-    #("verdicts", json.preprocessed_array(verdicts)),
-    #("assessments", json.preprocessed_array(assessments)),
+    plain("policy_version", wire.optional(known.policy_version, json.int)),
+    plain("expansions", json.array(example.expansions, pair("read", _))),
+    plain("notes", json.array(occurrence.notes(known), pair("by", _))),
+    #("verdicts", value.Array(verdicts)),
+    #("assessments", value.Array(assessments)),
     #("final", final),
   ])
+  |> value.to_string
 }
 
 fn verdicts(known: Occurrence(o)) -> List(#(String, Verdict(o))) {

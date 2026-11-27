@@ -93,7 +93,6 @@ import decisions/wire.{type Codec}
 import gleam/bit_array
 import gleam/crypto
 import gleam/int
-import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
@@ -101,6 +100,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
+import json/blueprint/value
 
 // -- The declaration ----------------------------------------------------------
 
@@ -1910,8 +1910,10 @@ pub fn record_refusal(
   ))
   use draft <- result.try(load(desk, tx, rollback.occurrence))
   use verdict <- result.try(
-    json.parse(rollback.verdict, wire.verdict_decoder(desk.point.output))
-    |> result.replace_error(Unreadable("the refused verdict does not decode")),
+    value.parse(rollback.verdict, value.unlimited())
+    |> result.replace_error("the refused verdict does not parse")
+    |> result.try(wire.decode_verdict(_, desk.point.output))
+    |> result.map_error(Unreadable),
   )
   let refused =
     entry.VerdictRefused(
@@ -2878,7 +2880,7 @@ fn release(
               occurrence: current.id,
               by: validator.subject,
               seen:,
-              verdict: json.to_string(encoded),
+              verdict: value.to_string(encoded),
               reason:,
             ),
           ))

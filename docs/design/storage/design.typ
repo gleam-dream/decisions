@@ -48,7 +48,7 @@
     #attribute(name: "Review pending", type: "Flag", provenance: "derived")[Sampled, released and not yet reviewed.]
     #attribute(name: "Bundle", type: "Optional bundle key and size", provenance: "derived")[The bundle the occurrence belongs to, from its recommendation; none for one proposed alone and for a record not begun. `members` finds a bundle by it.]
   ]
-  #points([A stored entry is `Stored(seq, at, kind, event)`: the kind name as a column so the store can hold "at most one `released` per occurrence" behind a unique key, and the event as JSON text that only the point's codec decodes. `entry.to_stored` and `entry.from_stored` are the only translation, so an adapter never parses an entry.])
+  #points([A stored entry is `Stored(seq, at, kind, event)`: the kind name as a column so the store can hold "at most one `released` per occurrence" behind a unique key, and the event as JSON text that only the point's codec decodes. An event that holds an output (a recommendation, a verdict, an assessment) is written and read as a json_blueprint value, so the output's numbers are stored exactly as the point's codec writes them (#adr(61)). `entry.to_stored` and `entry.from_stored` are the only translation, so an adapter never parses an entry.])
 ])
 
 #section(title: "The contract, clause by clause", lead: "Each clause exists because a guarantee rests on the store and the core cannot provide it alone.", body: [
