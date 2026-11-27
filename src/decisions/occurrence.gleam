@@ -39,9 +39,9 @@ import decisions/model.{type Failure}
 import decisions/policy.{type Eligible, type Outcome, type Step}
 import decisions/store
 import decisions/vocabulary.{
-  type Assessment, type Effect, type ExpiryCause, type Facts, type Manifest,
-  type Parent, type Reason, type Recommendation, type Ref, type Subject,
-  type Trigger, type Verdict, Approve, Correct, Reject,
+  type Assessment, type Bundle, type Effect, type ExpiryCause, type Facts,
+  type Manifest, type Parent, type Reason, type Recommendation, type Ref,
+  type Subject, type Trigger, type Verdict, Approve, Correct, Reject,
 }
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -106,6 +106,8 @@ pub type Occurrence(output) {
     attempts: List(Attempt),
     trigger: Trigger,
     parent: Option(Parent),
+    /// The bundle it belongs to, when it was proposed with others.
+    bundle: Option(Bundle),
     subject: Subject,
     requester: Option(String),
     context: Manifest,
@@ -194,6 +196,7 @@ pub fn fold(
           context:,
           recommendation:,
           valid_until:,
+          bundle:,
         ),
         ..,
       ) as first,
@@ -216,6 +219,7 @@ pub fn fold(
               attempts:,
               trigger:,
               parent:,
+              bundle:,
               subject:,
               requester:,
               context:,
@@ -240,6 +244,7 @@ pub fn fold(
               attempts:,
               trigger:,
               parent:,
+              bundle:,
               subject:,
               requester:,
               context:,
@@ -361,6 +366,7 @@ pub fn pending_head(pending: Pending) -> store.Head {
     approved: [],
     may_not_decide: [],
     review_pending: False,
+    bundle: None,
   )
 }
 
@@ -487,6 +493,7 @@ pub fn head(occurrence: Occurrence(o)) -> store.Head {
       True, Released(..) -> reviews(occurrence) == []
       _, _ -> False
     },
+    bundle: occurrence.bundle,
   )
 }
 

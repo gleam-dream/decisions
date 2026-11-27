@@ -40,15 +40,15 @@
 //// Target-independent: builds for Erlang and JavaScript.
 
 import decisions/vocabulary.{
-  type Assessment, type Effect, type ExpiryCause, type Explanation, type Fact,
-  type Facts, type Finding, type Manifest, type Parent, type Reason,
+  type Assessment, type Bundle, type Effect, type ExpiryCause, type Explanation,
+  type Fact, type Facts, type Finding, type Manifest, type Parent, type Reason,
   type Recommendation, type Recommender, type Ref, type Subject, type Trigger,
   type Validator, type Verdict, type Verdicts, Agent, Approve, ApproveOrReject,
-  ApproveRejectOrCorrect, Assessment, Classifier, Correct, DeadlinePassed, Flag,
-  Manifest, ModelCall, NotPerformed, Number, OwnAct, ParentOccurrence, ParentRun,
-  Performed, Person, Reason, Receipt, Recommendation, Ref, Reject, Right,
-  RuleFired, Rules, RunAction, RunAnswer, Subject, Superseded, Text, Trigger,
-  Uncertain, Validator, Wrong,
+  ApproveRejectOrCorrect, Assessment, Bundle, Classifier, Correct,
+  DeadlinePassed, Flag, Manifest, ModelCall, NotPerformed, Number, OwnAct,
+  ParentOccurrence, ParentRun, Performed, Person, Reason, Receipt,
+  Recommendation, Ref, Reject, Right, RuleFired, Rules, RunAction, RunAnswer,
+  Subject, Superseded, Text, Trigger, Uncertain, Validator, Wrong,
 }
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
@@ -279,6 +279,21 @@ pub fn parent(parent: Parent) -> Json {
     ParentRun(run:) -> tagged("run", [#("id", json.string(run))])
     ParentOccurrence(id:) -> tagged("occurrence", [#("id", json.string(id))])
   }
+}
+
+/// A `Bundle` as JSON.
+pub fn bundle(bundle: Bundle) -> Json {
+  json.object([
+    #("key", json.string(bundle.key)),
+    #("size", json.int(bundle.size)),
+  ])
+}
+
+/// Decodes a `Bundle` written by `bundle`.
+pub fn bundle_decoder() -> Decoder(Bundle) {
+  use key <- decode.field("key", decode.string)
+  use size <- decode.field("size", decode.int)
+  decode.success(Bundle(key:, size:))
 }
 
 /// Decodes a `Parent` written by `parent`.

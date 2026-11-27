@@ -8,6 +8,7 @@ import decisions/store.{Conflict, Stored}
 import decisions/vocabulary
 import gleam/list
 import gleam/option
+import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
@@ -233,6 +234,7 @@ pub fn each_check_catches_its_broken_adapter_test() {
                         approved: [],
                         may_not_decide: [],
                         review_pending: False,
+                        bundle: option.None,
                       ),
                       [fake],
                     )
@@ -242,6 +244,24 @@ pub fn each_check_catches_its_broken_adapter_test() {
               }
             other -> other
           }
+        })
+      }),
+    ),
+    #(
+      "members returns a bundle's records of every point, in id order",
+      port(fn(p) {
+        // An adapter that returns a bundle's members in the order written.
+        store.Port(..p, members: fn(tx, bundle) {
+          p.members(tx, bundle) |> result.map(list.reverse)
+        })
+      }),
+    ),
+    #(
+      "a desk admits a bundle and tells when it is complete",
+      port(fn(p) {
+        // An adapter that sees only the first member of a bundle.
+        store.Port(..p, members: fn(tx, bundle) {
+          p.members(tx, bundle) |> result.map(list.take(_, 1))
         })
       }),
     ),

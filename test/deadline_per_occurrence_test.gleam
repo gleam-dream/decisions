@@ -740,6 +740,7 @@ pub fn a_recommendation_after_a_deadline_never_had_is_unreadable_test() {
           [],
         ),
         valid_until: None,
+        bundle: None,
       ),
     ),
   ]
