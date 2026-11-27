@@ -83,7 +83,9 @@ pub fn plain(encode: fn(a) -> Json, decoder: Decoder(a)) -> Codec(a) {
 }
 
 /// A json_blueprint codec over any JSON, through an encoder and a decoder.
-/// Its schema admits any value.
+/// Its schema admits any value. Encoding re-reads the text the encoder just
+/// wrote, which is trusted, so it parses without json_blueprint's limits for
+/// untrusted input (1 MiB, 128 levels deep).
 fn any_json(encode: fn(a) -> Json, decoder: Decoder(a)) -> blueprint.Codec(a) {
   blueprint.try_map(
     blueprint.value(),
@@ -92,7 +94,7 @@ fn any_json(encode: fn(a) -> Json, decoder: Decoder(a)) -> blueprint.Codec(a) {
       |> result.replace_error("the value does not decode")
     },
     encode: fn(item) {
-      value.parse(json.to_string(encode(item)), value.default_limits())
+      value.parse(json.to_string(encode(item)), value.unlimited())
       |> result.replace_error("the value does not encode")
     },
     placeholder: placeholder(decoder),

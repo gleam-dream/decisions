@@ -320,11 +320,11 @@ pub fn codec(output: Codec(o)) -> blueprint.Codec(View(o)) {
 }
 
 /// The output's schema as a json_blueprint value, rendered when a document
-/// is encoded rather than held by the card codec.
+/// is encoded rather than held by the card codec. The schema text is our own,
+/// so it parses without json_blueprint's limits for untrusted input.
 fn output_schema(output: Codec(o)) -> Option(value.Value) {
   use schema <- option.map(wire.schema(output))
-  let assert Ok(parsed) =
-    value.parse(json.to_string(schema), value.default_limits())
+  let assert Ok(parsed) = value.parse(json.to_string(schema), value.unlimited())
   parsed
 }
 
@@ -497,6 +497,8 @@ fn verdicts_codec() -> blueprint.Codec(Verdicts) {
 }
 
 /// A value kept in its `decisions/wire` JSON form inside the document.
+/// Encoding re-reads the text the wire encoder just wrote, which is trusted,
+/// so it parses without json_blueprint's limits for untrusted input.
 fn passthrough(
   encode: fn(a) -> Json,
   decoder: decode.Decoder(a),
@@ -509,7 +511,7 @@ fn passthrough(
       |> result.replace_error("does not decode")
     },
     encode: fn(item) {
-      value.parse(json.to_string(encode(item)), value.default_limits())
+      value.parse(json.to_string(encode(item)), value.unlimited())
       |> result.replace_error("does not encode")
     },
     placeholder:,
