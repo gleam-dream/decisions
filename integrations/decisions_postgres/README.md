@@ -3,9 +3,11 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-> **Breaking:** decisions_postgres 0.3.0 requires Sinal 0.2 and Grind 0.3,
-> whose schema version 15 must be applied first. See the
-> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md).
+> **Breaking:** decisions_postgres 0.3.0 requires decisions 0.2, Sinal 0.2 and
+> Grind 0.3, whose schema version 15 must be applied first. A verb runs only in a
+> transaction the package opens on a `Pool` and its `Tx` is opaque, a lock
+> timeout is a `LockTimeout`, and the port's clock can fail. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#decisions_postgres-030).
 
 The PostgreSQL store for [`decisions`](https://github.com/gleam-dream/decisions/blob/main/README.md): the storage port over
 the application's own transactions, the migrations that create its tables, the
@@ -14,6 +16,20 @@ append, and queue queries that never decode an entry. The detailed contract is
 the module documentation of `decisions_postgres`, `decisions_postgres/queue`,
 `decisions_postgres/live` and `decisions_postgres/telemetry`, and the storage
 and runtime contexts of the [design layer](https://github.com/gleam-dream/decisions/blob/main/docs/design/design-layer.pdf).
+
+## Install
+
+`decisions_postgres` is released by Git tag of this repository, not on Hex.
+The `pog` and `pgo` ranges must equal Grind's.
+
+```toml
+[dependencies]
+decisions = ">= 0.2.0 and < 0.3.0"
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.3.0", path = "integrations/decisions_postgres" }
+grind = ">= 0.3.0 and < 0.4.0"
+pog = ">= 4.1.0 and < 4.2.0"
+pgo = ">= 0.20.0 and < 0.21.0"
+```
 
 ## Wire it
 
@@ -197,6 +213,14 @@ Grind with any decision, since a replay finds its row taken.
 
 ## Upgrading to 0.3.0
 
+- Take decisions 0.2 (`decisions = ">= 0.2.0 and < 0.3.0"`).
+- Apply this package's migration 2 before a 0.3 node writes: `migrate(db)`,
+  or `priv/migrations/20261127000000-decisions_postgres_v2.sql` with the
+  application's tool. It adds the bundle columns and the `decisions_append`
+  function 0.3 calls, so a database at migration 1 refuses every append.
+- Run every verb through `transaction` or `transaction_with` on a `Pool`
+  (`decisions_postgres.pool(name)`); `migrate`, `sweep` and `queue.counts`
+  take the `Pool` too.
 - Take Grind 0.3 (`grind = ">= 0.3.0 and < 0.4.0"`) and Sinal 0.2.
 - Apply Grind's schema version 15 before starting a node that runs the
   workers. It builds an index concurrently, so run `grind.migrate` outside a

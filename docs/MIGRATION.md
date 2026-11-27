@@ -479,7 +479,8 @@ below 15. Version 15 builds an index with `CREATE INDEX CONCURRENTLY`, so run
 `grind.migrate` (or Grind's two mirrored files) outside a transaction and
 through a session-mode connection. Grind's
 [migration guide](https://github.com/gleam-dream/grind/blob/main/docs/MIGRATION.md)
-gives the rolling-upgrade order. This package's own tables do not change.
+gives the rolling-upgrade order. This package's own schema changes too; see
+the next section.
 
 The workers keep `ReplayAfterLeaseExpiry(10)`, so Grind 0.3 still replays a
 delivery whose handler crashed through lease-expiry recovery, and the
@@ -487,6 +488,17 @@ package's settlement of an abandoned delivery is unchanged. Two Grind 0.3
 changes are visible: a delivery that loses its lease is stopped at Grind's next
 lease renewal instead of running to its timeout, and Grind claims into every
 free slot with one statement.
+
+### The package's migration 2 keeps a head's bundle
+
+Apply the package's migration 2 (`priv/migrations/20261127000000-decisions_postgres_v2.sql`)
+before a 0.3 node writes. It adds `bundle_key` and `bundle_size` to
+`decisions_occurrences`, an index on them, and the `decisions_append` function
+0.3 calls with a record's bundle. A database at migration 1 refuses every append
+from 0.3, because migration 1 defines only the 15-argument `decisions_append`. Run `migrate(db)`, or
+apply the file with the application's tool, as for migration 1. The index is
+built with a plain `CREATE INDEX`, which blocks writes to `decisions_occurrences`
+while it builds.
 
 ### A verb runs only in a transaction the package opened
 
