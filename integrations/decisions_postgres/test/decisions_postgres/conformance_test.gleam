@@ -6,7 +6,6 @@ import decisions_postgres
 import gleam/list
 import gleam/string
 import kit
-import pog
 
 pub fn postgres_passes_every_conformance_check_test() {
   let #(name, store) = kit.store()
@@ -17,13 +16,12 @@ pub fn postgres_passes_every_conformance_check_test() {
         conformance.Adapter(
           port: decisions_postgres.port(store),
           inspect: decisions_postgres.inspection(),
-          handle: env.db,
           transaction: fn(body) {
-            case pog.transaction(env.db, body) {
-              Ok(Nil) -> Ok(Nil)
-              Error(pog.TransactionRolledBack(reason)) -> Error(reason)
-              Error(pog.TransactionQueryError(error)) ->
-                Error(string.inspect(error))
+            case kit.own(env, body) {
+              Ok(text) -> Ok(text)
+              Error(decisions_postgres.OwnFailed(reason)) -> Error(reason)
+              Error(decisions_postgres.LibraryFailed(failure)) ->
+                Error(decisions_postgres.describe(failure))
             }
           },
           cleanup: fn() { Nil },

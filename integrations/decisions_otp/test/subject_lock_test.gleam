@@ -42,7 +42,7 @@ pub fn a_lock_id_holds_nothing_test() {
   let waited = process.new_subject()
   process.spawn(fn() {
     process.send(waited, 0)
-    let assert Ok([]) = store.port().load(store.handle(s), lock)
+    let assert Ok([]) = store.transaction(s, store.port().load(_, lock))
     process.send(waited, monotonic_us())
   })
   // Seen positively: the second load started before the release and
@@ -52,15 +52,14 @@ pub fn a_lock_id_holds_nothing_test() {
   process.send(gate, Nil)
   let assert Ok(loaded) = process.receive(waited, 5000)
   assert loaded >= released
-  let handle = store.handle(s)
-  assert store.entries(handle, lock) == []
-  assert store.heads(handle) == []
-  assert store.port().waiting(handle, "p", about) == Ok([])
-  assert store.queue(handle, "finance") == []
-  assert store.occurrences_of(handle, "p", after: None, limit: 10).ids == []
-  assert store.inspection().head(handle, lock) == Ok(None)
+  assert store.entries(s, lock) == []
+  assert store.heads(s) == []
+  assert store.transaction(s, store.port().waiting(_, "p", about)) == Ok([])
+  assert store.queue(s, "finance") == []
+  assert store.occurrences_of(s, "p", after: None, limit: 10).ids == []
+  assert store.transaction(s, store.inspection().head(_, lock)) == Ok(None)
   let assert Ok(again) = store.restart(s, lab.config())
-  assert store.heads(store.handle(again)) == []
+  assert store.heads(again) == []
 }
 
 @external(erlang, "decisions_otp_ffi", "monotonic_us")
@@ -75,14 +74,17 @@ pub fn the_admissions_scenario_needs_the_subject_lock_test() {
       string.starts_with(scenario.name, "concurrent admissions")
     })
   let broken = fn() {
-    use target <- result.try(stress.in_memory(lab.config()))
+    use s <- result.try(
+      store.start(lab.config()) |> result.replace_error("no store"),
+    )
+    let target = stress.over_store(s, lab.config())
     let port = target.adapter.port
     // Lock ids are loaded in a transaction of their own, so the caller's
     // transaction holds no lock on them.
     let unlocked =
       port_types.Port(..port, load: fn(tx, id) {
         case string.starts_with(id, "decisions.subject-lock:") {
-          True -> port.load(store.handle(store.store_of(tx)), id)
+          True -> store.transaction(s, port.load(_, id))
           False -> port.load(tx, id)
         }
       })

@@ -64,7 +64,7 @@ fn unclaim(claims: Claims, id: Int) -> Nil
 /// A fresh target in a new schema, over a new Grind runtime (no consumers:
 /// the scenarios deliver through `decisions_otp/runtime` and this
 /// backlog).
-pub fn fresh() -> Result(Target(pog.Connection), String) {
+pub fn fresh() -> Result(Target(decisions_postgres.Tx), String) {
   let schema = "stress_" <> int.to_string(kit.unique())
   let offset = offset_new()
   let claims = claims_new()
@@ -75,7 +75,7 @@ fn over(
   schema: String,
   offset: Offset,
   claims: Claims,
-) -> Result(Target(pog.Connection), String) {
+) -> Result(Target(decisions_postgres.Tx), String) {
   let #(name, store) = kit.store()
   let options = kit.Options(..kit.options(), pool_size: 40)
   let env = kit.start_with(name, store, schema, options, [], [])
@@ -101,23 +101,15 @@ fn over(
       adapter: conformance.Adapter(
         port:,
         inspect: decisions_postgres.inspection(),
-        handle: db,
-        transaction: fn(body) {
-          case pog.transaction(db, body) {
-            Ok(Nil) -> Ok(Nil)
-            Error(pog.TransactionRolledBack(reason)) -> Error(reason)
-            Error(pog.TransactionQueryError(error)) ->
-              Error(string.inspect(error))
-          }
-        },
+        transaction: fn(body) { in_transaction(env, body) },
         cleanup: fn() { kit.stop(env) },
       ),
-      backlog: backlog(db, fn() { clock(db) }, claims),
+      backlog: backlog(env, fn() { kit.within(env, clock) }, claims),
       add: fn(tx, table, row) {
         pog.query("INSERT INTO test_rows (tbl, value) VALUES ($1, $2)")
         |> pog.parameter(pog.text(table))
         |> pog.parameter(pog.text(row))
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
         |> result.replace(Nil)
         |> result.map_error(string.inspect)
       },
@@ -125,13 +117,13 @@ fn over(
         pog.query("SELECT value FROM test_rows WHERE tbl = $1 ORDER BY id")
         |> pog.parameter(pog.text(table))
         |> pog.returning(decode.at([0], decode.string))
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
         |> result.map(fn(returned) { returned.rows })
         |> result.map_error(string.inspect)
       },
       queue: fn(set, limit) {
         queue.page(
-          db,
+          env.pool,
           for: Validator("stress-queue-reader", [set]),
           limit:,
           after: None,
@@ -165,7 +157,9 @@ fn poison(db: pog.Connection, id: String) -> Result(Nil, String) {
       |> result.replace(Nil)
     }
     let plain = fn(sql) {
-      pog.query(sql) |> pog.execute(tx) |> result.replace(Nil)
+      pog.query(sql)
+      |> pog.execute(tx)
+      |> result.replace(Nil)
     }
     use Nil <- result.try(plain(
       "ALTER TABLE decisions_entries DISABLE TRIGGER decisions_entries_append_only",
@@ -181,19 +175,28 @@ fn poison(db: pog.Connection, id: String) -> Result(Nil, String) {
   |> result.map_error(string.inspect)
 }
 
+/// Run `body` in a transaction on the target's pool, with its error kept
+/// as text.
+fn in_transaction(
+  env: kit.Env,
+  body: fn(decisions_postgres.Tx) -> Result(a, String),
+) -> Result(a, String) {
+  case kit.own(env, body) {
+    Ok(value) -> Ok(value)
+    Error(decisions_postgres.OwnFailed(reason)) -> Error(reason)
+    Error(decisions_postgres.LibraryFailed(failure)) ->
+      Error(decisions_postgres.describe(failure))
+  }
+}
+
 fn backlog(
-  db: pog.Connection,
+  env: kit.Env,
   now: fn() -> Timestamp,
   claims: Claims,
-) -> Backlog(pog.Connection) {
+) -> Backlog(decisions_postgres.Tx) {
+  let db = env.db
   Backlog(
-    transaction: fn(body) {
-      case pog.transaction(db, body) {
-        Ok(handled) -> Ok(handled)
-        Error(pog.TransactionRolledBack(reason)) -> Error(reason)
-        Error(pog.TransactionQueryError(error)) -> Error(string.inspect(error))
-      }
-    },
+    transaction: fn(body) { in_transaction(env, body) },
     now:,
     due: fn(at, limit) {
       pog.query(
@@ -221,7 +224,7 @@ fn backlog(
       )
       |> wake_parameters(wake)
       |> pog.returning(decode.at([0], decode.int))
-      |> rows(tx)
+      |> rows(decisions_postgres.connection(tx))
       |> result.map(fn(found) { found != [] })
     },
     add_wake: fn(tx, wake: Wake) {
@@ -233,7 +236,7 @@ fn backlog(
          DO NOTHING",
       )
       |> wake_parameters(wake)
-      |> rows(tx)
+      |> rows(decisions_postgres.connection(tx))
       |> result.replace(Nil)
     },
     undelivered: fn(limit) {
@@ -263,14 +266,14 @@ fn backlog(
       )
       |> pog.parameter(pog.int(pending.id))
       |> pog.returning(decode.at([0], decode.int))
-      |> rows(tx)
+      |> rows(decisions_postgres.connection(tx))
       |> result.map(fn(found) { found != [] })
     },
     submit: fn(tx, key, payload) {
       pog.query("INSERT INTO test_triggers (key, payload) VALUES ($1, $2)")
       |> pog.parameter(pog.text(key))
       |> pog.parameter(pog.text(payload))
-      |> rows(tx)
+      |> rows(decisions_postgres.connection(tx))
       |> result.replace(Nil)
     },
     claim_trigger: fn() {
@@ -310,7 +313,7 @@ fn backlog(
       pog.query("DELETE FROM test_triggers WHERE id = $1 RETURNING id")
       |> pog.parameter(pog.int(submitted.id))
       |> pog.returning(decode.at([0], decode.int))
-      |> rows(tx)
+      |> rows(decisions_postgres.connection(tx))
       |> result.map(fn(found) { found != [] })
     },
     release: fn(submitted: Submitted) { unclaim(claims, submitted.id) },
@@ -334,7 +337,7 @@ fn backlog(
           |> pog.parameter(pog.text(key))
           |> pog.parameter(pog.int(wire.milliseconds(now()) + retry_backoff_ms))
           |> pog.returning(decode.at([0], decode.int))
-          |> rows(tx)
+          |> rows(decisions_postgres.connection(tx))
           |> result.map(fn(found) { list.first(found) |> result.unwrap(0) })
         }
       }
@@ -350,7 +353,7 @@ fn backlog(
           )
           |> wake_parameters(wake)
           |> pog.parameter(pog.text(reason))
-          |> rows(tx)
+          |> rows(decisions_postgres.connection(tx))
           |> result.replace(Nil)
         NoticeJob(pending:) ->
           pog.query(
@@ -360,7 +363,7 @@ fn backlog(
           )
           |> pog.parameter(pog.int(pending.id))
           |> pog.parameter(pog.text(reason))
-          |> rows(tx)
+          |> rows(decisions_postgres.connection(tx))
           |> result.replace(Nil)
         TriggerJob(submitted:) ->
           pog.query(
@@ -370,7 +373,7 @@ fn backlog(
           )
           |> pog.parameter(pog.int(submitted.id))
           |> pog.parameter(pog.text(reason))
-          |> rows(tx)
+          |> rows(decisions_postgres.connection(tx))
           |> result.replace(Nil)
       }
     },
@@ -479,14 +482,17 @@ fn still_there(db: pog.Connection, id: Int) -> Bool {
   }
 }
 
-fn lock_occurrence(tx: pog.Connection, id: String) -> Result(Nil, StoreError) {
+fn lock_occurrence(
+  tx: decisions_postgres.Tx,
+  id: String,
+) -> Result(Nil, StoreError) {
   pog.query("SELECT id FROM decisions_occurrences WHERE id = $1 FOR UPDATE")
   |> pog.parameter(pog.text(id))
-  |> rows(tx)
+  |> rows(decisions_postgres.connection(tx))
   |> result.replace(Nil)
 }
 
-fn lock_job(tx: pog.Connection, job: Job) -> Result(Bool, StoreError) {
+fn lock_job(tx: decisions_postgres.Tx, job: Job) -> Result(Bool, StoreError) {
   let query = case job {
     WakeJob(wake:) ->
       pog.query(
@@ -511,7 +517,7 @@ fn lock_job(tx: pog.Connection, job: Job) -> Result(Bool, StoreError) {
   }
   query
   |> pog.returning(decode.at([0], decode.int))
-  |> rows(tx)
+  |> rows(decisions_postgres.connection(tx))
   |> result.map(fn(found) { found != [] })
 }
 

@@ -95,8 +95,8 @@ pub fn a_restart_keeps_only_what_was_committed_test() {
   store.advance(s, duration.hours(1))
   let before = store.now(s)
   let assert Ok(again) = store.restart(s, store.defaults())
-  assert store.get(store.handle(again), "accounts", "ana") == Ok("10")
-  assert store.get(store.handle(again), "accounts", "bia") == Error(Nil)
+  assert lab.within(again, store.get(_, "accounts", "ana")) == Ok("10")
+  assert lab.within(again, store.get(_, "accounts", "bia")) == Error(Nil)
   // The clock carries its offset over.
   let after = store.now(again)
   assert duration.to_milliseconds(timestamp.difference(before, after)) < 1000
@@ -116,7 +116,7 @@ pub fn a_raise_inside_a_transaction_keeps_nothing_and_raises_again_test() {
     process.new_selector()
     |> process.select_specific_monitor(monitor, fn(down) { down })
     |> process.selector_receive(1000)
-  assert store.get(store.handle(s), "accounts", "ana") == Error(Nil)
+  assert lab.within(s, store.get(_, "accounts", "ana")) == Error(Nil)
 }
 
 pub fn rows_added_come_back_in_order_test() {
@@ -129,7 +129,7 @@ pub fn rows_added_come_back_in_order_test() {
       Ok(Nil)
     })
   let assert [#(_, "first"), #(_, "second"), #(_, "third")] =
-    store.rows(store.handle(s), "outbox")
+    lab.within(s, store.rows(_, "outbox"))
 }
 
 fn raise() -> Result(Nil, Nil) {
@@ -170,7 +170,7 @@ pub fn the_asker_does_not_see_their_own_card_test() {
           |> decisions.asked_by("bia"),
       )
     })
-  assert store.queue(store.handle(s), "finance") == ["refund-1"]
-  assert store.queue_for(store.handle(s), lab.bia) == []
-  assert store.queue_page_for(store.handle(s), lab.felipe, 50) == ["refund-1"]
+  assert store.queue(s, "finance") == ["refund-1"]
+  assert store.queue_for(s, lab.bia) == []
+  assert store.queue_page_for(s, lab.felipe, 50) == ["refund-1"]
 }

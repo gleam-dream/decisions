@@ -17,7 +17,8 @@ import pog
 fn at_level(level: String, body) {
   fn(tx) {
     let assert Ok(_) =
-      pog.query("SET TRANSACTION ISOLATION LEVEL " <> level) |> pog.execute(tx)
+      pog.query("SET TRANSACTION ISOLATION LEVEL " <> level)
+      |> pog.execute(decisions_postgres.connection(tx))
     body(tx)
   }
 }
@@ -74,11 +75,12 @@ pub fn a_subject_lock_stores_nothing_test() {
   let assert Ok(_) =
     kit.tx(env, fn(tx) { decisions.happened(desk, tx, "closed", about:) })
   let inspect = decisions_postgres.inspection()
-  let assert Ok(None) = inspect.head(env.db, lock)
-  let assert Ok([]) = decisions_postgres.port(store).load(env.db, lock)
-  let assert Ok(wakes) = inspect.wakes(env.db)
+  let assert Ok(None) = kit.within(env, inspect.head(_, lock))
+  let assert Ok([]) =
+    kit.within(env, decisions_postgres.port(store).load(_, lock))
+  let assert Ok(wakes) = kit.within(env, inspect.wakes)
   assert !list.any(wakes, fn(w) { w.occurrence == lock })
-  let assert Ok(notices) = inspect.notices(env.db)
+  let assert Ok(notices) = kit.within(env, inspect.notices)
   assert !list.any(notices, fn(n) { n.occurrence == lock })
   assert kit.scalar(
       env.db,

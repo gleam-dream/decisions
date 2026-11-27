@@ -62,7 +62,7 @@ pub fn a_restart_keeps_every_acknowledged_commit_test() {
     list.each(writers, lab.kill)
     let acknowledged = drain(acked, [first])
     let kept =
-      store.rows(store.handle(again), "acked")
+      lab.within(again, store.rows(_, "acked"))
       |> list.map(fn(pair) { pair.1 })
       |> set.from_list
     assert acknowledged != []
@@ -138,7 +138,7 @@ fn read_until_done(
   reads: Int,
   wrong: Int,
 ) -> #(Int, Int) {
-  let seen = store.queue(store.handle(s), "s")
+  let seen = store.queue(s, "s")
   let wrong = case seen {
     ["occ-x"] -> wrong
     _ -> wrong + 1
@@ -182,10 +182,8 @@ pub fn a_page_reader_does_not_skip_a_late_commit_test() {
         entry(1, "recommended"),
       ])
     })
-  let page =
-    store.settled_since(store.handle(s), "q", since:, after: None, limit: 10)
-  let points =
-    store.occurrences_of(store.handle(s), "q", after: None, limit: 10)
+  let page = store.settled_since(s, "q", since:, after: None, limit: 10)
+  let points = store.occurrences_of(s, "q", after: None, limit: 10)
   assert page.ids == ["b"]
   assert points.ids == ["b"]
   process.send(gate, Nil)
@@ -196,17 +194,14 @@ pub fn a_page_reader_does_not_skip_a_late_commit_test() {
     |> process.selector_receive(1000)
   let cursor =
     last_cursor(fn(after) {
-      store.settled_since(store.handle(s), "q", since:, after:, limit: 1)
+      store.settled_since(s, "q", since:, after:, limit: 1)
     })
-  let next =
-    store.settled_since(store.handle(s), "q", since:, after: cursor, limit: 10)
+  let next = store.settled_since(s, "q", since:, after: cursor, limit: 10)
   assert next.ids == ["a"]
   let point_cursor =
-    last_cursor(fn(after) {
-      store.occurrences_of(store.handle(s), "q", after:, limit: 1)
-    })
+    last_cursor(fn(after) { store.occurrences_of(s, "q", after:, limit: 1) })
   assert point_cursor != None
-  let all = store.occurrences_of(store.handle(s), "q", after: None, limit: 10)
+  let all = store.occurrences_of(s, "q", after: None, limit: 10)
   assert all.ids == ["b", "a"]
 }
 
@@ -259,9 +254,15 @@ pub fn a_stuck_job_does_not_block_the_jobs_behind_it_test() {
     ))
   // Two stuck wake-ups due before the healthy one.
   let assert Ok(Nil) =
-    port.schedule(store.handle(s), "stuck", "s-1", [wire.from_milliseconds(1)])
+    store.transaction(
+      s,
+      port.schedule(_, "stuck", "s-1", [wire.from_milliseconds(1)]),
+    )
   let assert Ok(Nil) =
-    port.schedule(store.handle(s), "stuck", "s-2", [wire.from_milliseconds(2)])
+    store.transaction(
+      s,
+      port.schedule(_, "stuck", "s-2", [wire.from_milliseconds(2)]),
+    )
   store.advance(s, duration.minutes(2))
   let tree =
     lab.start_runtime(
@@ -336,11 +337,10 @@ pub fn a_validator_s_page_is_the_head_of_their_queue_test() {
       ))
     store.advance(s, duration.milliseconds(1))
   })
-  let everything = store.queue_for(store.handle(s), lab.bia)
+  let everything = store.queue_for(s, lab.bia)
   assert list.length(everything) == 60
-  assert store.queue_page_for(store.handle(s), lab.bia, 7)
-    == list.take(everything, 7)
-  assert store.queue_page_for(store.handle(s), lab.bia, 100) == everything
+  assert store.queue_page_for(s, lab.bia, 7) == list.take(everything, 7)
+  assert store.queue_page_for(s, lab.bia, 100) == everything
 }
 
 /// O7. A wake-up still backing off is not taken by a second runtime.
@@ -353,7 +353,7 @@ pub fn a_wake_up_backing_off_is_not_taken_test() {
   let jobs = store.backlog(s)
   let wake = port_types.Wake("p", "o-1", wire.from_milliseconds(1))
   let assert Ok(Nil) =
-    store.port().schedule(store.handle(s), "p", "o-1", [wake.at])
+    store.transaction(s, store.port().schedule(_, "p", "o-1", [wake.at]))
   let assert Ok(1) =
     store.transaction(s, fn(tx) { jobs.failed(tx, backlog.WakeJob(wake), "x") })
   assert store.transaction(s, fn(tx) { jobs.take_wake(tx, wake) }) == Ok(False)

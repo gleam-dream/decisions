@@ -28,8 +28,8 @@ fn count(env: kit.Env, sql: String, params: List(pog.Value)) -> Int {
 /// What follows the line point: once every member of the bundle has
 /// settled, recommend the payout under a key derived from the bundle.
 fn follower(
-  items: decisions.Desk(String, pog.Connection),
-  payout: decisions.Desk(String, pog.Connection),
+  items: decisions.Desk(String, decisions_postgres.Tx),
+  payout: decisions.Desk(String, decisions_postgres.Tx),
 ) -> decisions_postgres.Follower {
   #(decisions.name(decisions.point_of(items)), fn(tx, id) {
     use known <- result.try(
@@ -173,12 +173,12 @@ pub fn a_bundle_key_longer_than_an_id_is_refused_before_the_append_test() {
   let long = string.repeat("k", decisions_postgres.max_name_bytes + 1)
   let id = kit.tag("long_bundle")
   let assert Error(store.Conflict(detail)) =
-    port.append(
-      env.db,
+    kit.within(env, port.append(
+      _,
       id,
       head(kit.tag("p"), Some(bundle_of(long, 1))),
       recommended(),
-    )
+    ))
   assert string.contains(detail, "the bundle key")
   assert count(env, "SELECT count(*) FROM decisions_occurrences WHERE id = $1", [
       pog.text(id),
@@ -192,12 +192,12 @@ pub fn the_schema_keeps_a_bundle_whole_test() {
   let port = decisions_postgres.port(env.store)
   let id = kit.tag("raw_bundle")
   let assert Ok(Nil) =
-    port.append(
-      env.db,
+    kit.within(env, port.append(
+      _,
       id,
       head(kit.tag("p"), Some(bundle_of(kit.tag("b"), 2))),
       recommended(),
-    )
+    ))
   let violated = fn(sql) {
     case pog.query(sql) |> pog.parameter(pog.text(id)) |> pog.execute(env.db) {
       Ok(_) -> "accepted"
@@ -235,7 +235,7 @@ pub fn the_version_1_append_still_writes_test() {
     |> pog.parameter(pog.text(id))
     |> pog.execute(env.db)
   let assert Ok(Some(written)) =
-    decisions_postgres.inspection().head(env.db, id)
+    kit.within(env, decisions_postgres.inspection().head(_, id))
   assert written.bundle == None
   assert written.status == store.Recommended
 }
@@ -248,16 +248,22 @@ pub fn members_reads_a_bundle_in_id_order_across_points_test() {
   let ids = [kit.tag("m-c"), kit.tag("m-a"), kit.tag("m-b")]
   list.index_map(ids, fn(id, n) {
     let assert Ok(Nil) =
-      port.append(
-        env.db,
+      kit.within(env, port.append(
+        _,
         id,
         head("point-" <> int.to_string(n % 2), Some(bundle)),
         recommended(),
-      )
+      ))
   })
   let assert Ok(Nil) =
-    port.append(env.db, kit.tag("other"), head("point-0", None), recommended())
-  let assert Ok(found) = port.members(env.db, vocabulary.bundle_key(bundle))
+    kit.within(env, port.append(
+      _,
+      kit.tag("other"),
+      head("point-0", None),
+      recommended(),
+    ))
+  let assert Ok(found) =
+    kit.within(env, port.members(_, vocabulary.bundle_key(bundle)))
   assert list.map(found, fn(pair) { pair.0 }) == list.sort(ids, string.compare)
   assert list.all(found, fn(pair) { { pair.1 }.bundle == Some(bundle) })
 }

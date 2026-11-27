@@ -15,13 +15,14 @@
 //// }
 //// ```
 ////
-//// What these queries return is what was committed when they ran. A card
+//// `db` is the application's pool (`decisions_postgres.pool`). What
+//// these queries return is what was committed when they ran. A card
 //// on a page may be decided by someone else a moment later; the verdict
 //// then gets `decisions.AlreadyDecided`, which the page cannot prevent.
 
 import decisions/store.{type Status}
 import decisions/vocabulary.{type Subject, type Validator}
-import decisions_postgres
+import decisions_postgres.{type Pool}
 import decisions_postgres/internal/sql
 import gleam/dynamic/decode
 import gleam/int
@@ -54,7 +55,7 @@ pub type Queued {
 /// occurrence_id)`, scanned once per set the validator holds and stopped
 /// after `limit` rows each; `due_order` is the due time, or `infinity`.
 pub fn page(
-  db: pog.Connection,
+  db: Pool,
   for validator: Validator,
   limit limit: Int,
   after after: Option(Queued),
@@ -69,7 +70,7 @@ pub fn page(
 /// Index: `decisions_awaiting_point_queue (set_name, point, due_order,
 /// arrived, occurrence_id)`.
 pub fn page_at(
-  db: pog.Connection,
+  db: Pool,
   point point: String,
   for validator: Validator,
   limit limit: Int,
@@ -79,7 +80,7 @@ pub fn page_at(
 }
 
 fn page_of(
-  db: pog.Connection,
+  db: Pool,
   point: Option(String),
   validator: Validator,
   limit: Int,
@@ -151,10 +152,7 @@ pub type Count {
 /// Index: `decisions_occurrences_status (point, status)`, read without the
 /// table (an index-only scan once the table is vacuumed). It counts every
 /// occurrence of the point, so its cost grows with the point's history.
-pub fn counts(
-  db: pog.Connection,
-  point: String,
-) -> Result(List(Count), pog.QueryError) {
+pub fn counts(db: Pool, point: String) -> Result(List(Count), pog.QueryError) {
   pog.query(
     "SELECT status, count(*) FROM decisions_occurrences
      WHERE point = $1 GROUP BY status ORDER BY status",
@@ -185,7 +183,7 @@ pub type Summary {
 /// Index: `decisions_occurrences_subject (subject_kind, subject_id,
 /// arrived DESC, id DESC)`.
 pub fn about(
-  db: pog.Connection,
+  db: Pool,
   subject: Subject,
   limit limit: Int,
 ) -> Result(List(Summary), pog.QueryError) {
@@ -215,7 +213,7 @@ pub fn about(
 /// Index: `decisions_occurrences_review (point, arrived, id) WHERE
 /// review_pending`.
 pub fn review_queue(
-  db: pog.Connection,
+  db: Pool,
   point: String,
   limit limit: Int,
 ) -> Result(List(String), pog.QueryError) {
@@ -236,7 +234,7 @@ pub fn review_queue(
 /// Index: `decisions_occurrences_review_all (arrived, id) WHERE
 /// review_pending`.
 pub fn review_queue_all(
-  db: pog.Connection,
+  db: Pool,
   limit limit: Int,
 ) -> Result(List(Summary), pog.QueryError) {
   pog.query(
@@ -262,7 +260,7 @@ pub fn review_queue_all(
 ///
 /// Index: `decisions_occurrences_point (point, id)`.
 pub fn occurrences_of(
-  db: pog.Connection,
+  db: Pool,
   point point: String,
   limit limit: Int,
   after after: Option(String),
@@ -293,7 +291,7 @@ pub fn occurrences_of(
 /// Index: `decisions_occurrences_pending (point, arrived, id) WHERE status
 /// = 'pending'`; a page reads from its cursor.
 pub fn pending(
-  db: pog.Connection,
+  db: Pool,
   point point: String,
   limit limit: Int,
   after after: Option(Summary),
@@ -360,7 +358,7 @@ pub opaque type Position {
 /// Index: `decisions_settled_point (point, admitted_xid, id)`; a page reads
 /// from its cursor.
 pub fn settled_since(
-  db: pog.Connection,
+  db: Pool,
   point point: String,
   since since: Timestamp,
   limit limit: Int,
@@ -422,7 +420,7 @@ fn summary_decoder() -> decode.Decoder(Summary) {
 ///
 /// Index: the primary key of `decisions_occurrences`.
 pub fn positions(
-  db: pog.Connection,
+  db: Pool,
   ids: List(String),
 ) -> Result(List(#(String, Int)), pog.QueryError) {
   pog.query(
@@ -449,7 +447,7 @@ pub type Aside {
 /// Index: `decisions_occurrences_set_aside (set_aside_at, id) WHERE
 /// set_aside_at IS NOT NULL`.
 pub fn set_aside(
-  db: pog.Connection,
+  db: Pool,
   limit limit: Int,
 ) -> Result(List(Aside), pog.QueryError) {
   pog.query(
@@ -469,9 +467,7 @@ pub fn set_aside(
   |> rows(db)
 }
 
-fn rows(
-  query: pog.Query(a),
-  db: pog.Connection,
-) -> Result(List(a), pog.QueryError) {
-  pog.execute(query, db) |> result.map(fn(returned) { returned.rows })
+fn rows(query: pog.Query(a), db: Pool) -> Result(List(a), pog.QueryError) {
+  pog.execute(query, sql.pool_connection(db))
+  |> result.map(fn(returned) { returned.rows })
 }

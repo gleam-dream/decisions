@@ -14,14 +14,13 @@ import gleam/option.{None, Some}
 import gleam/string
 import gleam/time/duration
 import kit
-import pog
 import sinal
 
 /// An executor that writes its effect, then, the first time it runs for an
 /// output marked `block`, tells `parent` it is inside the transaction and
 /// waits to be killed.
 fn blocking(parent: process.Subject(process.Pid)) {
-  fn(tx: pog.Connection, released: decisions.Released(String)) {
+  fn(tx: decisions_postgres.Tx, released: decisions.Released(String)) {
     let written = kit.record_effect(tx, released)
     case
       string.contains(decisions.output(released), "block")

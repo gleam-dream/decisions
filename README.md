@@ -1659,8 +1659,8 @@ import decisions_postgres
 /// The running pieces an application keeps.
 pub type Wired {
   Wired(
-    db: pog.Connection,
-    refunds: decisions.Desk(String, pog.Connection),
+    db: decisions_postgres.Pool,
+    refunds: decisions.Desk(String, decisions_postgres.Tx),
     store: decisions_postgres.Store,
   )
 }
@@ -1673,7 +1673,7 @@ pub fn migrate_at_deploy(pool: pog.Config) -> Result(Nil, String) {
     pog.start(pool) |> result.replace_error("no database to migrate"),
   )
   let migrated =
-    decisions_postgres.migrate(started.data)
+    decisions_postgres.migrate(decisions_postgres.pool(pool.pool_name))
     |> result.map_error(decisions_postgres.describe_migrate_error)
   process.unlink(started.pid)
   process.kill(started.pid)
@@ -1720,7 +1720,8 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
     |> supervisor.start
     |> result.replace_error("the supervision tree did not start"),
   )
-  let db = grind.connection(jobs)
+  // Grind owns the pool; the package reaches it by its name.
+  let db = decisions_postgres.pool(pool.pool_name)
   use _ <- result.try(
     decisions_postgres.sweep(store, db)
     |> result.replace_error("the sweep could not read the store"),
@@ -1732,11 +1733,16 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
 
 <!-- prettier-ignore-end -->
 
-Run each verb in your transaction at `READ COMMITTED`; the port refuses another
-isolation level with `Conflict`, because the subject lock relies on each
-statement seeing what the lock's previous holder committed. Or run it through
-`decisions_postgres.transaction`, `transaction_with` (a body that also fails
-with your own error) and `decide`. The adapter's guarantees rest on the
+Run each verb through `decisions_postgres.transaction`, `transaction_with` (a
+body that also fails with your own error), `refusing` or `decide`. They take
+the pool (`decisions_postgres.pool(name)`) and hand the body a `Tx`, the only
+value the port accepts, so a verb can never run outside a transaction, where
+its lock, the gated tool's writes and the release would commit apart; and no
+helper can be handed a transaction, so none commits one early. Your own statements in the same
+transaction run on `decisions_postgres.connection(tx)`. The transaction runs at
+`READ COMMITTED`; the port refuses another isolation level with `Conflict`,
+because the subject lock relies on each statement seeing what the lock's
+previous holder committed. The adapter's guarantees rest on the
 database: an advisory lock on an id that does not exist yet, a savepoint around
 the gated tool, a unique index that refuses a second release, a foreign key
 that refuses a gap, and a trigger that refuses any change to an entry. A follower's failure is handled by the same four answers, with the same 20

@@ -121,7 +121,7 @@ pub fn a_failed_model_is_recorded_and_reported_test() {
   assert report.occurrence == "m-1"
   assert report.correlation == correlation.from_key("m-1")
   let assert Error(decisions.NotRecommended(attempts: [_])) =
-    decisions.read(desk, store.handle(s), occurrence: "m-1")
+    store.transaction(s, decisions.read(desk, _, occurrence: "m-1"))
 }
 
 pub fn a_parallel_replay_tallies_as_the_sequential_one_test() {

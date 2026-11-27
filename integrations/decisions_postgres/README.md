@@ -17,7 +17,10 @@ and runtime contexts of the [design layer](https://github.com/gleam-dream/decisi
 
 ## Wire it
 
-The application owns the pool and the Grind runtime. In this order:
+The application owns the pool and the Grind runtime. The package reaches the
+pool by its name: `decisions_postgres.pool(config.pool_name)`, with the
+`pog.Config` the application (or its Grind runtime) starts the pool from. In
+this order:
 
 1. Run `migrate(db)` at deploy time with a role that may own DDL, or apply the
    SQL in `priv/migrations` with the application's tool, before any worker
@@ -40,12 +43,18 @@ The application owns the pool and the Grind runtime. In this order:
 5. Start Grind in the application's supervision tree.
 6. Run `sweep(store, db)`, so that every pending wake-up and every
    undelivered notice of a followed point has a job.
-7. Run each verb in a transaction at `READ COMMITTED`, the PostgreSQL default
-   (the port refuses another level with `Conflict`),
-   or through `transaction`, `transaction_with` (a body that also fails with
-   the application's own error), `decide`, or `refusing` (the same transaction
-   in the shape of a verb, for `decisions_otp/isolated.recommend_when`'s
-   `in:`). To admit a trigger, call `decisions.happened` and then
+7. Run each verb through `transaction`, `transaction_with` (a body that also
+   fails with the application's own error), `decide`, or `refusing` (the same
+   transaction in the shape of a verb, for
+   `decisions_otp/isolated.recommend_when`'s `in:`). They take the pool and
+   hand the body a `Tx`, the only value the port accepts: a verb never runs
+   outside a transaction, and no helper can be handed a transaction, so none
+   commits one early. A helper called inside another's body with the pool
+   runs a separate transaction on another connection, which commits by
+   itself.
+   The application's own statements in that transaction run on
+   `connection(tx)`. The transaction runs at `READ COMMITTED`, the PostgreSQL
+   default; the port refuses another level with `Conflict`. To admit a trigger, call `decisions.happened` and then
    `decisions.expect` in the transaction that receives it: `happened` takes
    the subject's lock, so two admissions about one subject run one after the
    other and the second supersedes the first's expectation. In the other

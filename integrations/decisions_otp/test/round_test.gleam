@@ -33,8 +33,8 @@ fn quick(config: runtime.Config(tx)) -> runtime.Config(tx) {
 }
 
 fn calls(counter: store.Store, name: String) -> Int {
-  store.add(store.handle(counter), "calls", name)
-  store.rows(store.handle(counter), "calls")
+  lab.within(counter, store.add(_, "calls", name))
+  lab.within(counter, store.rows(_, "calls"))
   |> list.count(fn(pair) { pair.1 == name })
 }
 
@@ -104,7 +104,7 @@ pub fn a_handler_failure_is_acted_on_by_kind_test() {
       |> quick,
     )
   assert lab.wait_until(
-    fn() { store.count(store.handle(s), "followed") == 1 },
+    fn() { lab.within(s, store.count(_, "followed")) == 1 },
     within: 5000,
   )
   let assert Ok(first) = process.receive(times, 2000)
@@ -137,9 +137,7 @@ pub fn occurrences_are_read_in_pages_test() {
   recommend(s, asked, "q-1")
   let all =
     pages(
-      fn(after) {
-        store.occurrences_of(store.handle(s), "item2.auto", after:, limit: 10)
-      },
+      fn(after) { store.occurrences_of(s, "item2.auto", after:, limit: 10) },
       None,
       [],
     )
@@ -153,13 +151,7 @@ pub fn occurrences_are_read_in_pages_test() {
   let since =
     pages(
       fn(after) {
-        store.settled_since(
-          store.handle(s),
-          "item2.asked",
-          since: midway,
-          after:,
-          limit: 1,
-        )
+        store.settled_since(s, "item2.asked", since: midway, after:, limit: 1)
       },
       None,
       [],
@@ -168,13 +160,7 @@ pub fn occurrences_are_read_in_pages_test() {
   let all_settled =
     pages(
       fn(after) {
-        store.settled_since(
-          store.handle(s),
-          "item2.auto",
-          since: midway,
-          after:,
-          limit: 7,
-        )
+        store.settled_since(s, "item2.auto", since: midway, after:, limit: 7)
       },
       None,
       [],
@@ -257,8 +243,8 @@ pub fn the_store_is_a_supervised_child_test() {
   })
   let assert Ok(tree) = process.receive(reply, 5000)
   let assert Ok(s) = store.named(name)
-  store.put(store.handle(s), "t", "k", "v")
-  assert store.get(store.handle(s), "t", "k") == Ok("v")
+  lab.within(s, store.put(_, "t", "k", "v"))
+  assert lab.within(s, store.get(_, "t", "k")) == Ok("v")
   lab.kill(store.owner(s))
   assert lab.wait_until(
     fn() {
@@ -270,7 +256,7 @@ pub fn the_store_is_a_supervised_child_test() {
     within: 2000,
   )
   let assert Ok(again) = store.named(name)
-  assert store.get(store.handle(again), "t", "k") == Error(Nil)
+  assert lab.within(again, store.get(_, "t", "k")) == Error(Nil)
   lab.stop_runtime(tree)
 }
 
@@ -374,7 +360,7 @@ pub fn a_precondition_that_fails_recommends_nothing_test() {
       }
     }
   }
-  store.put(store.handle(s), "latest", "ana", "t-2")
+  lab.within(s, store.put(_, "latest", "ana", "t-2"))
   let assert Ok(isolated.Skipped(_)) =
     isolated.recommend_when(
       desk,
@@ -391,12 +377,7 @@ pub fn a_precondition_that_fails_recommends_nothing_test() {
       model: sound,
       holds: latest("t-2"),
     )
-  assert store.occurrences_of(
-      store.handle(s),
-      "item8.auto",
-      after: None,
-      limit: 10,
-    ).ids
+  assert store.occurrences_of(s, "item8.auto", after: None, limit: 10).ids
     == ["t-2"]
 }
 
@@ -488,8 +469,8 @@ pub fn the_review_queue_has_a_topic_and_an_index_test() {
   recommend(s, desk, "r-1")
   let assert Ok(live.Changed(occurrence: "r-1", ..)) =
     process.receive(hints, 500)
-  assert store.review_queue_of(store.handle(s), "item11", 10) == ["r-1"]
-  assert store.review_queue(store.handle(s)) == ["r-1"]
+  assert store.review_queue_of(s, "item11", 10) == ["r-1"]
+  assert store.review_queue(s) == ["r-1"]
 }
 
 /// The default attempt limit is the PostgreSQL runtime's.
@@ -601,6 +582,6 @@ pub fn a_wake_up_meeting_an_unsure_tool_is_backed_off_and_releases_test() {
   assert process.receive(failed, 1000) == Ok(2)
   assert store.backlog(s).aside() == Ok([])
   let assert Ok(known) =
-    decisions.read(desk, store.handle(s), occurrence: "u-1")
+    store.transaction(s, decisions.read(desk, _, occurrence: "u-1"))
   let assert occurrence.Released(..) = known.status
 }

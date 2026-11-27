@@ -138,7 +138,7 @@ pub fn sweep_admits_a_job_for_pending_rows_that_have_none_test() {
     )
     |> pog.parameter(pog.text("follow:" <> spec.name))
     |> pog.parameter(pog.text(id))
-    |> pog.execute(tx)
+    |> pog.execute(decisions_postgres.connection(tx))
     |> result.replace(Nil)
     |> result.map_error(fn(_) { decisions.ApplicationFailed("insert failed") })
   })
@@ -171,7 +171,7 @@ pub fn sweep_admits_a_job_for_pending_rows_that_have_none_test() {
   assert kit.jobs(env, "decisions.wake") == []
   assert kit.effects(env.db, "follow:" <> spec.name) == 0
   assert kit.effects_of(env.db, waiting.id) == 0
-  let assert Ok(swept) = decisions_postgres.sweep(followed, env.db)
+  let assert Ok(swept) = decisions_postgres.sweep(followed, env.pool)
   assert swept.notices == 3
   // The tables are shared by every test in this database, each with its
   // own Grind schema, so other tests' rows may be swept too.
@@ -192,7 +192,7 @@ pub fn sweep_admits_a_job_for_pending_rows_that_have_none_test() {
   let assert True =
     kit.eventually(10_000, fn() { kit.effects_of(env.db, waiting.id) == 1 })
   // No notice is left without a job.
-  let assert Ok(again) = decisions_postgres.sweep(followed, env.db)
+  let assert Ok(again) = decisions_postgres.sweep(followed, env.pool)
   assert again.notices == 0
   kit.check(env, [unfollowed_desk, held_desk])
 }
@@ -205,12 +205,12 @@ pub fn settled_since_never_skips_a_late_commit_test() {
   let spec = kit.Spec(..kit.spec("paged"), policy: kit.proceed())
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
-  let since = decisions_postgres.port(store).now(env.db)
+  let since = kit.within(env, decisions_postgres.port(store).now)
   let holding = process.new_subject()
   // The first transaction settles A and waits before committing.
   process.spawn(fn() {
     let _ =
-      pog.transaction(env.db, fn(tx) {
+      decisions_postgres.transaction(env.pool, fn(tx) {
         let assert Ok(early) =
           decisions.recommend(desk, tx, kit.proposal(spec.name, kit.ana))
         let release = process.new_subject()
@@ -218,7 +218,7 @@ pub fn settled_since_never_skips_a_late_commit_test() {
         let _ = process.receive(release, 10_000)
         Ok(Nil)
       })
-      |> result.map_error(fn(_: pog.TransactionError(Nil)) { Nil })
+      |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
     Nil
   })
   let assert Ok(#(early, release)) = process.receive(holding, 5000)
@@ -227,7 +227,7 @@ pub fn settled_since_never_skips_a_late_commit_test() {
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
   let read = fn(after) {
     let assert Ok(page) =
-      queue.settled_since(env.db, point: spec.name, since:, limit: 10, after:)
+      queue.settled_since(env.pool, point: spec.name, since:, limit: 10, after:)
     page
   }
   // While A's transaction runs, B is held back too.
@@ -243,7 +243,7 @@ pub fn settled_since_never_skips_a_late_commit_test() {
 
 fn page_of_one(env: kit.Env, point, since, after) {
   let assert Ok(page) =
-    queue.settled_since(env.db, point:, since:, limit: 1, after:)
+    queue.settled_since(env.pool, point:, since:, limit: 1, after:)
   page
 }
 
@@ -316,16 +316,21 @@ pub fn an_append_with_no_entries_replaces_the_head_test() {
       bundle: option.None,
     )
   let assert Ok(Nil) =
-    port.append(env.db, id, first, [Stored(1, at, "recommended", "{}")])
+    kit.within(
+      env,
+      port.append(_, id, first, [Stored(1, at, "recommended", "{}")]),
+    )
   let second = Head(..first, status: store.Awaiting, awaiting: ["finance"])
-  let assert Ok(Nil) = port.append(env.db, id, second, [])
-  let assert Ok(Some(head)) = decisions_postgres.inspection().head(env.db, id)
+  let assert Ok(Nil) = kit.within(env, port.append(_, id, second, []))
+  let assert Ok(Some(head)) =
+    kit.within(env, decisions_postgres.inspection().head(_, id))
   assert head == second
-  let assert Ok([_]) = port.load(env.db, id)
+  let assert Ok([_]) = kit.within(env, port.load(_, id))
   // No record and no entries: nothing to replace, nothing written.
   let absent = kit.tag("absent")
-  let assert Ok(Nil) = port.append(env.db, absent, first, [])
-  let assert Ok(None) = decisions_postgres.inspection().head(env.db, absent)
+  let assert Ok(Nil) = kit.within(env, port.append(_, absent, first, []))
+  let assert Ok(None) =
+    kit.within(env, decisions_postgres.inspection().head(_, absent))
 }
 
 /// G7: an application role that does not own the tables, with the grants
@@ -346,8 +351,10 @@ pub fn an_application_role_cannot_rewrite_the_record_test() {
       let assert Ok(_) = pog.query(sql) |> pog.execute(env.db)
     },
   )
-  let assert Ok(started) = kit.pool_config(2) |> pog.user(role) |> pog.start
-  let app = started.data
+  let config = kit.pool_config(2) |> pog.user(role)
+  let assert Ok(started) = pog.start(config)
+  let app = decisions_postgres.pool(config.pool_name)
+  let app_db = pog.named_connection(config.pool_name)
   let spec = kit.Spec(..kit.spec("app_role"), execute: fn(_, _) { Ok(Nil) })
   let desk = kit.desk(store, spec)
   let assert Ok(waiting) =
@@ -366,7 +373,7 @@ pub fn an_application_role_cannot_rewrite_the_record_test() {
     ))
   let assert occurrence.Released(..) = released.status
   let refused = fn(sql) {
-    case pog.query(sql) |> pog.execute(app) {
+    case pog.query(sql) |> pog.execute(app_db) {
       Error(pog.PostgresqlError(code: "42501", ..)) -> True
       _ -> False
     }
@@ -407,7 +414,7 @@ pub fn a_deadlock_and_a_serialization_failure_are_contention_test() {
     let #(first, second) = order
     process.spawn(fn() {
       let outcome =
-        decisions_postgres.transaction(env.db, fn(tx) {
+        decisions_postgres.transaction(env.pool, fn(tx) {
           use _ <- result.try(load(tx, first))
           let go = process.new_subject()
           process.send(locked, go)
@@ -448,17 +455,19 @@ pub fn a_deadlock_and_a_serialization_failure_are_contention_test() {
   let outcomes = process.new_subject()
   process.spawn(fn() {
     let outcome =
-      pog.transaction(env.db, fn(tx) {
+      kit.own(env, fn(tx) {
         let assert Ok(_) =
           pog.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-          |> pog.execute(tx)
-        let assert Ok(_) = pog.query("SELECT 1") |> pog.execute(tx)
+          |> pog.execute(decisions_postgres.connection(tx))
+        let assert Ok(_) =
+          pog.query("SELECT 1")
+          |> pog.execute(decisions_postgres.connection(tx))
         let go = process.new_subject()
         process.send(gates, go)
         let _ = process.receive(go, 10_000)
         pog.query("UPDATE test_effects SET key = 'v3' WHERE occurrence = $1")
         |> pog.parameter(pog.text(row))
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
       })
     process.send(outcomes, outcome)
   })
@@ -468,7 +477,7 @@ pub fn a_deadlock_and_a_serialization_failure_are_contention_test() {
     |> pog.parameter(pog.text(row))
     |> pog.execute(env.db)
   process.send(go, Nil)
-  let assert Ok(Error(pog.TransactionRolledBack(error))) =
+  let assert Ok(Error(decisions_postgres.OwnFailed(error))) =
     process.receive(outcomes, 10_000)
   let assert store.Contended(detail) = sql.store_error(error)
   assert string.contains(detail, "40001")

@@ -113,7 +113,14 @@ pub fn desk(point: Point(String), policy: Policy) -> Desk(String, Tx) {
 }
 
 pub fn effects(s: Store, desk: Desk(String, Tx)) -> Int {
-  store.count(store.handle(s), decisions.name(decisions.point_of(desk)))
+  within(s, store.count(_, decisions.name(decisions.point_of(desk))))
+}
+
+/// Run `body` in a transaction of its own and return what it returned:
+/// an application row read or written outside a verb.
+pub fn within(s: Store, body: fn(Tx) -> a) -> a {
+  let assert Ok(value) = store.transaction(s, fn(tx) { Ok(body(tx)) })
+  value
 }
 
 pub fn recommend(

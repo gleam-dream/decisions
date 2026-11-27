@@ -24,13 +24,14 @@ fn fresh() -> Target(store.Tx) {
   target
 }
 
-fn store_of(target: Target(store.Tx)) -> store.Store {
-  store.store_of(target.adapter.handle)
+/// A target and the store under it.
+fn fresh_store() -> #(store.Store, Target(store.Tx)) {
+  let assert Ok(s) = store.start(store.defaults())
+  #(s, stress.over_store(s, store.defaults()))
 }
 
 fn export_all(s: store.Store, after: Option(store.Cursor), count: Int) -> Int {
-  let page =
-    store.occurrences_of(store.handle(s), "scale.auto", after:, limit: 100)
+  let page = store.occurrences_of(s, "scale.auto", after:, limit: 100)
   let count = count + list.length(page.ids)
   case page.next {
     Some(next) -> export_all(s, Some(next), count)
@@ -45,7 +46,7 @@ fn export_settled(
 ) -> Int {
   let page =
     store.settled_since(
-      store.handle(s),
+      s,
       "scale.auto",
       since: timestamp.from_unix_seconds(0),
       after:,
@@ -158,9 +159,8 @@ pub fn main() -> Nil {
   )
 
   io.println("Export. 10 000 occurrences of one point, read in pages of 100")
-  let target = fresh()
+  let #(s, target) = fresh_store()
   let assert Ok(_) = scale.h1(target, count: 10_000, processes: 8)
-  let s = store_of(target)
   let started = scale.monotonic_us()
   let read = export_all(s, None, 0)
   let all_us = scale.monotonic_us() - started

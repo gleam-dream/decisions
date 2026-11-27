@@ -135,7 +135,7 @@ pub fn main() -> Nil {
   let assert Ok(Nil) =
     conformance.run(fn() {
       let db = memory.new()
-      Ok(conformance.Adapter(port: memory.port(), inspect: memory.inspection(), handle: db, transaction: fn(body) { memory.transaction(db, body) }, cleanup: fn() { Nil }))
+      Ok(conformance.Adapter(port: memory.port(), inspect: memory.inspection(), transaction: fn(body) { memory.transaction(db, body) }, cleanup: fn() { Nil }))
     })
   let _ = entry.kinds
   let _ = store.describe(store.Unavailable("x"))

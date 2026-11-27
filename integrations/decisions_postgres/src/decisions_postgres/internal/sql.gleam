@@ -1,20 +1,34 @@
-//// What every module of the package shares below pog: how a query error
-//// becomes a `store.StoreError`, how a pool is told from a transaction's
-//// connection, and the clock.
+//// What every module of the package shares below pog: the pool, how a
+//// query error becomes a `store.StoreError`, and the clock.
 
 import decisions/store.{type StoreError, Conflict, Contended, Unavailable}
 import decisions/wire
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/int
 import gleam/result
 import gleam/string
 import gleam/time/timestamp.{type Timestamp}
 import pog
 
-/// Whether `connection` is a pool rather than the connection of an open
-/// transaction. A statement on a pool commits by itself.
-@external(erlang, "decisions_postgres_ffi", "is_pool")
-pub fn is_pool(connection: pog.Connection) -> Bool
+/// A connection pool of the application's. It is made from the pool's
+/// name, so it is never the connection of an open transaction: every
+/// transaction of the package starts on one, and none starts inside
+/// another.
+pub opaque type Pool {
+  Pool(connection: pog.Connection)
+}
+
+/// The pool registered under `name` (`pog.Config.pool_name`).
+pub fn pool(name: process.Name(pog.Message)) -> Pool {
+  Pool(pog.named_connection(name))
+}
+
+/// The pool's connection, for a statement that commits by itself or for
+/// `pog.transaction`.
+pub fn pool_connection(pool: Pool) -> pog.Connection {
+  pool.connection
+}
 
 /// A positive integer unique on this node.
 @external(erlang, "decisions_postgres_ffi", "unique")
@@ -85,23 +99,6 @@ pub fn run(
   pog.execute(query, connection)
   |> result.map(fn(returned) { returned.rows })
   |> result.map_error(store_error)
-}
-
-/// Run `body` in `connection`'s transaction, or, on a pool, in a
-/// transaction of its own that commits on `Ok` and rolls back on `Error`.
-pub fn within(
-  connection: pog.Connection,
-  body: fn(pog.Connection) -> Result(a, StoreError),
-) -> Result(a, StoreError) {
-  case is_pool(connection) {
-    False -> body(connection)
-    True ->
-      case pog.transaction(connection, body) {
-        Ok(value) -> Ok(value)
-        Error(pog.TransactionRolledBack(error)) -> Error(error)
-        Error(pog.TransactionQueryError(error)) -> Error(store_error(error))
-      }
-  }
 }
 
 /// The database's clock, to the millisecond, read now (not at the start of

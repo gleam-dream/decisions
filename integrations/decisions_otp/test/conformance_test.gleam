@@ -14,7 +14,6 @@ fn conforms(config: store.Config) -> Result(Nil, List(conformance.Unmet)) {
           conformance.Adapter(
             port: store.port(),
             inspect: store.inspection(),
-            handle: store.handle(s),
             transaction: fn(body) { store.transaction(s, body) },
             cleanup: fn() { store.stop(s) },
           ),

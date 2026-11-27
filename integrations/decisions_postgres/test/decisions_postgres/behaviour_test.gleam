@@ -30,7 +30,7 @@ import pog
 import sinal
 
 fn writes_then_refuses(
-  tx: pog.Connection,
+  tx: decisions_postgres.Tx,
   released: decisions.Released(String),
 ) -> Result(Nil, decisions.Stop) {
   use Nil <- result.try(kit.record_effect(tx, released))
@@ -57,7 +57,7 @@ pub fn a_tool_that_writes_then_refuses_a_verdict_leaves_nothing_test() {
     })
   let assert Error(Refused(decisions.ToolRefused(..))) =
     decisions_postgres.decide(
-      env.db,
+      env.pool,
       desk,
       decisions.resume(desk, _, ticket, by: bia),
       Approve,
@@ -107,7 +107,7 @@ pub fn a_tool_whose_statement_fails_after_a_hold_ends_refused_test() {
       execute: fn(tx, released) {
         use Nil <- result.try(kit.record_effect(tx, released))
         pog.query("SELECT 1 / 0")
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
         |> result.replace(Nil)
         |> result.map_error(fn(error) {
           decisions.Refuse(string.inspect(error))
@@ -151,7 +151,7 @@ pub fn a_verdict_after_the_deadline_is_refused_before_any_wake_up_test() {
     ))
   assert kit.effects_of(env.db, waiting.id) == 0
   // Its wake-up is still pending: nothing has delivered it.
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert list.any(wakes, fn(wake) { wake.occurrence == waiting.id })
   let assert Ok(decisions.Woken(expired)) =
     kit.tx(env, decisions.wake(desk, _, occurrence: waiting.id))
@@ -194,7 +194,7 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
   }
   let assert Ok([_]) = kit.tx(env, fail(desk, _))
   let assert Ok(pending) =
-    queue.pending(env.db, point: spec.name, limit: 10, after: None)
+    queue.pending(env.pool, point: spec.name, limit: 10, after: None)
   assert list.map(pending, fn(summary) { summary.due })
     == [Some(deadline), Some(deadline)]
   // Before the deadline the wake-up says when to come back, and nothing is
@@ -204,15 +204,15 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
   let assert Ok(0) =
     decisions_postgres.deliver_due(
       pg,
-      env.db,
+      env.pool,
       [decisions.waker(desk)],
       limit: 10,
     )
   // Past the deadline on the store's clock.
   let assert Ok(2) =
-    decisions_postgres.deliver_due(later, env.db, late_wakers, limit: 10)
+    decisions_postgres.deliver_due(later, env.pool, late_wakers, limit: 10)
   let assert Ok(Some(head)) =
-    decisions_postgres.inspection().head(env.db, failing)
+    kit.within(env, decisions_postgres.inspection().head(_, failing))
   assert head.status == store.Expired
   let assert Ok(recorded) =
     kit.tx(env, decisions.recommend_once(
@@ -247,7 +247,7 @@ pub fn grind_delivers_a_record_s_own_deadline_test() {
   use env <- kit.run(name, pg, kit.delivering(), [decisions.waker(desk)], [])
   let port = decisions_postgres.port(pg)
   let deadline =
-    timestamp.add(port.now(env.db), duration.seconds(2))
+    timestamp.add(kit.within(env, port.now), duration.seconds(2))
     |> wire.milliseconds
     |> wire.from_milliseconds
   let key = kit.tag("grind")
@@ -279,7 +279,7 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
     let assert Ok(Nil) = kit.tx(env, expect_by(desk, _, key, deadline))
   })
   // Every key waits for its wake-up before the race.
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert list.all(keys, fn(key) {
     list.any(wakes, fn(wake) { wake.occurrence == key && wake.at == deadline })
   })
@@ -298,7 +298,7 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
         _ ->
           decisions_postgres.deliver_due(
             later,
-            env.db,
+            env.pool,
             [decisions.waker(late_desk)],
             limit: 10,
           )
@@ -307,7 +307,8 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
       }
     })
   assert list.all(outcomes, fn(outcome) { outcome == Ok(Nil) })
-  let assert Ok(notices) = decisions_postgres.inspection().notices(env.db)
+  let assert Ok(notices) =
+    kit.within(env, decisions_postgres.inspection().notices)
   list.each(keys, fn(key) {
     let assert Ok(known) =
       kit.tx(env, decisions.read(late_desk, _, occurrence: key))
@@ -323,7 +324,10 @@ fn hour_ahead(
   pg: decisions_postgres.Store,
   env: kit.Env,
 ) -> timestamp.Timestamp {
-  timestamp.add(decisions_postgres.port(pg).now(env.db), duration.hours(1))
+  timestamp.add(
+    kit.within(env, decisions_postgres.port(pg).now),
+    duration.hours(1),
+  )
   |> wire.milliseconds
   |> wire.from_milliseconds
 }
@@ -397,7 +401,7 @@ pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
   // (Grind's own delivery of the job, whenever it comes, is early in the
   // same way and is snoozed.)
   let assert Ok(0) =
-    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
+    decisions_postgres.deliver_due(store, env.pool, wakers, limit: 10)
   let assert Ok(early) = process.receive(rescheduled, 5000)
   let _ = sinal.detach(watch)
   assert early.occurrence == held.id
@@ -408,7 +412,7 @@ pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
   offset_add(behind, 600_000)
   kit.wait_for_store_clock(env, until)
   let assert Ok(1) =
-    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
+    decisions_postgres.deliver_due(store, env.pool, wakers, limit: 10)
   assert kit.effects_of(env.db, held.id) == 1
   let assert Ok(known) =
     kit.tx(env, decisions.read(desk, _, occurrence: held.id))
@@ -417,7 +421,7 @@ pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
   assert timestamp.compare(last.at, until) != order.Lt
   // The snoozed job, when it comes back, finds nothing pending.
   let assert Ok(0) =
-    decisions_postgres.deliver_due(store, env.db, wakers, limit: 10)
+    decisions_postgres.deliver_due(store, env.pool, wakers, limit: 10)
   kit.check(env, [desk])
 }
 
@@ -441,13 +445,13 @@ pub fn the_store_clock_is_the_database_clock_test() {
   // Inside one transaction the clock moves: it is not the transaction's
   // start time.
   let assert Ok(#(a, b)) =
-    pog.transaction(env.db, fn(tx) {
+    decisions_postgres.transaction(env.pool, fn(tx) {
       let port = decisions_postgres.port(store)
       let a = port.now(tx)
       process.sleep(20)
       Ok(#(a, port.now(tx)))
     })
-    |> result.map_error(fn(_: pog.TransactionError(Nil)) { Nil })
+    |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
   assert wire.milliseconds(b) - wire.milliseconds(a) >= 20
 }
 
@@ -465,13 +469,13 @@ pub fn a_verb_that_waited_for_the_lock_is_stamped_after_it_test() {
   let holding = process.new_subject()
   process.spawn(fn() {
     let _ =
-      pog.transaction(env.db, fn(tx) {
+      decisions_postgres.transaction(env.pool, fn(tx) {
         let _ = port.load(tx, waiting.id)
         process.send(holding, Nil)
         process.sleep(300)
         Ok(Nil)
       })
-      |> result.map_error(fn(_: pog.TransactionError(Nil)) { Nil })
+      |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
     Nil
   })
   let assert Ok(Nil) = process.receive(holding, 5000)
@@ -538,14 +542,14 @@ pub fn the_transaction_helper_classifies_failures_test() {
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
   let holder = process.new_subject()
   process.spawn_unlinked(fn() {
-    pog.transaction(env.db, fn(tx) {
+    decisions_postgres.transaction(env.pool, fn(tx) {
       let _ = port.load(tx, waiting.id)
       let release = process.new_subject()
       process.send(holder, release)
       let _ = process.receive(release, 10_000)
       Ok(Nil)
     })
-    |> result.map_error(fn(_: pog.TransactionError(Nil)) { Nil })
+    |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
   })
   let assert Ok(release) = process.receive(holder, 5000)
   let assert Error(Contended(detail)) =
@@ -568,13 +572,13 @@ pub fn a_transaction_keeps_the_application_error_typed_test() {
     )
     |> pog.parameter(pog.text("own:" <> spec.name))
     |> pog.parameter(pog.text(id))
-    |> pog.execute(tx)
+    |> pog.execute(decisions_postgres.connection(tx))
     |> result.replace(Nil)
     |> result.map_error(fn(_) { OwnRowRefused })
   }
   // Both writes commit together.
   let assert Ok(made) =
-    decisions_postgres.transaction_with(env.db, fn(tx) {
+    decisions_postgres.transaction_with(env.pool, fn(tx) {
       use made <- result.try(
         decisions.recommend(desk, tx, kit.proposal(spec.name, kit.ana))
         |> decisions_postgres.desk,
@@ -588,7 +592,7 @@ pub fn a_transaction_keeps_the_application_error_typed_test() {
   // The application's error comes back as its own type, and the verb's
   // write rolled back with it.
   let assert Error(decisions_postgres.OwnFailed(OwnRowRefused)) =
-    decisions_postgres.transaction_with(env.db, fn(tx) {
+    decisions_postgres.transaction_with(env.pool, fn(tx) {
       use _ <- result.try(
         decisions.recommend(desk, tx, kit.proposal(spec.name, kit.ana))
         |> decisions_postgres.desk,
@@ -599,7 +603,7 @@ pub fn a_transaction_keeps_the_application_error_typed_test() {
   let assert Error(decisions_postgres.LibraryFailed(Refused(
     decisions.UnknownOccurrence,
   ))) =
-    decisions_postgres.transaction_with(env.db, fn(tx) {
+    decisions_postgres.transaction_with(env.pool, fn(tx) {
       use _ <- result.try(
         save(tx, made.id) |> result.map_error(decisions_postgres.Own),
       )
@@ -608,7 +612,7 @@ pub fn a_transaction_keeps_the_application_error_typed_test() {
     })
   assert kit.effects(env.db, "own:" <> spec.name) == 1
   let assert Ok(occurrences) =
-    decisions_postgres.inspection().occurrences(env.db, spec.name)
+    kit.within(env, decisions_postgres.inspection().occurrences(_, spec.name))
   assert list.length(occurrences) == 1
   kit.check(env, [desk])
 }

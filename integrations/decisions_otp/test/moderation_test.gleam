@@ -44,10 +44,10 @@ pub fn moderation_at_volume_test() {
   assert list.all(classified, fn(done) { done == Ok(Nil) })
   // 9 000 proceeded and ran the tool; 1 000 wait for support.
   assert lab.effects(s, desk) == 9000
-  let waiting = store.queue(store.handle(s), "support")
+  let waiting = store.queue(s, "support")
   assert list.length(waiting) == 1000
   // The sample is within 1 % to 3 % of what proceeded.
-  let sampled = list.length(store.review_queue(store.handle(s)))
+  let sampled = list.length(store.review_queue(s))
   assert sampled >= 90 && sampled <= 270
   // Support approves every waiting one.
   let dora = Validator("dora", ["support"])
@@ -82,11 +82,14 @@ pub fn moderation_at_volume_test() {
   assert before.assessed == 0
   assert after.assessed == 50 && after.right == 20
   let assert Ok(summary) =
-    testing.check(store.handle(s), store.inspection(), [
-      testing.audit(desk, effects: fn(tx) {
-        Ok(store.count(tx, "moderation.classify"))
-      }),
-    ])
+    store.transaction(
+      s,
+      testing.check(_, store.inspection(), [
+        testing.audit(desk, effects: fn(tx) {
+          Ok(store.count(tx, "moderation.classify"))
+        }),
+      ]),
+    )
   assert summary.occurrences == 10_000
   assert summary.released == 10_000
 }
@@ -95,9 +98,9 @@ fn tally(
   s: store.Store,
   desk: decisions.Desk(String, store.Tx),
 ) -> learning.Tally {
-  store.heads(store.handle(s))
+  store.heads(s)
   |> list.filter_map(fn(pair) {
-    decisions.read(desk, store.handle(s), occurrence: pair.0)
+    store.transaction(s, decisions.read(desk, _, occurrence: pair.0))
   })
   |> learning.tally
   |> learning.total

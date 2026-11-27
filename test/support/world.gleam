@@ -77,7 +77,6 @@ pub fn adapter(db: Memory) -> conformance.Adapter(Memory) {
   conformance.Adapter(
     port: memory.port(),
     inspect: memory.inspection(),
-    handle: db,
     transaction: fn(body) { memory.transaction(db, body) },
     cleanup: fn() { Nil },
   )

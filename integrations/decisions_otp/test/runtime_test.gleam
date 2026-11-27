@@ -20,8 +20,8 @@ import support/lab
 /// Calls of a step, counted outside any transaction in a store of its
 /// own, so that a rolled-back transaction does not undo the count.
 fn calls(counter: Store, name: String) -> Int {
-  store.add(store.handle(counter), "calls", name)
-  store.rows(store.handle(counter), "calls")
+  lab.within(counter, store.add(_, "calls", name))
+  lab.within(counter, store.rows(_, "calls"))
   |> list.count(fn(pair) { pair.1 == name })
 }
 
@@ -80,7 +80,7 @@ pub fn the_sweeper_killed_mid_delivery_loses_nothing_test() {
   // nothing, and once in the new sweeper's. This call is the third.
   assert calls(counter, "tool") == 3
   lab.stop_runtime(tree)
-  assert store.wakes(store.handle(s)) == []
+  assert store.wakes(s) == []
   assert lab.effects(s, desk) == 1
 }
 
@@ -127,14 +127,14 @@ pub fn the_dispatcher_killed_mid_delivery_loses_nothing_test() {
   let dispatcher = lab.child(tree, Dispatcher)
   lab.kill(dispatcher)
   assert lab.wait_until(
-    fn() { store.count(store.handle(s), "followed") == 1 },
+    fn() { lab.within(s, store.count(_, "followed")) == 1 },
     within: 5000,
   )
   assert lab.child(tree, Dispatcher) != dispatcher
   let assert Ok([]) = store.backlog(s).undelivered(10)
   process.sleep(30)
   lab.stop_runtime(tree)
-  assert store.count(store.handle(s), "followed") == 1
+  assert lab.within(s, store.count(_, "followed")) == 1
 }
 
 /// Killed: a worker, while its model computes. Lost: nothing; the claim
@@ -256,7 +256,7 @@ pub fn a_verdict_is_followed_once_test() {
       Approve,
     ))
   assert lab.wait_until(
-    fn() { store.count(store.handle(s), "followed") == 1 },
+    fn() { lab.within(s, store.count(_, "followed")) == 1 },
     within: 5000,
   )
   lab.stop_runtime(tree)
@@ -383,7 +383,7 @@ pub fn a_contended_store_is_retried_without_counting_test() {
       |> quick,
     )
   assert lab.wait_until(
-    fn() { store.count(store.handle(s), "followed") == 1 },
+    fn() { lab.within(s, store.count(_, "followed")) == 1 },
     within: 5000,
   )
   lab.stop_runtime(tree)

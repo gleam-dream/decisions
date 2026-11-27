@@ -27,10 +27,18 @@ fn first(env: kit.Env) -> String {
     )
   let port = decisions_postgres.port(env.store)
   let assert Ok(Nil) =
-    port.append(env.db, id, head, [
-      Stored(1, wire.from_milliseconds(1_800_000_000_000), "recommended", "{}"),
-      Stored(2, wire.from_milliseconds(1_800_000_000_001), "released", "{}"),
-    ])
+    kit.within(
+      env,
+      port.append(_, id, head, [
+        Stored(
+          1,
+          wire.from_milliseconds(1_800_000_000_000),
+          "recommended",
+          "{}",
+        ),
+        Stored(2, wire.from_milliseconds(1_800_000_000_001), "released", "{}"),
+      ]),
+    )
   id
 }
 

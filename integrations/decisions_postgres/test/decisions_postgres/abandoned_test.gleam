@@ -251,7 +251,7 @@ pub fn a_cancelled_abandoned_wake_up_ends_and_sweep_replaces_it_test() {
   assert job_state(env, job) == "business_failed"
   assert string.contains(job_reason(env, job), "cancellation")
   assert wake_row(env, occurrence) == #(job, option.None)
-  let assert Ok(_) = decisions_postgres.sweep(store, env.db)
+  let assert Ok(_) = decisions_postgres.sweep(store, env.pool)
   let #(replacement, _) = wake_row(env, occurrence)
   assert replacement != job
   assert job_state(env, replacement) == "scheduled"
@@ -264,7 +264,7 @@ pub fn a_cancelled_abandoned_wake_up_ends_and_sweep_replaces_it_test() {
 pub fn sweep_leaves_a_job_its_settlement_will_decide_test() {
   use env, store, occurrence, job <- with_wake_up
   abandon_for_good(env, job)
-  let assert Ok(swept) = decisions_postgres.sweep(store, env.db)
+  let assert Ok(swept) = decisions_postgres.sweep(store, env.pool)
   assert wake_row(env, occurrence) == #(job, option.None)
   assert !list.contains(swept.left_uncertain, job)
   assert job_state(env, job) == "uncertain"
@@ -277,7 +277,7 @@ pub fn sweep_replaces_a_wake_up_job_left_for_a_person_test() {
   use env, store, occurrence, job <- with_wake_up
   abandon_for_good(env, job)
   leave_for_a_person(env, job)
-  let assert Ok(swept) = decisions_postgres.sweep(store, env.db)
+  let assert Ok(swept) = decisions_postgres.sweep(store, env.pool)
   let #(replacement, _) = wake_row(env, occurrence)
   assert replacement != job
   assert job_state(env, replacement) == "scheduled"
@@ -289,7 +289,7 @@ pub fn sweep_replaces_a_notice_job_left_for_a_person_test() {
   use env, store, occurrence, job <- with_notice
   abandon_for_good(env, job)
   leave_for_a_person(env, job)
-  let assert Ok(swept) = decisions_postgres.sweep(store, env.db)
+  let assert Ok(swept) = decisions_postgres.sweep(store, env.pool)
   let #(replacement, _) = notice_row(env, occurrence)
   assert replacement != job
   assert job_state(env, replacement) == "queued"
