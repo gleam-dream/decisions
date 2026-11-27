@@ -4,7 +4,7 @@
 #let accent = "teal"
 #let body = [
 #section(title: "Foundation", lead: "The storage context owns what a store must guarantee so that the record's invariants hold under real concurrency.", body: [
-  #goal(title: "Any store that meets the port's contract keeps every invariant")[A store implements eight functions once. The desk relies on nothing else, and an executable suite states each clause one process can check.]
+  #goal(title: "Any store that meets the port's contract keeps every invariant")[A store implements nine functions once. The desk relies on nothing else, and an executable suite states each clause one process can check.]
   #invariant(title: "Two deliveries of one trigger cannot both admit it", enforcement: "mechanism")[`load` locks the id for the rest of the transaction even when no entry exists, so a second transaction that loads the same id waits and then sees what the first stored.]
   #invariant(title: "A tool that writes and then refuses leaves nothing", enforcement: "mechanism")[`atomically` runs the guard and the executor in a savepoint; when the body returns an error or raises, its writes are undone and the transaction stays usable.]
   #invariant(title: "Queues never parse an entry", enforcement: "mechanism")[The head carries the status, the sets waited in, the due time, the arrival time and who has approved, so every queue and superseding query reads heads alone.]
@@ -24,11 +24,11 @@
   altitude: "L2", viewpoint: "persistence", title: "The port and its adapters",
   nodes: (
     (id: "desk", label: "Desk", sub: "record context", kind: "component", tint: "violet"),
-    (id: "port", label: "Storage port", sub: "eight functions", kind: "component", tint: "teal"),
+    (id: "port", label: "Storage port", sub: "nine functions", kind: "component", tint: "teal"),
     (id: "mem", label: "Memory store", sub: "decisions/memory", kind: "database", tint: "teal"),
     (id: "otp", label: "OTP store", sub: "decisions_otp/store", kind: "database", tint: "teal"),
     (id: "pg", label: "PostgreSQL adapter", sub: "decisions_postgres", kind: "database", tint: "teal"),
-    (id: "suite", label: "Conformance suite", sub: "twenty-two checks", kind: "component", tint: "teal"),
+    (id: "suite", label: "Conformance suite", sub: "twenty-four checks", kind: "component", tint: "teal"),
   ), edges: (
     (from: "desk", to: "port", relation: "call", label: "load, append, schedule, settled, ..."),
     (from: "mem", to: "port", relation: "dependency", label: "implements"),
@@ -46,6 +46,7 @@
     #attribute(name: "Approved", type: "Validators", provenance: "derived")[Who approved the standing output, so a queue leaves the card out for them.]
     #attribute(name: "May not decide", type: "Validators", provenance: "derived")[Who may not decide the occurrence whatever sets they hold: under `SomeoneElseHolding`, the requester and a person who recommended as their own act; under `Several`, whoever already approved the standing output; under `Either`, only who every alternative excludes. Empty unless it awaits. A queue leaves the card out for them (#adr(23)).]
     #attribute(name: "Review pending", type: "Flag", provenance: "derived")[Sampled, released and not yet reviewed.]
+    #attribute(name: "Bundle", type: "Optional bundle key and size", provenance: "derived")[The bundle the occurrence belongs to, from its recommendation; none for one proposed alone and for a record not begun. `members` finds a bundle by it.]
   ]
   #points([A stored entry is `Stored(seq, at, kind, event)`: the kind name as a column so the store can hold "at most one `released` per occurrence" behind a unique key, and the event as JSON text that only the point's codec decodes. `entry.to_stored` and `entry.from_stored` are the only translation, so an adapter never parses an entry.])
 ])
@@ -61,6 +62,7 @@
     [`atomically`], [Runs a body in a savepoint. On `Error` its writes are undone and the transaction stays usable; on `Ok` they stay. The outer result is the savepoint's own failure.], [Conformance: rolls back alone, keeps what succeeded, rolls back alone when the body raises, and its writes go with a transaction that rolls back.],
     [`now`], [The wall clock at the moment of the call, at any resolution, not the start of the transaction: in PostgreSQL `clock_timestamp()`. The desk reduces it to whole milliseconds.], [Several processes only: one process cannot tell a frozen clock from a moving one. The suite assumes nothing about two reads.],
     [`new_id`], [A new, unique occurrence id.], [Conformance: new ids are unique.],
+    [`members`], [Returns the ids and heads of every occurrence, of any point, whose head names a bundle's key, in ascending id order, without a lock; a record set aside is still returned. A follower reads it to tell when a bundle is complete (#adr(58)).], [Conformance: a bundle's records of every point in id order, with their heads as last written, and none of another bundle; a desk admits a bundle and tells when it is complete.],
     [Transactions], [Uncommitted writes, wake-ups and notices are invisible to other transactions; a rolled-back transaction leaves nothing; a process killed inside a transaction or a savepoint leaves nothing and releases its locks.], [Conformance: a rolled-back transaction leaves nothing. Several processes: invisibility and kills.],
     [Locks], [Concurrent `happened` and `decide` do not deadlock, because `waiting` returns ids in one order.], [Several processes.],
     [Durability], [Wake-ups and notices survive a store restart.], [Several processes.],
@@ -72,8 +74,8 @@
   )
 ])
 
-#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-two checks for one process, and a stress suite for the clauses that need several.", body: [
-  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-two named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
+#section(title: "Conformance and the invariant check", lead: "The contract is executable: twenty-four checks for one process, and a stress suite for the clauses that need several.", body: [
+  #answers(title: "Conformance suite", responsibility: [Show that an adapter meets each clause one process can observe.], interface: [`conformance.run(fresh)` with `fresh` returning an `Adapter(port:, inspect:, handle:, transaction:, cleanup:)`; `conformance.checks()` lists the twenty-four named checks; failures are `Unmet`: `SetupFailed(reason)` or `CheckFailed(check, saw)`.], interactions: [Each check gets a fresh adapter; `handle` works outside a transaction with each call committing by itself. Three checks drive a real desk over the adapter: every invariant holds, a refused release leaves nothing, and an early wake-up says when to come back.], invariants: [The core's own tests break an in-memory adapter in each clause in turn and show that the check naming it fails.], failure: [Every failing check is reported with what it saw; the suite does not stop at the first.])
   #md-table(2, (
     [*Check*], [*Clause*],
     [an absent id loads empty; an absent id takes its first entry once], [`load`],
@@ -86,9 +88,10 @@
     [new ids are unique], [`new_id`],
     [a desk keeps every invariant; a refused release leaves nothing behind; an early wake-up says when to come back], [the whole contract under a desk],
     [a subject lock stores nothing and orders two admissions], [`load` of an id used purely as a lock],
+    [members returns a bundle's records of every point, in id order; a desk admits a bundle and tells when it is complete], [`members`],
   ))
   #points(
-    [`decisions/testing.check(tx, inspection, audits)` reads every occurrence of the audited points through the inspection and their desks and reports each violation of I1 to I8, as the root design states them. `testing.audit(desk, effects:)` also counts the gated tool's effects for I1; `testing.audit_record(desk)` does not.],
+    [`decisions/testing.check(tx, inspection, audits)` reads every occurrence of the audited points through the inspection and their desks and reports each violation of I1 to I9, as the root design states them. `testing.audit(desk, effects:)` also counts the gated tool's effects for I1; `testing.audit_record(desk)` does not.],
     [The clauses that need several processes are proved by `decisions_otp/stress`, which a store runs by building a target (#ctx("runtime")). #adr(6) records why the contract is executable.],
   )
 ])
@@ -129,7 +132,8 @@
       [Ids], [`new_id` is a UUID version 7 made on the node.],
     ))
     #points(
-      [`migrate(db)` runs the shipped migration under an advisory lock, records each version once, and is safe to run again and at once from several nodes. The SQL in `priv/migrations` is the same statements, for an application that runs its own migration tool.],
+      [`migrate(db)` runs the shipped migrations under an advisory lock, records each version once, and is safe to run again and at once from several nodes. The SQL in `priv/migrations` is the same statements, for an application that runs its own migration tool.],
+      [Migration 2 adds a head's bundle: two nullable columns, a check that keeps them whole, added `NOT VALID` because every earlier row has neither, a partial index for `members`, and a `decisions_append` that writes them. Adding the columns rewrites nothing; building the index reads the table once. The version 1 append stays, so a node not yet upgraded keeps writing during a rolling deploy and never writes a bundle; upgrade every node before the first bundle is admitted (#adr(58)).],
       [`transaction_with(db, body)` runs a body that also does the application's own work and fails with the application's own error: a verb's refusal is lifted with `decisions_postgres.desk` into `BodyFailure.Desk`, the application's error is `BodyFailure.Own`, and the result is `Failed`: `LibraryFailed(failure)`, classified exactly as `transaction` classifies it, or `OwnFailed(error)`. Both roll the transaction back.],
       [`refusing(db, body)` is `transaction` in the shape of a verb: its failure is a `Refusal`, as `decisions_otp/isolated.recommend` and `recommend_when` want for their `in:`. A failure of the transaction itself becomes `StoreFailed` with its classification kept.],
       [`with_clock_offset(offset)` makes the store's clock read the database's clock plus an offset, so a test can stand an hour later without waiting; wake-up jobs are still scheduled on the database's clock, at the moment the store's clock reaches their time. Production leaves it at zero.],

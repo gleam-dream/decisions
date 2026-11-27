@@ -327,3 +327,21 @@ pub fn the_invariant_checker_catches_a_bundle_that_disagrees_test() {
     ])
   assert list.map(violations, fn(v) { v.invariant }) == ["I9"]
 }
+
+/// An item key given twice would count two items for one occurrence, and
+/// the bundle could never complete: it is refused before anything is
+/// written.
+pub fn an_item_key_given_twice_is_refused_test() {
+  let w = world.new()
+  let admitted =
+    world.in_tx(
+      w,
+      decisions.recommend_bundle(line_desk(), _, bundle: "r12", items: [
+        #("r12/a", proposal("a")),
+        #("r12/a", proposal("a again")),
+      ]),
+    )
+  assert admitted
+    == Error(decisions.BadBundle("r12", decisions.RepeatedItem("r12/a")))
+  assert statuses(w, "r12") == []
+}

@@ -1,5 +1,5 @@
 #let terms = (
-  (slug: "term-port", title: [Storage port], body: [The eight functions the desk needs from a store, each run in the caller's transaction: `load`, `append`, `waiting`, `schedule`, `settled`, `atomically`, `now`, and `new_id`. It is the type `decisions/store.Port(tx)`.]),
+  (slug: "term-port", title: [Storage port], body: [The nine functions the desk needs from a store, each run in the caller's transaction: `load`, `append`, `waiting`, `schedule`, `settled`, `atomically`, `now`, `new_id`, and `members`. It is the type `decisions/store.Port(tx)`.]),
   (slug: "term-adapter", title: [Adapter], body: [An implementation of the storage port for one store, with an inspection for tests. This repository holds three: the single-process memory store, the process-safe OTP store, and PostgreSQL.]),
   (slug: "term-transaction", title: [Transaction], body: [The caller's unit of commit, passed to every verb and every port function as `tx`. The library never opens, commits, or rolls back a transaction.]),
   (slug: "term-stored-entry", title: [Stored entry], body: [An entry as a store keeps it: sequence number, time, kind name, and the event as JSON text that only the point's codec decodes.]),
@@ -12,8 +12,8 @@
   (slug: "term-pending-wake-up", title: [Pending wake-up], body: [A durable promise in the store to deliver `wake` for an occurrence at a time. `schedule` replaces an occurrence's pending wake-ups; an empty list cancels them.]),
   (slug: "term-settlement-notice", title: [Settlement notice], body: [A durable row that says an occurrence of a point settled, admitted once per occurrence in the settling transaction, so that what follows can start.]),
   (slug: "term-inspection", title: [Inspection], body: [What an adapter lets tests see of its store: every occurrence id of a point, a head, every pending wake-up, and every settlement notice. The desk never reads it.]),
-  (slug: "term-conformance-suite", title: [Conformance suite], body: [The twenty named checks in `decisions/conformance` that one process can run against any adapter to show it meets the port's contract.]),
-  (slug: "term-invariant-check", title: [Invariant check], body: [The function `decisions/testing.check`, which reads every occurrence of the audited points through an inspection and reports each violation of the invariants I1 to I8.]),
+  (slug: "term-conformance-suite", title: [Conformance suite], body: [The twenty-four named checks in `decisions/conformance` that one process can run against any adapter to show it meets the port's contract.]),
+  (slug: "term-invariant-check", title: [Invariant check], body: [The function `decisions/testing.check`, which reads every occurrence of the audited points through an inspection and reports each violation of the invariants I1 to I9.]),
   (slug: "term-queue", title: [Queue], body: [The list of occurrences a validator may decide, read from heads alone: waiting in a set the validator holds, not approved by that validator, ordered by due time, then arrival, then id.]),
   (slug: "term-lock-timeout", title: [Lock timeout], body: [The longest a PostgreSQL transaction waits for an occurrence's lock before the wait ends as contention: 4 seconds by default, below the connection checkout limit.]),
   (slug: "term-paged-read", title: [Paged read], body: [A read of a point's occurrences from an index, a page at a time with a cursor, by id or in the order they settled, for learning and export.]),

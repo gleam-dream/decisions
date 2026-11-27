@@ -3,6 +3,7 @@ import decisions/learning.{Replay, Tally}
 import decisions/view.{Item}
 import decisions/vocabulary.{Ref}
 import decisions_usage/autonomy_ladder
+import decisions_usage/bundle
 import decisions_usage/card_document
 import decisions_usage/deadline_per_occurrence
 import decisions_usage/expect_then_recommend
@@ -96,4 +97,8 @@ pub fn finance_may_take_back_what_the_policy_let_proceed_test() {
 
 pub fn a_card_is_served_and_read_back_typed_test() {
   assert card_document.run()
+}
+
+pub fn a_report_is_paid_once_after_its_last_line_settles_test() {
+  assert bundle.run() == #(False, True, ["30.00", "80.00"])
 }

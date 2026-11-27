@@ -608,6 +608,8 @@ pub type BundleFault {
   SizeDiffers(recorded: Int)
   /// The bundle already holds as many members as its size.
   BundleFull
+  /// `recommend_bundle` was given this item key more than once.
+  RepeatedItem(key: String)
 }
 
 /// What a verdict refused at release leaves behind once its transaction
@@ -793,6 +795,7 @@ pub fn describe(refusal: Refusal) -> String {
         SizeDiffers(recorded:) ->
           "a member recorded its size as " <> int.to_string(recorded)
         BundleFull -> "it already holds all its members"
+        RepeatedItem(key:) -> "the item key " <> key <> " is given twice"
       }
     StoreFailed(error:) -> store.describe(error)
   }
@@ -871,7 +874,9 @@ pub fn recommend_once(
 ///
 /// Keys are one namespace across every point of a store: derive each
 /// item's key from the bundle's, such as `"report-7/l1"`. An empty `items`
-/// is refused with `BadBundle(EmptyBundle)`. For a bundle that spans
+/// is refused with `BadBundle(EmptyBundle)`, and an item key given twice
+/// with `BadBundle(RepeatedItem(key))`, before anything is written. For a
+/// bundle that spans
 /// several points, put `in_bundle` on each proposal and call
 /// `recommend_once` at each point's desk.
 pub fn recommend_bundle(
@@ -880,9 +885,13 @@ pub fn recommend_bundle(
   bundle key: String,
   items items: List(#(String, Proposal(o))),
 ) -> Result(List(Occurrence(o)), Refusal) {
-  case items {
-    [] -> Error(BadBundle(bundle: key, fault: EmptyBundle))
-    _ -> {
+  let keys = list.map(items, fn(item) { item.0 })
+  let repeated =
+    list.find(keys, fn(item) { list.count(keys, fn(k) { k == item }) > 1 })
+  case items, repeated {
+    [], _ -> Error(BadBundle(bundle: key, fault: EmptyBundle))
+    _, Ok(item) -> Error(BadBundle(bundle: key, fault: RepeatedItem(item)))
+    _, Error(Nil) -> {
       let bundle = Bundle(key:, size: list.length(items))
       list.try_map(items, fn(item) {
         recommend_once(

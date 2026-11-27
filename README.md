@@ -773,6 +773,149 @@ pub fn take_back(
 
 <!-- prettier-ignore-end -->
 
+## Several actions from one recommendation
+
+A model often proposes several separable things at once: the lines of an
+expense report, a reply and a process to start, the entities it found in a
+document. Admit each as an occurrence of its own, at its own point, so each
+is judged by its own policy, released under its own key, and measured on
+its own. Name the bundle they belong to and how many it holds:
+`decisions.recommend_bundle` does that for the items of one point, and
+`decisions.in_bundle` on each proposal for a bundle that spans points.
+Admit them in one transaction.
+
+What follows the bundle, such as one payout of the approved lines, belongs
+to the point's follower. On each settlement notice it reads the bundle with
+`decisions.members`; once `decisions.is_complete` holds, it recommends the
+follow-on with `recommend_once` under a key derived from the bundle. The
+follower of the line that committed last sees the bundle complete, and the
+key turns every other follower that sees it complete into nothing, so the
+report is paid once. A bundle admitted in pieces is not complete until every
+member has arrived, because each member records the bundle's size.
+
+| A line was                       | Then                                              |
+| -------------------------------- | ------------------------------------------------- |
+| Approved                         | It is released at once, under its own release key |
+| Rejected                         | Nothing of it is released                         |
+| The last of the bundle to settle | Its follower recommends the payout once           |
+
+<!-- prettier-ignore-start -->
+
+<!-- snips: examples/usage/src/decisions_usage/bundle.gleam#bundle -->
+```gleam
+import decisions
+import decisions/memory.{type Memory}
+import decisions/policy.{AnyoneHolding, Ask, Never, Policy, Proceed}
+import decisions/vocabulary.{
+  Approve, Manifest, ModelCall, Reason, Recommendation, Reject, RuleFired,
+  Subject, Trigger,
+}
+import decisions/wire
+import gleam/int
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/result
+
+fn tool(table: String) -> decisions.Gated(String, Memory) {
+  decisions.Gated(
+    name: table,
+    guard: fn(_, _) { Ok([]) },
+    execute: fn(tx, released) {
+      memory.put(
+        tx,
+        table <> ":" <> decisions.occurrence_of(released),
+        decisions.output(released),
+      )
+      Ok(Nil)
+    },
+  )
+}
+
+/// Each line asks finance.
+pub fn lines() -> decisions.Desk(String, Memory) {
+  decisions.desk(
+    decisions.point("expense.line", wire.text()),
+    drives: fn(_) { tool("approved") },
+    under: fn(_) { Ok(Policy(1, [], Ask(AnyoneHolding("finance")))) },
+    over: memory.port(),
+  )
+}
+
+/// The payout of a whole report proceeds on its own.
+pub fn payouts() -> decisions.Desk(String, Memory) {
+  decisions.desk(
+    decisions.point("expense.payout", wire.text()),
+    drives: fn(_) { tool("paid") },
+    under: fn(_) { Ok(Policy(1, [], Proceed(Never, None))) },
+    over: memory.port(),
+  )
+}
+
+fn proposal(report: String, output: String) -> decisions.Proposal(String) {
+  decisions.proposal(
+    trigger: Trigger(kind: "expense_report", id: report),
+    about: Subject(kind: "employee", id: "ana"),
+    context: Manifest(refs: [], renderer: "expense-1"),
+    recommending: Recommendation(
+      output:,
+      by: ModelCall(configuration: "expense-reader", version: "3"),
+      explanation: RuleFired("one line, one payment"),
+      signals: [],
+      reads: [],
+    ),
+  )
+}
+
+/// The model's answer for a report: one occurrence per line, admitted as
+/// one bundle in one transaction.
+pub fn admit(
+  store: Memory,
+  report: String,
+  amounts: List(String),
+) -> Result(List(String), decisions.Refusal) {
+  memory.transaction(store, decisions.recommend_bundle(
+    lines(),
+    _,
+    bundle: report,
+    items: list.index_map(amounts, fn(amount, n) {
+      #(report <> "/line-" <> int.to_string(n + 1), proposal(report, amount))
+    }),
+  ))
+  |> result.map(list.map(_, fn(line) { line.id }))
+}
+
+/// What follows the line point, handed each settled line: once its
+/// bundle is complete, recommend the payout under a key derived from the
+/// bundle, so a second follower that sees it complete adds nothing.
+pub fn settled(tx: Memory, line: String) -> Result(Nil, decisions.Refusal) {
+  use known <- result.try(decisions.read(lines(), tx, occurrence: line))
+  case known.bundle {
+    None -> Ok(Nil)
+    Some(bundle) -> {
+      use members <- result.try(decisions.members(
+        lines(),
+        tx,
+        bundle: bundle.key,
+      ))
+      case decisions.is_complete(members) {
+        False -> Ok(Nil)
+        True ->
+          decisions.recommend_once(
+            payouts(),
+            tx,
+            key: "payout:" <> bundle.key,
+            proposal: proposal(bundle.key, "pay " <> bundle.key),
+          )
+          |> result.replace(Nil)
+      }
+    }
+  }
+}
+
+```
+
+<!-- prettier-ignore-end -->
+
 ## Admit a trigger before the model runs
 
 A model can take a while, and a newer event about the same subject can arrive
@@ -1609,8 +1752,8 @@ for the schema.
 | Only the executor receives a released output                         | The release check receives a `ToRelease` value no executor accepts; the compiler refuses the other way round            |
 | An approval counts only for the alternative that admits it           | Each verdict records the sets its validator held; eligibility is judged per alternative                                 |
 
-`decisions/testing.check` checks the eight invariants behind this table over
-any store, and `decisions/conformance` runs twenty-two checks of the storage port
+`decisions/testing.check` checks the nine invariants behind this table over
+any store, and `decisions/conformance` runs twenty-four checks of the storage port
 against any adapter.
 
 ## What Decisions does not do
