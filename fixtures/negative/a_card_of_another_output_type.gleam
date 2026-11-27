@@ -3,10 +3,10 @@
 // Two points with one output type are told apart at run time: a desk
 // refuses another point's occurrence with `UnknownOccurrence`.
 import decisions.{type Card, type Desk}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/vocabulary.{Approve}
 import decisions_usage/clinic.{type Refund}
 
-pub fn elsewhere(desk: Desk(Refund, Memory), tx: Memory, card: Card(String)) {
+pub fn elsewhere(desk: Desk(Refund, Tx), tx: Tx, card: Card(String)) {
   decisions.decide(desk, tx, card, Approve)
 }

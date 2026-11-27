@@ -6,7 +6,7 @@
 
 // snips-start: bundle
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/vocabulary.{
   Approve, Manifest, ModelCall, Reason, Recommendation, Reject, RuleFired,
@@ -19,7 +19,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 
-fn tool(table: String) -> decisions.Gated(String, Memory) {
+fn tool(table: String) -> decisions.Gated(String, Tx) {
   decisions.Gated(
     name: table,
     guard: fn(_, _) { Ok([]) },
@@ -35,7 +35,7 @@ fn tool(table: String) -> decisions.Gated(String, Memory) {
 }
 
 /// Each line asks finance.
-pub fn lines() -> decisions.Desk(String, Memory) {
+pub fn lines() -> decisions.Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("approved") },
@@ -47,7 +47,7 @@ pub fn lines() -> decisions.Desk(String, Memory) {
 }
 
 /// The payout of a whole report proceeds on its own.
-pub fn payouts() -> decisions.Desk(String, Memory) {
+pub fn payouts() -> decisions.Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("paid") },
@@ -100,7 +100,7 @@ pub fn admit(
 /// What follows the line point, handed each settled line: once its
 /// bundle is complete, recommend the payout under a key derived from the
 /// bundle, so a second follower that sees it complete adds nothing.
-pub fn settled(tx: Memory, line: String) -> Result(Nil, decisions.Refusal) {
+pub fn settled(tx: Tx, line: String) -> Result(Nil, decisions.Refusal) {
   use known <- result.try(decisions.read(lines(), tx, occurrence: line))
   case known.bundle {
     None -> Ok(Nil)
@@ -149,11 +149,15 @@ pub fn run() -> #(Bool, Bool, List(String)) {
   decide(first, Approve)
   decide(second, Reject(Reason("over_limit", None)))
   let paid_before =
-    memory.get(store, "paid:payout:report-7") == Ok("pay report-7")
+    memory.transaction(store, memory.get(_, "paid:payout:report-7"))
+    == Ok("pay report-7")
   decide(third, Approve)
   let paid_after =
-    memory.get(store, "paid:payout:report-7") == Ok("pay report-7")
+    memory.transaction(store, memory.get(_, "paid:payout:report-7"))
+    == Ok("pay report-7")
   let approved =
-    list.filter_map(ids, fn(id) { memory.get(store, "approved:" <> id) })
+    list.filter_map(ids, fn(id) {
+      memory.transaction(store, memory.get(_, "approved:" <> id))
+    })
   #(paid_before, paid_after, approved)
 }

@@ -2,7 +2,7 @@
 //// chooses the transaction, and with it the answer to "what if one fails".
 
 import decisions.{type Desk, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence
 import decisions/vocabulary.{
   type Subject, Approve, Manifest, Recommendation, RuleFired, Rules, Trigger,
@@ -15,7 +15,7 @@ import support/world.{type World}
 
 /// The same tool with a guard: a company whose books are closed takes no
 /// new class.
-fn desk() -> Desk(String, Memory) {
+fn desk() -> Desk(String, Tx) {
   decisions.desk(
     classify.point(),
     drives: fn(_) {
@@ -67,7 +67,7 @@ fn waiting(w: World) -> List(String) {
 pub fn in_one_transaction_a_bulk_verdict_is_all_or_nothing_test() {
   let w = world.new()
   let ids = waiting(w)
-  memory.put(w.db, "closed:clinica-y", "yes")
+  world.commit(w.db, memory.put(_, "closed:clinica-y", "yes"))
 
   let all_at_once =
     world.in_tx(w, fn(tx) {
@@ -85,7 +85,7 @@ pub fn in_one_transaction_a_bulk_verdict_is_all_or_nothing_test() {
 pub fn one_transaction_each_decides_199_and_refuses_one_test() {
   let w = world.new()
   let ids = waiting(w)
-  memory.put(w.db, "closed:clinica-y", "yes")
+  world.commit(w.db, memory.put(_, "closed:clinica-y", "yes"))
 
   let outcomes =
     list.map(ids, fn(id) {

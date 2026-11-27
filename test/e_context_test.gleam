@@ -3,7 +3,7 @@
 import decisions.{type Desk, type Point, Gated}
 import decisions/entry
 import decisions/learning.{Archive}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model.{
   type Failure, type Model, type Reader, type Sources, NotRecorded,
 }
@@ -68,7 +68,7 @@ fn point() -> Point(String) {
   |> decisions.allowing(ApproveRejectOrCorrect)
 }
 
-fn desk() -> Desk(String, Memory) {
+fn desk() -> Desk(String, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) {
@@ -89,13 +89,16 @@ fn desk() -> Desk(String, Memory) {
 
 /// A message is immutable under its revision.
 fn message(w: World, ref: Ref) -> Result(String, String) {
-  memory.get(w.outside, "message:" <> ref.id <> "@" <> ref.revision)
+  world.commit(w.outside, memory.get(
+    _,
+    "message:" <> ref.id <> "@" <> ref.revision,
+  ))
   |> result.replace_error("no such message revision")
 }
 
 fn tax_api(w: World) -> fn(String, String) -> Result(String, String) {
   fn(_name, number) {
-    memory.get(w.outside, "tax:" <> number)
+    world.commit(w.outside, memory.get(_, "tax:" <> number))
     |> result.replace_error("the tax API did not answer")
   }
 }
@@ -105,15 +108,15 @@ fn content(w: World) -> fn(Ref) -> Result(String, Failure) {
   fn(ref: Ref) {
     case ref.kind {
       "message" -> message(w, ref)
-      _ -> memory.evidence().get(w.db, ref)
+      _ -> world.commit(w.db, memory.evidence().get(_, ref))
     }
     |> result.map_error(model.ReadFailed(ref.kind, ref.id, _))
   }
 }
 
 fn recommended(w: World) -> occurrence.Occurrence(String) {
-  memory.put(w.outside, "message:m9@1", "Emite a nota de 800.")
-  memory.put(w.outside, "tax:clinica-x", "REGULAR since 2019")
+  world.commit(w.outside, memory.put(_, "message:m9@1", "Emite a nota de 800."))
+  world.commit(w.outside, memory.put(_, "tax:clinica-x", "REGULAR since 2019"))
   let context = Manifest(refs: [Ref("message", "m9", "1")], renderer: "code-1")
   let assert Ok(recommendation) =
     model.run(
@@ -141,8 +144,12 @@ fn recommended(w: World) -> occurrence.Occurrence(String) {
 
 /// The world moves on after the model has read it.
 fn world_changes(w: World) -> Nil {
-  memory.put(w.outside, "message:m9@2", "Emite a nota de 900.")
-  memory.put(w.outside, "tax:clinica-x", "IRREGULAR since last week")
+  world.commit(w.outside, memory.put(_, "message:m9@2", "Emite a nota de 900."))
+  world.commit(w.outside, memory.put(
+    _,
+    "tax:clinica-x",
+    "IRREGULAR since last week",
+  ))
 }
 
 /// The latest revision of each input: the message has a second revision,

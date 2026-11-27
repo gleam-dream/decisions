@@ -3,7 +3,7 @@
 
 import decisions.{type Desk, Gated}
 import decisions/learning
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Ask, Never, Proceed}
@@ -39,7 +39,7 @@ fn point() {
   |> decisions.superseded_by("newer_request")
 }
 
-fn desk(point, p) -> Desk(String, Memory) {
+fn desk(point, p) -> Desk(String, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { tool() },
@@ -65,11 +65,14 @@ fn proposal(output: String) {
 
 fn audit(db: Memory, d) {
   let assert Ok(_) =
-    testing.check(db, memory.inspection(), [
-      testing.audit(d, effects: fn(tx) {
-        Ok(list.length(world.all(tx, "paid")))
-      }),
-    ])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [
+        testing.audit(d, effects: fn(tx) {
+          Ok(list.length(world.list_in(tx, "paid")))
+        }),
+      ]),
+    )
   Nil
 }
 

@@ -3,7 +3,7 @@
 //// arrive twice or late.
 
 import decisions.{type Desk}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding}
@@ -19,7 +19,7 @@ import support/world.{type World}
 
 const risk_service = Validator(subject: "risk-service", holds: ["partner-risk"])
 
-fn desk() -> Desk(payout.Payout, Memory) {
+fn desk() -> Desk(payout.Payout, Tx) {
   payout.desk_of(
     payout.point() |> decisions.valid_for(duration.hours(1)),
     policies.checked(

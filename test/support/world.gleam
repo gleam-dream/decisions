@@ -7,7 +7,7 @@
 import decisions.{type Card, type Desk, type Refusal}
 import decisions/conformance
 import decisions/learning.{type Read, Read}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model.{type Sources, Sources}
 import decisions/occurrence.{type Occurrence}
 import decisions/testing
@@ -68,12 +68,26 @@ pub fn at(world: World, offset: Duration) -> Nil {
   memory.set_clock(world.db, timestamp.add(t0(), offset))
 }
 
-pub fn in_tx(world: World, body: fn(Memory) -> Result(a, e)) -> Result(a, e) {
+pub fn in_tx(world: World, body: fn(Tx) -> Result(a, e)) -> Result(a, e) {
   memory.transaction(world.db, body)
 }
 
+/// The store's clock, read in the caller's transaction.
+pub fn clock(tx: Tx) -> Timestamp {
+  let assert Ok(at) = memory.port().now(tx)
+  at
+}
+
+/// Run `body` in a transaction of its own that commits: a test's own
+/// read or write outside a verb, or a step of the outside world, which
+/// never rolls back.
+pub fn commit(memory: Memory, body: fn(Tx) -> a) -> a {
+  let assert Ok(done) = memory.transaction(memory, fn(tx) { Ok(body(tx)) })
+  done
+}
+
 /// The memory store as an adapter, for conformance and invariant checks.
-pub fn adapter(db: Memory) -> conformance.Adapter(Memory) {
+pub fn adapter(db: Memory) -> conformance.Adapter(Tx) {
   conformance.Adapter(
     port: memory.port(),
     inspect: memory.inspection(),
@@ -83,11 +97,8 @@ pub fn adapter(db: Memory) -> conformance.Adapter(Memory) {
 }
 
 /// Every invariant of `decisions/testing` holds over these audits.
-pub fn invariants_hold(
-  world: World,
-  audits: List(testing.Audit(Memory)),
-) -> Nil {
-  case testing.check(world.db, memory.inspection(), audits) {
+pub fn invariants_hold(world: World, audits: List(testing.Audit(Tx))) -> Nil {
+  case in_tx(world, testing.check(_, memory.inspection(), audits)) {
     Ok(_) -> Nil
     Error(violations) ->
       panic as { "invariants broken: " <> string.inspect(violations) }
@@ -100,7 +111,7 @@ pub fn invariants_hold(
 pub fn deliver_due(
   world: World,
   wakers: List(
-    #(String, fn(Memory, String) -> Result(option.Option(Timestamp), Refusal)),
+    #(String, fn(Tx, String) -> Result(option.Option(Timestamp), Refusal)),
   ),
 ) -> Int {
   let due = memory.take_due(world.db)
@@ -118,35 +129,46 @@ pub fn deliver_due(
 
 // -- Lists and counters of text ------------------------------------------------
 
-pub fn push(memory: Memory, key: String, text: String) -> Nil {
+pub fn push(tx: Tx, key: String, text: String) -> Nil {
   memory.put(
-    memory,
+    tx,
     key,
     json.to_string(json.array(
-      list.append(all(memory, key), [text]),
+      list.append(list_in(tx, key), [text]),
       json.string,
     )),
   )
 }
 
-pub fn all(memory: Memory, key: String) -> List(String) {
-  memory.get(memory, key)
+/// The list under `key`, read in the caller's transaction.
+pub fn list_in(tx: Tx, key: String) -> List(String) {
+  memory.get(tx, key)
   |> result.try(fn(text) {
     json.parse(text, decode.list(decode.string)) |> result.replace_error(Nil)
   })
   |> result.unwrap([])
 }
 
-pub fn bump(memory: Memory, key: String) -> Nil {
-  memory.put(memory, key, int.to_string(count(memory, key) + 1))
+/// The list under `key`, as committed.
+pub fn all(memory: Memory, key: String) -> List(String) {
+  commit(memory, list_in(_, key))
 }
 
+pub fn bump(tx: Tx, key: String) -> Nil {
+  memory.put(tx, key, int.to_string(count_in(tx, key) + 1))
+}
+
+fn count_in(tx: Tx, key: String) -> Int {
+  memory.get(tx, key) |> result.try(int.parse) |> result.unwrap(0)
+}
+
+/// The counter under `key`, as committed.
 pub fn count(memory: Memory, key: String) -> Int {
-  memory.get(memory, key) |> result.try(int.parse) |> result.unwrap(0)
+  commit(memory, count_in(_, key))
 }
 
-pub fn effects(key: String) -> fn(Memory) -> Result(Int, String) {
-  fn(db) { Ok(list.length(all(db, key))) }
+pub fn effects(key: String) -> fn(Tx) -> Result(Int, String) {
+  fn(tx) { Ok(list.length(list_in(tx, key))) }
 }
 
 // -- Retained runs, standing for an agent runtime --------------------------------
@@ -167,17 +189,21 @@ pub fn capturing(
     },
     read: fn(name, argument) {
       use captured <- result.try(
-        model.capture(
-          memory.evidence(),
+        commit(
           world.db,
-          source: name,
-          request: argument,
-          fetch: fn() { fetch(name, argument) },
+          model.capture(
+            memory.evidence(),
+            _,
+            source: name,
+            request: argument,
+            fetch: fn() { fetch(name, argument) },
+          ),
         )
         |> result.map_error(model.ReadFailed(name, argument, _)),
       )
+      use tx <- commit(world.fabric)
       push(
-        world.fabric,
+        tx,
         "run:" <> run,
         json.to_string(
           json.object([
@@ -217,8 +243,8 @@ pub fn unchanged(ref: Ref) -> String {
 
 /// A validator opens the card, in the caller's transaction.
 pub fn open(
-  desk: Desk(o, Memory),
-  tx: Memory,
+  desk: Desk(o, Tx),
+  tx: Tx,
   id: String,
   validator: Validator,
 ) -> Result(Card(o), Refusal) {
@@ -227,8 +253,8 @@ pub fn open(
 
 /// A validator opens the card and gives a verdict, in one transaction.
 pub fn open_and_decide(
-  desk: Desk(o, Memory),
-  tx: Memory,
+  desk: Desk(o, Tx),
+  tx: Tx,
   id: String,
   validator: Validator,
   verdict: Verdict(o),
@@ -237,7 +263,7 @@ pub fn open_and_decide(
   decisions.decide(desk, tx, card, verdict)
 }
 
-pub fn read(world: World, desk: Desk(o, Memory), id: String) -> Occurrence(o) {
+pub fn read(world: World, desk: Desk(o, Tx), id: String) -> Occurrence(o) {
   let assert Ok(known) = in_tx(world, decisions.read(desk, _, occurrence: id))
   known
 }

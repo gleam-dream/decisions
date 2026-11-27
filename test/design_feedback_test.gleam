@@ -3,7 +3,7 @@
 
 import decisions.{type Desk, Gated}
 import decisions/learning.{Archive}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
@@ -23,7 +23,7 @@ import support/world
 
 const bia = Validator("bia", ["finance"])
 
-fn desk(execute) -> Desk(String, Memory) {
+fn desk(execute) -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("design.point", wire.text())
       |> decisions.allowing(ApproveRejectOrCorrect)

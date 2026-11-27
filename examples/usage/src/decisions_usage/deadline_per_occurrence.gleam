@@ -11,7 +11,7 @@ import gleam/result
 
 // snips-start: deadline-per-occurrence
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
@@ -22,7 +22,7 @@ import decisions_usage/clinic
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 
-pub fn desk() -> decisions.Desk(String, Memory) {
+pub fn desk() -> decisions.Desk(String, Tx) {
   decisions.desk(
     // No validity of its own: each draft carries its window.
     decisions.point("reply.draft", wire.text()),

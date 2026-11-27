@@ -5,7 +5,7 @@
 
 // snips-start: same-context
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model.{type Reader, type Sources, Sources}
 import decisions/occurrence
 import decisions/view.{type View}
@@ -58,7 +58,7 @@ pub fn billing_model() -> model.Model(Refund) {
 pub fn live(store: Memory, balance: fn() -> Result(String, String)) -> Sources {
   Sources(
     resolve: fn(ref: Ref) {
-      memory.get(store, "message:" <> ref.id)
+      memory.transaction(store, memory.get(_, "message:" <> ref.id))
       |> result.replace_error(model.ReadFailed(
         ref.kind,
         ref.id,
@@ -66,25 +66,26 @@ pub fn live(store: Memory, balance: fn() -> Result(String, String)) -> Sources {
       ))
     },
     read: fn(name, argument) {
-      model.capture(
+      memory.transaction(store, model.capture(
         memory.evidence(),
-        store,
+        _,
         source: name,
         request: argument,
         fetch: balance,
-      )
+      ))
       |> result.map_error(model.ReadFailed(name, argument, _))
     },
   )
 }
 
-/// What the record holds, by reference: the content as it was read.
-pub fn recorded(store: Memory) -> fn(Ref) -> Result(String, model.Failure) {
+/// What the record holds, by reference: the content as it was read, in
+/// the caller's transaction.
+pub fn recorded(tx: Tx) -> fn(Ref) -> Result(String, model.Failure) {
   fn(ref: Ref) {
     case ref.kind {
       "message" ->
-        memory.get(store, "message:" <> ref.id) |> result.replace_error(Nil)
-      _ -> memory.evidence().get(store, ref) |> result.replace_error(Nil)
+        memory.get(tx, "message:" <> ref.id) |> result.replace_error(Nil)
+      _ -> memory.evidence().get(tx, ref) |> result.replace_error(Nil)
     }
     |> result.replace_error(model.NotRecorded(ref.kind, ref.id))
   }
@@ -109,13 +110,13 @@ pub fn card(
       view.context(
         decisions.shown(card),
         with: read_dossier(),
-        content: recorded(store),
+        content: recorded(tx),
       )
       |> result.map_error(fn(failure) {
         decisions.Unreadable(model.describe(failure))
       }),
     )
-    Ok(#(dossier, view.of(card, content: recorded(store))))
+    Ok(#(dossier, view.of(card, content: recorded(tx))))
   })
 }
 
@@ -125,11 +126,14 @@ pub fn card(
 /// and Felipe's card still shows what the model read, flagged as changed.
 pub fn run() -> #(Dossier, List(view.Item)) {
   let store = memory.new()
-  memory.put(
-    store,
-    "message:m-ana-3",
-    "Fui cobrada em atraso, mas paguei em dia.",
-  )
+  let assert Ok(Nil) =
+    memory.transaction(store, fn(tx) {
+      Ok(memory.put(
+        tx,
+        "message:m-ana-3",
+        "Fui cobrada em atraso, mas paguei em dia.",
+      ))
+    })
   let context =
     Manifest(refs: [Ref("message", "m-ana-3", "1")], renderer: "refund-1")
   let assert Ok(recommendation) =

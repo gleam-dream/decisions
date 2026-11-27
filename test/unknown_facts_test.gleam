@@ -45,7 +45,7 @@ fn risk() -> fact.Key(Float) {
   fact.number("risk")
 }
 
-fn risky_desk() -> decisions.Desk(String, memory.Memory) {
+fn risky_desk() -> decisions.Desk(String, memory.Tx) {
   decisions.desk(
     decisions.point("unknown.risk", wire.text()) |> decisions.signal(risk()),
     drives: fn(_) {

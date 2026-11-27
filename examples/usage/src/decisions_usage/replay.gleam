@@ -6,7 +6,7 @@
 // snips-start: replay
 import decisions
 import decisions/learning.{type Replay, Archive}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model.{type Model}
 import decisions/occurrence.{type Occurrence}
 import decisions/vocabulary.{
@@ -73,10 +73,14 @@ pub fn score(
 pub fn run() -> #(Replay, Replay) {
   let store = memory.new()
   let line = fn(fee: String, cents: Int) {
-    memory.put(store, "line:" <> fee, int.to_string(cents))
+    let assert Ok(Nil) =
+      memory.transaction(store, fn(tx) {
+        Ok(memory.put(tx, "line:" <> fee, int.to_string(cents)))
+      })
+    Nil
   }
   let lines = fn(ref: Ref) {
-    memory.get(store, "line:" <> ref.id)
+    memory.transaction(store, memory.get(_, "line:" <> ref.id))
     |> result.replace_error(model.NotRecorded(ref.kind, ref.id))
   }
   line("fee-a", 4000)
@@ -90,7 +94,7 @@ pub fn run() -> #(Replay, Replay) {
       })
     let assert Ok(recommendation) = model.run(whole_fee("1"), context, sources)
     let assert Ok(decided) =
-      memory.transaction(store, fn(tx: Memory) {
+      memory.transaction(store, fn(tx: Tx) {
         use waiting <- result.try(decisions.recommend(
           first_point.desk(),
           tx,

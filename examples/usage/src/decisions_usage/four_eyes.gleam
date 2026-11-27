@@ -5,7 +5,7 @@
 
 // snips-start: four-eyes
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
   AnyoneHolding, Ask, Either, Several, SomeoneElseHolding, When,
@@ -43,7 +43,7 @@ pub fn policy() -> policy.Policy {
   ))
 }
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point() |> decisions.valid_for(duration.hours(24)),
     drives: fn(_) { clinic.refund_fee() },

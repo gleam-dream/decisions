@@ -83,7 +83,7 @@ pub fn a_refusal_in_the_verdicts_transaction_rolls_both_back_and_is_recorded_tes
       explained_by: RunAnswer("run-acc-1"),
       from: context(),
     )
-  memory.put(w.db, "tax_id_held:clinica-x", "another party")
+  world.commit(w.db, memory.put(_, "tax_id_held:clinica-x", "another party"))
 
   // First request: Felipe opens the card; his ticket outlives the request.
   let assert Ok(card) =

@@ -5,7 +5,7 @@
 // snips-start: autonomy-ladder
 import decisions
 import decisions/fact
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
   type Policy, AnyoneHolding, Never, OwnAct, PerCent, Proceed, When,
@@ -88,17 +88,19 @@ pub fn publish(
   store: Memory,
   version: Policy,
 ) -> Result(Nil, List(policy.Fault)) {
-  use Nil <- result.map(decisions.publishable(point(), version))
-  memory.put(
-    store,
-    "policy:billing.fee_refund",
-    json.to_string(policy.to_json(version)),
-  )
+  use Nil <- result.try(decisions.publishable(point(), version))
+  memory.transaction(store, fn(tx) {
+    Ok(memory.put(
+      tx,
+      "policy:billing.fee_refund",
+      json.to_string(policy.to_json(version)),
+    ))
+  })
 }
 
 /// The desk reads whichever version is published, in the caller's
 /// transaction.
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) { clinic.refund_fee() },

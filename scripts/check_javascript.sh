@@ -126,12 +126,12 @@ pub fn main() -> Nil {
       decisions.decide(desk, tx, card, vocabulary.Approve)
     })
   let assert occurrence.Released(final: Reply("olá", False), ..) = released.status
-  let assert Ok("olá") = memory.get(store, "sent")
+  let assert Ok("olá") = memory.transaction(store, memory.get(_, "sent"))
   let assert Ok(example) =
     learning.example(released, as_of: memory.now(store), from: learning.Archive(render: fn(_) { Ok("r") }, reads: fn(_) { [] }, content: fn(_) { Ok("olá") }))
   let assert learning.Replay(tally: learning.Tally(agreed: 1, judged: 1, ..), unanswered: []) =
     learning.replay([example], echo_model, same: fn(a, b) { a == b })
-  let assert Ok(_) = testing.check(store, memory.inspection(), [testing.audit_record(desk)])
+  let assert Ok(_) = memory.transaction(store, testing.check(_, memory.inspection(), [testing.audit_record(desk)]))
   let assert Ok(Nil) =
     conformance.run(fn() {
       let db = memory.new()

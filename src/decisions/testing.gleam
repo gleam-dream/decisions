@@ -36,7 +36,7 @@
 ////
 //// let audits = [testing.audit(refund_desk, effects: count_refunds)]
 //// let assert Ok(summary) =
-////   testing.check(store, memory.inspection(), audits)
+////   memory.transaction(store, testing.check(_, memory.inspection(), audits))
 //// ```
 ////
 //// Target-independent: builds for Erlang and JavaScript.

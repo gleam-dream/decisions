@@ -3,8 +3,11 @@
 ////
 //// It keeps nothing but text, so `restart` is honest: only what a
 //// database would hold survives it. A transaction is `transaction`: when
-//// its body returns `Error`, or raises, every row is put back. The
-//// transaction value `tx` is the `Memory` itself.
+//// its body returns `Error`, or raises, every row is put back. The port
+//// takes a `Tx`, which only `transaction` makes, so a desk verb runs in
+//// a transaction or does not compile. The reads a test makes outside a
+//// verb (`queue`, `entries`, `heads`, `wakes`, `notices`, `now`) take
+//// the `Memory` and see every row.
 ////
 //// It is safe only for one process at a time: it serialises nothing, so
 //// two processes using one `Memory` at once can interleave their
@@ -14,8 +17,8 @@
 //// store of `decisions_otp`.
 ////
 //// The same table also holds an application's own rows (`get` and
-//// `put`), so a gated tool's writes commit and roll back with the verdict
-//// that released them, as they would in one database.
+//// `put`, on the `Tx`), so a gated tool's writes commit and roll back
+//// with the verdict that released them, as they would in one database.
 ////
 //// ```gleam
 //// import decisions/memory
@@ -48,8 +51,14 @@ import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 
-/// A table of text. It is also the transaction value of the port.
+/// A table of text: the store.
 pub type Memory
+
+/// A transaction open on a `Memory`: the port's transaction value. Only
+/// `transaction` makes one.
+pub opaque type Tx {
+  Tx(memory: Memory)
+}
 
 /// A new, empty store whose clock reads the Unix epoch.
 @external(erlang, "decisions_memory_ffi", "new")
@@ -78,11 +87,15 @@ fn guarded(memory: Memory, body: fn() -> Result(a, e)) -> Result(a, e)
 
 /// Run `body` as one transaction. When it returns `Error`, or raises,
 /// every row is put back as it was, the application's rows included.
+///
+/// A body that captured the `Memory` and calls `transaction` again opens
+/// a nested one: its error puts back only its own writes, and an error of
+/// the outer body puts back both.
 pub fn transaction(
   memory: Memory,
-  body: fn(Memory) -> Result(a, e),
+  body: fn(Tx) -> Result(a, e),
 ) -> Result(a, e) {
-  guarded(memory, fn() { body(memory) })
+  guarded(memory, fn() { body(Tx(memory)) })
 }
 
 /// A new table holding only the old one's text, as a database would after
@@ -93,72 +106,78 @@ pub fn restart(memory: Memory) -> Memory {
   fresh
 }
 
-/// An application's own row, read in the same transactions as the
-/// record.
-pub fn get(memory: Memory, key: String) -> Result(String, Nil) {
-  raw_get(memory, "app:" <> key)
+/// An application's own row, read in the same transaction as the record.
+pub fn get(tx: Tx, key: String) -> Result(String, Nil) {
+  raw_get(tx.memory, "app:" <> key)
 }
 
 /// Write an application's own row. It commits and rolls back with the
 /// transaction it is written in.
-pub fn put(memory: Memory, key: String, value: String) -> Nil {
-  raw_put(memory, "app:" <> key, value)
+pub fn put(tx: Tx, key: String, value: String) -> Nil {
+  raw_put(tx.memory, "app:" <> key, value)
 }
 
-/// The storage port over a `Memory`.
-pub fn port() -> Port(Memory) {
+/// The storage port over a `Memory`, inside a `transaction`.
+pub fn port() -> Port(Tx) {
   Port(
-    load: fn(tx, id) { Ok(entries(tx, id)) },
+    load: fn(tx: Tx, id) { Ok(entries(tx.memory, id)) },
     append:,
-    waiting: fn(tx, point, subject) { Ok(waiting(tx, point, subject)) },
+    waiting: fn(tx: Tx, point, subject) {
+      Ok(waiting(tx.memory, point, subject))
+    },
     schedule:,
-    settled: fn(tx, point, occurrence) {
+    settled: fn(tx: Tx, point, occurrence) {
       write_list(
-        tx,
+        tx.memory,
         "notices",
-        list.append(notices(tx), [Notice(point:, occurrence:)]),
+        list.append(notices(tx.memory), [Notice(point:, occurrence:)]),
         notice_to_json,
       )
       Ok(Nil)
     },
-    atomically: fn(tx, body) { Ok(guarded(tx, fn() { body(tx) })) },
-    now: fn(tx) { Ok(now(tx)) },
-    new_id: fn(tx) {
+    atomically: fn(tx: Tx, body) { Ok(guarded(tx.memory, fn() { body(tx) })) },
+    now: fn(tx: Tx) { Ok(now(tx.memory)) },
+    new_id: fn(tx: Tx) {
       let next =
-        { raw_get(tx, "next_id") |> result.try(int.parse) |> result.unwrap(0) }
+        {
+          raw_get(tx.memory, "next_id")
+          |> result.try(int.parse)
+          |> result.unwrap(0)
+        }
         + 1
-      raw_put(tx, "next_id", int.to_string(next))
+      raw_put(tx.memory, "next_id", int.to_string(next))
       "occ-" <> int.to_string(next)
     },
-    members: fn(tx, bundle) { Ok(members(tx, bundle)) },
+    members: fn(tx: Tx, bundle) { Ok(members(tx.memory, bundle)) },
   )
 }
 
-/// What `decisions/conformance` and `decisions/testing` read.
-pub fn inspection() -> Inspection(Memory) {
+/// What `decisions/conformance` and `decisions/testing` read, inside a
+/// `transaction`.
+pub fn inspection() -> Inspection(Tx) {
   Inspection(
-    occurrences: fn(tx, point) {
+    occurrences: fn(tx: Tx, point) {
       Ok(
-        heads(tx)
+        heads(tx.memory)
         |> list.filter(fn(pair) { { pair.1 }.point == point })
         |> list.map(fn(pair) { pair.0 }),
       )
     },
-    head: fn(tx, id) { Ok(head(tx, id)) },
-    wakes: fn(tx) { Ok(wakes(tx)) },
-    notices: fn(tx) { Ok(notices(tx)) },
+    head: fn(tx: Tx, id) { Ok(head(tx.memory, id)) },
+    wakes: fn(tx: Tx) { Ok(wakes(tx.memory)) },
+    notices: fn(tx: Tx) { Ok(notices(tx.memory)) },
   )
 }
 
 /// Evidence kept in the same table, for `decisions/model.capture`.
-pub fn evidence() -> Evidence(Memory) {
+pub fn evidence() -> Evidence(Tx) {
   Evidence(
-    put: fn(tx, ref, body) {
-      raw_put(tx, evidence_key(ref), body)
+    put: fn(tx: Tx, ref, body) {
+      raw_put(tx.memory, evidence_key(ref), body)
       Ok(Nil)
     },
-    get: fn(tx, ref) {
-      raw_get(tx, evidence_key(ref))
+    get: fn(tx: Tx, ref) {
+      raw_get(tx.memory, evidence_key(ref))
       |> result.replace_error("no evidence stored for " <> evidence_key(ref))
     },
   )
@@ -312,12 +331,13 @@ pub fn tamper(memory: Memory, id: String, seq: Int, text: String) -> Nil {
 // -- The port ----------------------------------------------------------------------
 
 fn append(
-  tx: Memory,
+  tx: Tx,
   id: String,
   head: Head,
   fresh: List(Stored),
 ) -> Result(Nil, StoreError) {
-  let held = entries(tx, id)
+  let memory = tx.memory
+  let held = entries(memory, id)
   let last = list.length(held)
   let in_order =
     list.index_map(fresh, fn(stored, index) { stored.seq == last + index + 1 })
@@ -338,20 +358,25 @@ fn append(
     True, False -> {
       case held {
         [] -> {
-          let ids = list.append(read_list(tx, "ids", decode.string), [id])
-          write_list(tx, "ids", ids, json.string)
+          let ids = list.append(read_list(memory, "ids", decode.string), [id])
+          write_list(memory, "ids", ids, json.string)
         }
         _ -> Nil
       }
-      write_list(tx, "entries:" <> id, list.append(held, fresh), stored_to_json)
-      raw_put(tx, "head:" <> id, json.to_string(head_to_json(head)))
+      write_list(
+        memory,
+        "entries:" <> id,
+        list.append(held, fresh),
+        stored_to_json,
+      )
+      raw_put(memory, "head:" <> id, json.to_string(head_to_json(head)))
       Ok(Nil)
     }
   }
 }
 
-fn waiting(tx: Memory, point: String, subject: Subject) -> List(String) {
-  heads(tx)
+fn waiting(memory: Memory, point: String, subject: Subject) -> List(String) {
+  heads(memory)
   |> list.filter(fn(pair) {
     let Head(point: of, subject: about, status:, ..) = pair.1
     of == point && about == subject && store.is_waiting(status)
@@ -360,8 +385,8 @@ fn waiting(tx: Memory, point: String, subject: Subject) -> List(String) {
   |> list.sort(string.compare)
 }
 
-fn members(tx: Memory, bundle: String) -> List(#(String, Head)) {
-  heads(tx)
+fn members(memory: Memory, bundle: String) -> List(#(String, Head)) {
+  heads(memory)
   |> list.filter(fn(pair) {
     case { pair.1 }.bundle {
       Some(of) -> vocabulary.bundle_key(of) == bundle
@@ -372,17 +397,17 @@ fn members(tx: Memory, bundle: String) -> List(#(String, Head)) {
 }
 
 fn schedule(
-  tx: Memory,
+  tx: Tx,
   point: String,
   occurrence: String,
   at: List(Timestamp),
 ) -> Result(Nil, StoreError) {
   let others =
-    list.filter(wakes(tx), fn(wake) {
+    list.filter(wakes(tx.memory), fn(wake) {
       wake.point != point || wake.occurrence != occurrence
     })
   let mine = list.map(at, fn(at) { Wake(point:, occurrence:, at:) })
-  write_list(tx, "wakes", list.append(others, mine), wake_to_json)
+  write_list(tx.memory, "wakes", list.append(others, mine), wake_to_json)
   Ok(Nil)
 }
 

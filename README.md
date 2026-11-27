@@ -164,7 +164,7 @@ here. The gated tool's executor accepts nothing but a released refund.
 ```gleam
 import decisions.{type Gated, type Point, Gated}
 import decisions/fact
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{type Policy}
 import decisions/vocabulary.{ApproveRejectOrCorrect, Subject, Validator}
 import decisions/wire
@@ -202,7 +202,7 @@ pub fn refund_point() -> Point(Refund) {
 
 /// The gated tool. Its executor accepts nothing but a released refund, so
 /// no other code path can refund a fee.
-pub fn refund_fee() -> Gated(Refund, Memory) {
+pub fn refund_fee() -> Gated(Refund, Tx) {
   Gated(
     name: "refund_fee",
     guard: fn(_tx, _subject) { Ok([]) },
@@ -230,7 +230,7 @@ message delivered twice is one occurrence.
 <!-- snips: examples/usage/src/decisions_usage/first_point.gleam#first-point -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
@@ -250,7 +250,7 @@ pub fn always_ask() -> policy.Policy {
 
 /// The desk binds the point to its gated tool, its policy and a store. It
 /// is a plain value; build it wherever it is needed.
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_refund) { clinic.refund_fee() },
@@ -312,7 +312,10 @@ pub fn approve(
 
 <!-- prettier-ignore-end -->
 
-`decisions/memory` is a single-process store for tests and examples. In an
+`decisions/memory` is a single-process store for tests and examples. Its
+port takes a `memory.Tx`, which only `memory.transaction` makes, so a verb
+runs in a transaction there too; `queue`, `entries` and the other reads a
+test makes outside a verb take the store. In an
 application the same desk runs over `decisions_postgres.port(store)` or
 `decisions_otp/store.port()`.
 
@@ -333,7 +336,7 @@ stricter version.
 ```gleam
 import decisions
 import decisions/fact
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
   type Policy, AnyoneHolding, Never, OwnAct, PerCent, Proceed, When,
@@ -416,17 +419,19 @@ pub fn publish(
   store: Memory,
   version: Policy,
 ) -> Result(Nil, List(policy.Fault)) {
-  use Nil <- result.map(decisions.publishable(point(), version))
-  memory.put(
-    store,
-    "policy:billing.fee_refund",
-    json.to_string(policy.to_json(version)),
-  )
+  use Nil <- result.try(decisions.publishable(point(), version))
+  memory.transaction(store, fn(tx) {
+    Ok(memory.put(
+      tx,
+      "policy:billing.fee_refund",
+      json.to_string(policy.to_json(version)),
+    ))
+  })
 }
 
 /// The desk reads whichever version is published, in the caller's
 /// transaction.
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) { clinic.refund_fee() },
@@ -553,7 +558,7 @@ decide it.
 <!-- snips: examples/usage/src/decisions_usage/four_eyes.gleam#four-eyes -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
   AnyoneHolding, Ask, Either, Several, SomeoneElseHolding, When,
@@ -591,7 +596,7 @@ pub fn policy() -> policy.Policy {
   ))
 }
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point() |> decisions.valid_for(duration.hours(24)),
     drives: fn(_) { clinic.refund_fee() },
@@ -668,7 +673,7 @@ records the decision sets its validator held.
 <!-- snips: examples/usage/src/decisions_usage/two_or_one_senior.gleam#either-several -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Either, Several}
 import decisions/vocabulary.{
@@ -680,7 +685,7 @@ import gleam/result
 
 pub const head_of_finance = Validator(subject: "lia", holds: ["head_of_finance"])
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_) { clinic.refund_fee() },
@@ -732,7 +737,7 @@ released.
 <!-- snips: examples/usage/src/decisions_usage/undo_window.gleam#undo-window -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
@@ -743,7 +748,7 @@ import decisions_usage/clinic.{type Refund, Refund}
 import gleam/option.{Some}
 import gleam/time/duration
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },
@@ -818,7 +823,7 @@ ended before it was recommended, cannot join it: `BadBundle` says which.
 <!-- snips: examples/usage/src/decisions_usage/bundle.gleam#bundle -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/vocabulary.{
   Approve, Manifest, ModelCall, Reason, Recommendation, Reject, RuleFired,
@@ -831,7 +836,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 
-fn tool(table: String) -> decisions.Gated(String, Memory) {
+fn tool(table: String) -> decisions.Gated(String, Tx) {
   decisions.Gated(
     name: table,
     guard: fn(_, _) { Ok([]) },
@@ -847,7 +852,7 @@ fn tool(table: String) -> decisions.Gated(String, Memory) {
 }
 
 /// Each line asks finance.
-pub fn lines() -> decisions.Desk(String, Memory) {
+pub fn lines() -> decisions.Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("approved") },
@@ -859,7 +864,7 @@ pub fn lines() -> decisions.Desk(String, Memory) {
 }
 
 /// The payout of a whole report proceeds on its own.
-pub fn payouts() -> decisions.Desk(String, Memory) {
+pub fn payouts() -> decisions.Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("paid") },
@@ -912,7 +917,7 @@ pub fn admit(
 /// What follows the line point, handed each settled line: once its
 /// bundle is complete, recommend the payout under a key derived from the
 /// bundle, so a second follower that sees it complete adds nothing.
-pub fn settled(tx: Memory, line: String) -> Result(Nil, decisions.Refusal) {
+pub fn settled(tx: Tx, line: String) -> Result(Nil, decisions.Refusal) {
   use known <- result.try(decisions.read(lines(), tx, occurrence: line))
   case known.bundle {
     None -> Ok(Nil)
@@ -966,7 +971,7 @@ has been expected and not yet recommended has the head status `pending`; `decisi
 <!-- snips: examples/usage/src/decisions_usage/expect_then_recommend.gleam#expect-then-recommend -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
@@ -974,7 +979,7 @@ import decisions/vocabulary.{
 import decisions_usage/clinic.{type Refund, Refund}
 import gleam/result
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point() |> decisions.superseded_by("statement_corrected"),
     drives: fn(_) { clinic.refund_fee() },
@@ -1089,7 +1094,7 @@ again". See [ADR 0054](https://github.com/gleam-dream/decisions/blob/main/docs/a
 <!-- snips: examples/usage/src/decisions_usage/deadline_per_occurrence.gleam#deadline-per-occurrence -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
@@ -1100,7 +1105,7 @@ import decisions_usage/clinic
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 
-pub fn desk() -> decisions.Desk(String, Memory) {
+pub fn desk() -> decisions.Desk(String, Tx) {
   decisions.desk(
     // No validity of its own: each draft carries its window.
     decisions.point("reply.draft", wire.text()),
@@ -1177,7 +1182,7 @@ by retrying blindly.
 <!-- snips: examples/usage/src/decisions_usage/provider_effect.gleam#provider-effect -->
 ```gleam
 import decisions.{type Gated, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/vocabulary.{
   type Effect, Agent, Approve, Manifest, NotPerformed, Performed, Recommendation,
@@ -1191,7 +1196,7 @@ import gleam/result
 
 /// The tool writes the instruction; the release's key is the idempotency
 /// key the provider will be sent.
-pub fn instruct() -> Gated(Refund, Memory) {
+pub fn instruct() -> Gated(Refund, Tx) {
   Gated(
     name: "refund_at_provider",
     guard: fn(_, _) { Ok([]) },
@@ -1207,7 +1212,7 @@ pub fn instruct() -> Gated(Refund, Memory) {
   )
 }
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_) { instruct() },
@@ -1257,7 +1262,7 @@ changes the card still shows what the model had and flags what changed.
 <!-- snips: examples/usage/src/decisions_usage/same_context.gleam#same-context -->
 ```gleam
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model.{type Reader, type Sources, Sources}
 import decisions/occurrence
 import decisions/view.{type View}
@@ -1310,7 +1315,7 @@ pub fn billing_model() -> model.Model(Refund) {
 pub fn live(store: Memory, balance: fn() -> Result(String, String)) -> Sources {
   Sources(
     resolve: fn(ref: Ref) {
-      memory.get(store, "message:" <> ref.id)
+      memory.transaction(store, memory.get(_, "message:" <> ref.id))
       |> result.replace_error(model.ReadFailed(
         ref.kind,
         ref.id,
@@ -1318,25 +1323,26 @@ pub fn live(store: Memory, balance: fn() -> Result(String, String)) -> Sources {
       ))
     },
     read: fn(name, argument) {
-      model.capture(
+      memory.transaction(store, model.capture(
         memory.evidence(),
-        store,
+        _,
         source: name,
         request: argument,
         fetch: balance,
-      )
+      ))
       |> result.map_error(model.ReadFailed(name, argument, _))
     },
   )
 }
 
-/// What the record holds, by reference: the content as it was read.
-pub fn recorded(store: Memory) -> fn(Ref) -> Result(String, model.Failure) {
+/// What the record holds, by reference: the content as it was read, in
+/// the caller's transaction.
+pub fn recorded(tx: Tx) -> fn(Ref) -> Result(String, model.Failure) {
   fn(ref: Ref) {
     case ref.kind {
       "message" ->
-        memory.get(store, "message:" <> ref.id) |> result.replace_error(Nil)
-      _ -> memory.evidence().get(store, ref) |> result.replace_error(Nil)
+        memory.get(tx, "message:" <> ref.id) |> result.replace_error(Nil)
+      _ -> memory.evidence().get(tx, ref) |> result.replace_error(Nil)
     }
     |> result.replace_error(model.NotRecorded(ref.kind, ref.id))
   }
@@ -1361,13 +1367,13 @@ pub fn card(
       view.context(
         decisions.shown(card),
         with: read_dossier(),
-        content: recorded(store),
+        content: recorded(tx),
       )
       |> result.map_error(fn(failure) {
         decisions.Unreadable(model.describe(failure))
       }),
     )
-    Ok(#(dossier, view.of(card, content: recorded(store))))
+    Ok(#(dossier, view.of(card, content: recorded(tx))))
   })
 }
 
@@ -1469,7 +1475,7 @@ tool.
 ```gleam
 import decisions
 import decisions/learning.{type Replay, Archive}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model.{type Model}
 import decisions/occurrence.{type Occurrence}
 import decisions/vocabulary.{

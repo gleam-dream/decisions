@@ -3,7 +3,7 @@
 //// classifies a refusal.
 
 import decisions.{Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{
   AnyoneHolding, Either, Never, Proceed, Several, SomeoneElseHolding,
 }
@@ -26,7 +26,7 @@ fn tool() {
   Gated(name: "t", guard: fn(_, _) { Ok([]) }, execute: fn(_, _) { Ok(Nil) })
 }
 
-fn desk_over(port, p) -> decisions.Desk(String, Memory) {
+fn desk_over(port, p) -> decisions.Desk(String, Tx) {
   decisions.desk(
     decisions.point("feedback.point", wire.text())
       |> decisions.valid_for(duration.hours(1)),
@@ -84,7 +84,10 @@ pub fn the_head_says_who_may_not_decide_test() {
   assert head_of(db, w.id).may_not_decide == ["felipe", "caio", "bia"]
   assert memory.queue_for(db, bia) == []
   let assert Ok(_) =
-    testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk)]),
+    )
 }
 
 /// 2. A clock with microseconds is reduced to whole milliseconds, so the
@@ -129,7 +132,10 @@ pub fn a_finer_clock_is_kept_in_whole_milliseconds_test() {
   assert list.all(w.entries, fn(entry) { whole(entry.at) })
   assert list.all(memory.wakes(db), fn(wake) { whole(wake.at) })
   let assert Ok(_) =
-    testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk)]),
+    )
 }
 
 /// A store whose clock cannot be read reports the clock's error, and

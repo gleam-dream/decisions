@@ -3,7 +3,7 @@
 import decisions.{type Desk, Gated}
 import decisions/fact
 import decisions/learning
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence
 import decisions/policy.{All, AnyoneHolding, Consult, Never, Not, Proceed, When}
 import decisions/vocabulary.{
@@ -42,7 +42,7 @@ fn policy() {
 }
 
 /// Consulting queues the review, as a job would carry it.
-fn outer() -> Desk(Refund, Memory) {
+fn outer() -> Desk(Refund, Tx) {
   refund.desk_of(
     refund.point() |> decisions.answer(opinion(), from: "billing.refund_review"),
     policy(),
@@ -55,7 +55,7 @@ fn outer() -> Desk(Refund, Memory) {
 /// The reviewing point is an ordinary decision point. Its output is a
 /// recommended verdict, and its tool informs the occurrence that consulted
 /// it.
-fn review() -> Desk(String, Memory) {
+fn review() -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("billing.refund_review", wire.text()),
     drives: fn(_) {
@@ -94,7 +94,7 @@ fn review() -> Desk(String, Memory) {
 fn run_reviews(w: World, verdict: String) -> List(String) {
   let assert Ok(reviews) =
     world.in_tx(w, fn(tx) {
-      let queued = world.all(tx, "reviews_to_run")
+      let queued = world.list_in(tx, "reviews_to_run")
       memory.put(tx, "reviews_to_run", "[]")
       list.try_map(queued, fn(consulted_by) {
         decisions.recommend(

@@ -100,8 +100,8 @@
   #components(
     component(name: "Memory store", tint: "teal", mission: "A single-process store of text for tests and examples.", answers: answers-data(
       responsibility: [Implement the whole port in `decisions/memory` and pass the conformance suite.],
-      interface: [`new`, `transaction`, `restart`, `port`, `inspection`, `evidence`, the clock (`now`, `set_clock`, `advance`), `queue`, `queue_for`, `review_queue`, `wakes`, `take_due`, `snooze`, `notices`, `get`, `put`, `tamper`.],
-      interactions: [The same table holds the application's own rows, so a gated tool's writes commit and roll back with the verdict that released them.],
+      interface: [`new`, `transaction`, `restart`, `port`, `inspection`, `evidence`, the clock (`now`, `set_clock`, `advance`), `queue`, `queue_for`, `review_queue`, `entries`, `heads`, `wakes`, `take_due`, `snooze`, `notices`, `get`, `put`, `tamper`.],
+      interactions: [Only `transaction` makes a `Tx`, and it takes the `Memory`, so every verb runs inside a transaction; the port, `inspection`, `evidence` and the application rows `get` and `put` take the `Tx`, and the queue reads, `entries`, `heads`, `wakes`, `notices`, the clock and the test controls take the `Memory` (#adr(63)). The same table holds the application's own rows, so a gated tool's writes commit and roll back with the verdict that released them.],
       invariants: [It keeps only text, so `restart` keeps exactly what a database would. A body that returns an error or raises puts every row back.],
       failure: [It serialises nothing: the lock the port promises holds only because one process runs one transaction at a time. It builds for Erlang and JavaScript.],
     )),

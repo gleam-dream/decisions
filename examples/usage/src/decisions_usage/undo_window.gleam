@@ -5,7 +5,7 @@
 
 // snips-start: undo-window
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
@@ -16,7 +16,7 @@ import decisions_usage/clinic.{type Refund, Refund}
 import gleam/option.{Some}
 import gleam/time/duration
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     autonomy_ladder.point() |> decisions.withdrawn_by("finance"),
     drives: fn(_) { clinic.refund_fee() },

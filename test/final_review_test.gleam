@@ -4,7 +4,7 @@
 
 import decisions.{type Desk, Gated}
 import decisions/learning
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{
   All, AnyoneHolding, Ask, Consult, Either, Never, Not, Proceed, Several,
@@ -36,7 +36,7 @@ fn tool() {
   })
 }
 
-fn desk_on(point, p) -> Desk(String, Memory) {
+fn desk_on(point, p) -> Desk(String, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { tool() },
@@ -351,7 +351,7 @@ pub fn r10_an_unsure_guard_at_a_wake_up_is_tried_again_test() {
     )
   let assert Ok(w) = recommend(db, desk, "100")
   let assert Ok(_) = approve(db, desk, w.id, ana)
-  memory.put(db, "db_down", "1")
+  world.commit(db, memory.put(_, "db_down", "1"))
   at(db, 6)
   let before = memory.entries(db, w.id)
   let assert Error(refusal) =
@@ -365,7 +365,7 @@ pub fn r10_an_unsure_guard_at_a_wake_up_is_tried_again_test() {
   let assert occurrence.Released(..) = done.status
 }
 
-fn up_desk() -> Desk(String, Memory) {
+fn up_desk() -> Desk(String, Tx) {
   decisions.desk(
     base_point() |> decisions.with_hold(duration.minutes(5)),
     drives: fn(_) { tool() },
@@ -459,7 +459,7 @@ pub fn r12_guard_check_then_executor_test() {
 
 /// A desk on a held point whose tool's executor, or whose release check,
 /// cannot tell while `db_down` is "1".
-fn flaky_desk(in_tool: Bool) -> Desk(String, Memory) {
+fn flaky_desk(in_tool: Bool) -> Desk(String, Tx) {
   let down = fn(tx) { memory.get(tx, "db_down") == Ok("1") }
   let desk =
     decisions.desk(
@@ -492,7 +492,7 @@ fn unsure_at_wake_up(in_tool: Bool, reason: String) -> Nil {
   let desk = flaky_desk(in_tool)
   let assert Ok(w) = recommend(db, desk, "100")
   let assert Ok(_) = approve(db, desk, w.id, ana)
-  memory.put(db, "db_down", "1")
+  world.commit(db, memory.put(_, "db_down", "1"))
   at(db, 6)
   let before = memory.entries(db, w.id)
   let assert Error(refusal) =
@@ -502,7 +502,7 @@ fn unsure_at_wake_up(in_tool: Bool, reason: String) -> Nil {
   assert memory.entries(db, w.id) == before
   assert effects(db) == []
   // Sure again: the next wake-up releases, once.
-  memory.put(db, "db_down", "0")
+  world.commit(db, memory.put(_, "db_down", "0"))
   let assert Ok(decisions.Woken(done)) =
     memory.transaction(db, decisions.wake(desk, _, w.id))
   let assert occurrence.Released(..) = done.status

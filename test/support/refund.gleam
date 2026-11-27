@@ -2,7 +2,7 @@
 
 import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/fact.{type Key}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{type Policy}
 import decisions/vocabulary.{
@@ -42,7 +42,7 @@ pub fn point() -> Point(Refund) {
   })
 }
 
-pub fn refund_fee() -> Gated(Refund, Memory) {
+pub fn refund_fee() -> Gated(Refund, Tx) {
   Gated(
     name: "refund_fee",
     guard: fn(_, _) { Ok([]) },
@@ -57,7 +57,7 @@ pub fn refund_fee() -> Gated(Refund, Memory) {
   )
 }
 
-pub fn desk_of(point: Point(Refund), policy: Policy) -> Desk(Refund, Memory) {
+pub fn desk_of(point: Point(Refund), policy: Policy) -> Desk(Refund, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { refund_fee() },
@@ -66,13 +66,13 @@ pub fn desk_of(point: Point(Refund), policy: Policy) -> Desk(Refund, Memory) {
   )
 }
 
-pub fn desk(policy: Policy) -> Desk(Refund, Memory) {
+pub fn desk(policy: Policy) -> Desk(Refund, Tx) {
   desk_of(point(), policy)
 }
 
 pub fn request(
-  desk: Desk(Refund, Memory),
-  tx: Memory,
+  desk: Desk(Refund, Tx),
+  tx: Tx,
   trigger: Trigger,
   by: Recommender,
   refund: Refund,

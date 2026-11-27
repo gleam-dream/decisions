@@ -3,7 +3,7 @@
 
 import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/fact
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/vocabulary.{
@@ -51,7 +51,7 @@ pub fn point() -> Point(Invoice) {
 /// The tax context's executor. It applies the command `RequestInvoice`
 /// once: the invoice is `submitted` and the effect `SubmitNfse` is
 /// requested, all in the releasing transaction.
-pub fn issue_nfse() -> Gated(Invoice, Memory) {
+pub fn issue_nfse() -> Gated(Invoice, Tx) {
   Gated(
     name: "issue_nfse",
     guard: fn(_, _) { Ok([]) },
@@ -70,7 +70,7 @@ pub fn issue_nfse() -> Gated(Invoice, Memory) {
   )
 }
 
-pub fn desk() -> Desk(Invoice, Memory) {
+pub fn desk() -> Desk(Invoice, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) { issue_nfse() },
@@ -120,7 +120,7 @@ pub fn recommend(
 }
 
 pub fn state(world: World, key: String) -> Result(String, Nil) {
-  memory.get(world.db, "invoice:" <> key)
+  world.commit(world.db, memory.get(_, "invoice:" <> key))
 }
 
 /// The shell performs the effects the update requested, after the commit.
@@ -129,20 +129,25 @@ pub fn state(world: World, key: String) -> Result(String, Nil) {
 pub fn perform_effects(world: World) -> Nil {
   list.each(world.all(world.db, "effects"), fn(effect) {
     let assert [key, service_code] = string.split(effect, "|")
-    world.bump(world.outside, "municipality.issue_calls")
-    memory.put(world.outside, "municipality:" <> key, service_code)
-    memory.put(world.db, "invoice:" <> key, "uncertain")
+    world.commit(world.outside, world.bump(_, "municipality.issue_calls"))
+    world.commit(world.outside, memory.put(
+      _,
+      "municipality:" <> key,
+      service_code,
+    ))
+    world.commit(world.db, memory.put(_, "invoice:" <> key, "uncertain"))
   })
-  memory.put(world.db, "effects", "[]")
+  world.commit(world.db, memory.put(_, "effects", "[]"))
 }
 
 /// An uncertain outcome is settled by reading the outside system back by
 /// key, never by repeating the call.
 pub fn settle_uncertain(world: World, key: String) -> Nil {
-  world.bump(world.outside, "municipality.read_calls")
-  case memory.get(world.outside, "municipality:" <> key) {
-    Ok(_) -> memory.put(world.db, "invoice:" <> key, "issued")
-    Error(Nil) -> memory.put(world.db, "invoice:" <> key, "not_issued")
+  world.commit(world.outside, world.bump(_, "municipality.read_calls"))
+  case world.commit(world.outside, memory.get(_, "municipality:" <> key)) {
+    Ok(_) -> world.commit(world.db, memory.put(_, "invoice:" <> key, "issued"))
+    Error(Nil) ->
+      world.commit(world.db, memory.put(_, "invoice:" <> key, "not_issued"))
   }
 }
 

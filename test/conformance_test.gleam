@@ -3,7 +3,7 @@
 
 import decisions
 import decisions/conformance.{type Adapter}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/store.{Conflict, Stored}
 import decisions/vocabulary
 import gleam/list
@@ -14,15 +14,20 @@ import gleam/time/duration
 import gleam/time/timestamp
 import support/world
 
-fn fresh(change: fn(Adapter(Memory)) -> Adapter(Memory)) {
+/// A change to the adapter over a fresh store, which it may also read and
+/// write outside the port.
+type Change =
+  fn(Memory, Adapter(Tx)) -> Adapter(Tx)
+
+fn fresh(change: Change) {
   fn() {
     let db = memory.new()
     memory.set_clock(db, world.t0())
-    Ok(change(world.adapter(db)))
+    Ok(change(db, world.adapter(db)))
   }
 }
 
-fn failed(change: fn(Adapter(Memory)) -> Adapter(Memory)) -> List(String) {
+fn failed(change: Change) -> List(String) {
   case conformance.run(fresh(change)) {
     Ok(Nil) -> []
     Error(unmet) ->
@@ -35,17 +40,19 @@ fn failed(change: fn(Adapter(Memory)) -> Adapter(Memory)) -> List(String) {
   }
 }
 
-fn port(
-  change: fn(store.Port(Memory)) -> store.Port(Memory),
-) -> fn(Adapter(Memory)) -> Adapter(Memory) {
-  fn(adapter: Adapter(Memory)) {
-    conformance.Adapter(..adapter, port: change(adapter.port))
+fn port(change: fn(store.Port(Tx)) -> store.Port(Tx)) -> Change {
+  on_store(fn(_, p) { change(p) })
+}
+
+fn on_store(change: fn(Memory, store.Port(Tx)) -> store.Port(Tx)) -> Change {
+  fn(db, adapter: Adapter(Tx)) {
+    conformance.Adapter(..adapter, port: change(db, adapter.port))
   }
 }
 
 /// An adapter whose transaction commits what its body wrote whatever the
 /// body returned.
-fn never_rolls_back(adapter: Adapter(Memory)) -> Adapter(Memory) {
+fn never_rolls_back(_db: Memory, adapter: Adapter(Tx)) -> Adapter(Tx) {
   conformance.Adapter(..adapter, transaction: fn(body) {
     let ran =
       adapter.transaction(fn(tx) {
@@ -63,20 +70,20 @@ fn never_rolls_back(adapter: Adapter(Memory)) -> Adapter(Memory) {
 }
 
 pub fn the_memory_store_conforms_test() {
-  assert failed(fn(adapter) { adapter }) == []
+  assert failed(fn(_, adapter) { adapter }) == []
 }
 
 /// The suite assumes nothing about the clock between two reads: an
 /// adapter whose clock advances on every read passes.
 pub fn a_clock_that_moves_on_every_read_passes_test() {
   assert failed(
-      port(fn(p) {
-        store.Port(..p, now: fn(tx) {
+      on_store(fn(db, p) {
+        store.Port(..p, now: fn(_) {
           memory.set_clock(
-            tx,
-            timestamp.add(memory.now(tx), duration.milliseconds(7)),
+            db,
+            timestamp.add(memory.now(db), duration.milliseconds(7)),
           )
-          Ok(memory.now(tx))
+          Ok(memory.now(db))
         })
       }),
     )
@@ -129,10 +136,10 @@ pub fn each_check_catches_its_broken_adapter_test() {
     #("a savepoint rolls back alone", no_savepoint),
     #(
       "a savepoint keeps what succeeded",
-      port(fn(p) {
-        store.Port(..p, atomically: fn(tx, body) {
+      on_store(fn(db, p) {
+        store.Port(..p, atomically: fn(_, body) {
           // Everything the body wrote is undone, whatever it returned.
-          case memory.transaction(tx, fn(t) { Error(body(t)) }) {
+          case memory.transaction(db, fn(t) { Error(body(t)) }) {
             Error(ran) -> Ok(ran)
             Ok(ran) -> Ok(ran)
           }
@@ -167,9 +174,9 @@ pub fn each_check_catches_its_broken_adapter_test() {
     ),
     #(
       "waiting filters by point, subject and status, in id order",
-      port(fn(p) {
-        store.Port(..p, waiting: fn(tx, point, subject) {
-          memory.heads(tx)
+      on_store(fn(db, p) {
+        store.Port(..p, waiting: fn(_, point, subject) {
+          memory.heads(db)
           |> list.filter(fn(pair) {
             { pair.1 }.point == point
             && { pair.1 }.subject == subject

@@ -7,7 +7,7 @@
 
 // snips-start: expect-then-recommend
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
   Classifier, Manifest, Receipt, Recommendation, Ref, Trigger,
@@ -15,7 +15,7 @@ import decisions/vocabulary.{
 import decisions_usage/clinic.{type Refund, Refund}
 import gleam/result
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point() |> decisions.superseded_by("statement_corrected"),
     drives: fn(_) { clinic.refund_fee() },
