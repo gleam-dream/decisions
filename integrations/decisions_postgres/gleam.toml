@@ -8,14 +8,14 @@ repository = { type = "github", user = "gleam-dream", repo = "decisions" }
 internal_modules = ["decisions_postgres/internal", "decisions_postgres/internal/*"]
 
 [dependencies]
-decisions = ">= 0.1.1 and < 0.2.0"
+decisions = ">= 0.1.1 and < 0.3.0"
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
-grind = ">= 0.2.0 and < 0.3.0"
-sinal = ">= 0.1.0 and < 0.2.0"
+grind = ">= 0.3.0 and < 0.4.0"
+sinal = ">= 0.2.0 and < 0.3.0"
 # Pinned tight, not the usual `>= x.y.0 and < (x+1).0.0`: an application
 # shares one pog/pgo pool between itself, Grind and this package, and Grind
 # pins these exact minor ranges because its FFI matches pog's and pgo's

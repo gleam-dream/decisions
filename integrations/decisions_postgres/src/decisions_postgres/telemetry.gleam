@@ -22,7 +22,10 @@
 //// ```
 ////
 //// Handlers run in the worker's process unless the application routes the
-//// prefix `["decisions_postgres"]` to a Sinal forwarder.
+//// prefix `["decisions_postgres"]` to a Sinal forwarder. Sinal binds a
+//// handler to the process that attached it and detaches it when that
+//// process exits, so attach a handler that must outlive a call from a
+//// long-lived supervised process, such as an actor's initialiser.
 ////
 //// Every event's metadata names the store that emitted it as its first
 //// field, `source` (set with `decisions_postgres.with_name`), so two

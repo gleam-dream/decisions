@@ -7,7 +7,10 @@
 ////
 //// Each function returns a typed `sinal.Event`; attach a handler to it
 //// with `sinal.observe` or `sinal.attach`. This module owns the events,
-//// not handler registration.
+//// not handler registration. Sinal binds a handler to the process that
+//// attached it and detaches it when that process exits, so attach a
+//// handler that must outlive a call from a long-lived supervised process,
+//// such as an actor's initialiser.
 ////
 //// Every metadata record carries `source`, which names the runtime (its
 //// `Config.name`) or the isolated model's request (`Request.source`) that

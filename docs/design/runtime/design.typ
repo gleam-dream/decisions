@@ -158,7 +158,7 @@
     [`decisions_otp/telemetry`], [`settlement_delivered`, `trigger_worked`, `wake_delivered` with its outcome, `job_failed`, `job_dropped` for a job removed as done, `job_set_aside`, `model_failed` for a deadline or a raise. Every record carries `source` (the runtime's `Config.name` or the request's source), the point, the occurrence (the trigger's key for a trigger) and a correlation derived from the occurrence id; durations are in microseconds.],
     [`decisions_postgres/telemetry`], [`wake_delivered`, `wake_rescheduled`, `settlement_delivered`, `set_aside` for a wake-up, a notice or an occurrence; every record carries `source`, the store's name (`with_name`).],
   ))
-  #points([A handler runs synchronously in the emitting process unless the application routes the prefix to a Sinal forwarder; a slow handler slows a delivery process, never a verb, and never holds a lock.])
+  #points([A handler runs synchronously in the emitting process unless the application routes the prefix to a Sinal forwarder; a slow handler slows a delivery process, never a verb, and never holds a lock.], [Neither package attaches a handler. Sinal binds a handler to the process that attached it and detaches it when that process exits, so an application attaches a handler that must outlive a call from a long-lived supervised process.])
 ])
 
 #section(title: "The stress suite", lead: "The port's clauses that need several processes, and the race and crash conditions, written once against any store.", body: [
