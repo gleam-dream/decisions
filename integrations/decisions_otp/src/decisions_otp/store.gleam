@@ -72,8 +72,9 @@
 //// valid only inside the body `transaction` handed it to, and nothing
 //// else makes one, so the lock a verb takes, the gated tool's writes and
 //// the entry that records the release always commit together.
-//// `transaction` takes the `Store`, not a `Tx`, so one cannot be opened
-//// inside another. The reads an application makes outside a transaction
+//// `transaction` takes the `Store`, not a `Tx`: called inside another
+//// transaction's body with the same `Store`, it opens a second, separate
+//// transaction, which commits by itself. The reads an application makes outside a transaction
 //// (the queues, the pages, `entries`, `heads`, `wakes`, `notices`) take
 //// the `Store` and see committed rows; read a record through its desk
 //// with `store.transaction(s, decisions.read(desk, _, occurrence: id))`.

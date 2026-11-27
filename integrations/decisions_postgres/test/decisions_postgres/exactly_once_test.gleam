@@ -34,5 +34,7 @@ pub fn racing_processes_release_each_key_once_test() {
         proposal: kit.proposal(spec.name, vocabulary.Subject("person", key)),
       ))
     })
+  // One effect for each key, not twenty in all.
+  assert list.all(keys, fn(key) { kit.effects_of(env.db, key) == 1 })
   assert kit.effects(env.db, spec.name) == 20
 }

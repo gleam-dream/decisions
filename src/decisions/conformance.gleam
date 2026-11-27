@@ -175,7 +175,12 @@ pub fn run_check(
   fresh: fn() -> Result(Adapter(tx), String),
 ) -> Result(Nil, Unmet) {
   use adapter <- result.try(fresh() |> result.map_error(SetupFailed))
-  let outcome = check.run(adapter)
+  // A raise, such as a transaction that failed while a check read a new
+  // id, is that check's failure, not the suite's crash.
+  let outcome = case rescue.rescue(fn() { check.run(adapter) }) {
+    Ok(outcome) -> outcome
+    Error(raised) -> Error("the check raised: " <> raised)
+  }
   adapter.cleanup()
   outcome |> result.map_error(CheckFailed(check.name, _))
 }
@@ -1301,7 +1306,8 @@ fn within(
 }
 
 /// A text read in a transaction of its own. A store that cannot run the
-/// transaction fails the check, so this raises.
+/// transaction fails the check: this raises, and `run_check` reports the
+/// raise as the check's failure.
 fn text(adapter: Adapter(tx), read: fn(tx) -> String) -> String {
   case adapter.transaction(fn(tx) { Ok(read(tx)) }) {
     Ok(text) -> text
