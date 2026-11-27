@@ -20,13 +20,13 @@ The core is released to Hex: pushing a signed `v<version>` tag on the version
 bump's merge commit runs `.github/workflows/release.yml`, which stages the
 release on hex.pm for a maintainer's approval (staged publishing is on). The
 integrations are released as Git tags of this
-repository (`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`), not on Hex.
-An integration's release commit replaces its path dependency on the root
-(`decisions = { path = "../.." }`) with the core's Hex version range.
-Both currently depend on the working-tree core: they need core 0.2.0
-(bundles, `store.Port.members`), which is not yet on Hex. Publish core
-0.2.0, then release `decisions_otp-v0.2.0` and `decisions_postgres-v0.3.0`
-in that order, each moving to `decisions = ">= 0.2.0 and < 0.3.0"`. The core never depends on an integration. The design
+repository (`decisions_otp-v0.2.0`, `decisions_postgres-v0.3.0`), not on Hex.
+Each integration requires the published core by its Hex range
+(`decisions = ">= 0.2.0 and < 0.3.0"`), and its tests run against that
+release. When a change to an integration needs an unreleased core, the
+integration depends on the working-tree core (`decisions = { path = "../.." }`)
+until the core is published, and its release commit puts the Hex range back.
+The core never depends on an integration. The design
 layer under `docs/design/` owns the contracts and the vocabulary, `docs/adr/`
 records the rationale, and `docs/COVERAGE.md` maps repository parts to their
 design owners.
