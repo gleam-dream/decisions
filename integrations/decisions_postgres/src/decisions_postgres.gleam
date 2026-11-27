@@ -1459,51 +1459,32 @@ pub type Swept {
 /// settlement (see `wake_worker`). Run it once the runtime has started,
 /// and whenever an operator wants to; it is safe beside the workers,
 /// because the row stays the authority: a job admitted twice delivers
-/// once, and the second finds nothing pending. It reads each row's job
-/// (two queries a row) and lists the queue's uncertain jobs once, so its
-/// cost grows with the pending rows. A storage failure, Grind's included,
-/// is an `Error`, never a row taken for one without a job.
+/// once, and the second finds nothing pending.
+///
+/// It reads the pending rows in batches of 500, those without a
+/// recorded job first, then the others in the order of their jobs. A row
+/// without a job needs no Grind read. For the other rows of a batch, one
+/// listing of the store's queue in Grind reads their jobs, from the first
+/// job's id to the last; it reads another page only when more than 10 000
+/// jobs of the queue fall between them. So its memory is bounded by a
+/// batch, and its reads grow with the batches, not with the rows. A
+/// storage failure, Grind's included, is an `Error`, never a row taken for
+/// one without a job.
 pub fn sweep(store: Store, db: Pool) -> Result(Swept, StoreError) {
   let db = sql.pool_connection(db)
-  use wakes <- result.try(
-    pog.query(
-      "SELECT id, point, occurrence_id, decisions_ms(at), job_id
-       FROM decisions_wakes WHERE set_aside_at IS NULL ORDER BY id",
-    )
-    |> pog.returning({
-      use input <- decode.then(wake_row())
-      use job_id <- decode.field(4, decode.optional(decode.int))
-      decode.success(#(input, job_id))
-    })
-    |> sql.run(db),
-  )
-  use notices <- result.try(
-    pog.query(
-      "SELECT id, point, occurrence_id, job_id FROM decisions_settled
-       WHERE delivered_at IS NULL AND set_aside_at IS NULL
-         AND point = ANY ($1::text[])
-       ORDER BY id",
-    )
-    |> pog.parameter(pog.array(pog.text, store.followed))
-    |> pog.returning({
-      use notice <- decode.field(0, decode.int)
-      use point <- decode.field(1, decode.string)
-      use occurrence <- decode.field(2, decode.string)
-      use job_id <- decode.field(3, decode.optional(decode.int))
-      decode.success(#(NoticeJob(notice:, point:, occurrence:), job_id))
-    })
-    |> sql.run(db),
-  )
-  // Listed before any job's state is read: a job held uncertain after
-  // this listing was held just now, and its settlement is due.
-  use marks <- result.try(uncertain_marks(store, 0, dict.new()))
-  let wake_worker = wake_definition(store, never_runs)
-  let notice_worker = settlement_definition(store, never_runs)
-  use #(woken, left) <- result.try(
-    list.try_fold(wakes, #(0, []), fn(swept, row) {
-      let #(input, job_id) = row
-      use recorded <- result.try(recorded_job(store, wake_worker, job_id, marks))
-      readmit_unless_live(swept, recorded, fn() {
+  let wakes =
+    Pending(
+      from: "decisions_wakes WHERE set_aside_at IS NULL",
+      columns: "id, point, occurrence_id, decisions_ms(at), id, job_id",
+      parameters: [],
+      row: {
+        use input <- decode.then(wake_row())
+        use id <- decode.field(4, decode.int)
+        use job_id <- decode.field(5, decode.optional(decode.int))
+        decode.success(Row(input:, id:, job_id:))
+      },
+      worker: worker.id(wake_definition(store, never_runs)),
+      readmit: fn(input: WakeJob) {
         readmit(db, "decisions_wakes", input.wake, fn(tx) {
           admit_wake(
             store,
@@ -1515,19 +1496,28 @@ pub fn sweep(store: Store, db: Pool) -> Result(Swept, StoreError) {
               <> sql.new_id(),
           )
         })
-      })
-    }),
-  )
-  use #(noticed, left) <- result.map(
-    list.try_fold(notices, #(0, left), fn(swept, row) {
-      let #(input, job_id) = row
-      use recorded <- result.try(recorded_job(
-        store,
-        notice_worker,
-        job_id,
-        marks,
-      ))
-      readmit_unless_live(swept, recorded, fn() {
+      },
+    )
+  let notices =
+    Pending(
+      from: "decisions_settled
+             WHERE delivered_at IS NULL AND set_aside_at IS NULL
+               AND point = ANY ($1::text[])",
+      columns: "id, point, occurrence_id, job_id",
+      parameters: [pog.array(pog.text, store.followed)],
+      row: {
+        use notice <- decode.field(0, decode.int)
+        use point <- decode.field(1, decode.string)
+        use occurrence <- decode.field(2, decode.string)
+        use job_id <- decode.field(3, decode.optional(decode.int))
+        decode.success(Row(
+          input: NoticeJob(notice:, point:, occurrence:),
+          id: notice,
+          job_id:,
+        ))
+      },
+      worker: worker.id(settlement_definition(store, never_runs)),
+      readmit: fn(input: NoticeJob) {
         readmit(db, "decisions_settled", input.notice, fn(tx) {
           admit_notice(
             store,
@@ -1539,10 +1529,227 @@ pub fn sweep(store: Store, db: Pool) -> Result(Swept, StoreError) {
               <> sql.new_id(),
           )
         })
-      })
+      },
+    )
+  use #(woken, left) <- result.try(swept(store, db, wakes, #(0, [])))
+  use #(noticed, left) <- result.map(swept(store, db, notices, #(0, left)))
+  Swept(wakes: woken, notices: noticed, left_uncertain: list.reverse(left))
+}
+
+/// How many pending rows `sweep` reads at once.
+const sweep_batch = 500
+
+/// The most jobs one Grind listing returns.
+const job_page = 10_000
+
+/// One kind of pending row `sweep` reads: where its rows are, how one is
+/// read, the worker its jobs belong to, and how its job is admitted again.
+type Pending(input) {
+  Pending(
+    /// The table and the condition every pending row meets.
+    from: String,
+    /// The columns `row` reads.
+    columns: String,
+    /// The parameters `from` names, `$1` onwards.
+    parameters: List(pog.Value),
+    row: decode.Decoder(Row(input)),
+    worker: String,
+    readmit: fn(input) -> Result(Int, StoreError),
+  )
+}
+
+/// A pending row: the job's input, the row's id and its recorded job.
+type Row(input) {
+  Row(input: input, id: Int, job_id: Option(Int))
+}
+
+/// Sweep one kind of row: those without a job, then those with one. A job
+/// admitted here has an id above `ceiling`, read first, so its row is not
+/// read again.
+fn swept(
+  store: Store,
+  db: pog.Connection,
+  kind: Pending(input),
+  swept: #(Int, List(Int)),
+) -> Result(#(Int, List(Int)), StoreError) {
+  use ceiling <- result.try(
+    pog.query("SELECT coalesce(max(job_id), 0) FROM " <> kind.from)
+    |> parameters(kind.parameters)
+    |> pog.returning(decode.at([0], decode.int))
+    |> sql.run(db)
+    |> result.map(fn(rows) { list.first(rows) |> result.unwrap(0) }),
+  )
+  use swept <- result.try(without_jobs(db, kind, 0, swept))
+  with_jobs(store, db, kind, ceiling, #(0, 0), swept)
+}
+
+/// The rows with no recorded job, after the row `after`, a batch at a time.
+fn without_jobs(
+  db: pog.Connection,
+  kind: Pending(input),
+  after: Int,
+  swept: #(Int, List(Int)),
+) -> Result(#(Int, List(Int)), StoreError) {
+  let next = list.length(kind.parameters) + 1
+  use rows <- result.try(
+    pog.query(
+      "SELECT "
+      <> kind.columns
+      <> " FROM "
+      <> kind.from
+      <> " AND job_id IS NULL AND id > $"
+      <> int.to_string(next)
+      <> " ORDER BY id LIMIT $"
+      <> int.to_string(next + 1),
+    )
+    |> parameters(
+      list.append(kind.parameters, [pog.int(after), pog.int(sweep_batch)]),
+    )
+    |> pog.returning(kind.row)
+    |> sql.run(db),
+  )
+  use swept <- result.try(
+    list.try_fold(rows, swept, fn(swept, row) {
+      readmit_unless_live(swept, NoJob, fn() { kind.readmit(row.input) })
     }),
   )
-  Swept(wakes: woken, notices: noticed, left_uncertain: list.reverse(left))
+  case list.last(rows) {
+    Ok(last) if rows != [] ->
+      case list.length(rows) == sweep_batch {
+        True -> without_jobs(db, kind, last.id, swept)
+        False -> Ok(swept)
+      }
+    _ -> Ok(swept)
+  }
+}
+
+/// The rows with a recorded job at or below `ceiling`, after `after` (a
+/// job id and a row id), a batch at a time in job order, each batch's jobs
+/// read in one listing.
+fn with_jobs(
+  store: Store,
+  db: pog.Connection,
+  kind: Pending(input),
+  ceiling: Int,
+  after: #(Int, Int),
+  swept: #(Int, List(Int)),
+) -> Result(#(Int, List(Int)), StoreError) {
+  let next = list.length(kind.parameters) + 1
+  let n = fn(offset) { "$" <> int.to_string(next + offset) }
+  use rows <- result.try(
+    pog.query(
+      "SELECT "
+      <> kind.columns
+      <> " FROM "
+      <> kind.from
+      <> " AND job_id IS NOT NULL AND job_id <= "
+      <> n(0)
+      <> " AND (job_id, id) > ("
+      <> n(1)
+      <> ", "
+      <> n(2)
+      <> ") ORDER BY job_id, id LIMIT "
+      <> n(3),
+    )
+    |> parameters(
+      list.append(kind.parameters, [
+        pog.int(ceiling),
+        pog.int(after.0),
+        pog.int(after.1),
+        pog.int(sweep_batch),
+      ]),
+    )
+    |> pog.returning(kind.row)
+    |> sql.run(db),
+  )
+  let ids = list.filter_map(rows, fn(row) { option.to_result(row.job_id, Nil) })
+  case ids, list.last(ids), list.last(rows) {
+    [first, ..], Ok(last), Ok(final) -> {
+      use jobs <- result.try(jobs_between(store, first, last, dict.new()))
+      use swept <- result.try(
+        list.try_fold(rows, swept, fn(swept, row) {
+          let recorded = recorded(kind.worker, row.job_id, jobs)
+          readmit_unless_live(swept, recorded, fn() { kind.readmit(row.input) })
+        }),
+      )
+      case list.length(rows) == sweep_batch {
+        True -> with_jobs(store, db, kind, ceiling, #(last, final.id), swept)
+        False -> Ok(swept)
+      }
+    }
+    _, _, _ -> Ok(swept)
+  }
+}
+
+fn parameters(query: pog.Query(a), values: List(pog.Value)) -> pog.Query(a) {
+  list.fold(values, query, pog.parameter)
+}
+
+/// The jobs of the store's queue with ids from `first` to `last`, by id,
+/// read a page of `job_page` at a time.
+fn jobs_between(
+  store: Store,
+  first: Int,
+  last: Int,
+  jobs: Dict(Int, admin.JobSummary),
+) -> Result(Dict(Int, admin.JobSummary), StoreError) {
+  use page <- result.try(
+    admin.list(
+      store.jobs,
+      admin.query(limit: job_page)
+        |> admin.in_queue(store.queue)
+        |> admin.after(first - 1),
+    )
+    |> result.map_error(fn(error) {
+      store.Unavailable(
+        "Grind's jobs could not be listed: " <> admin.describe_error(error),
+      )
+    }),
+  )
+  let jobs =
+    list.fold(page, jobs, fn(jobs, job) {
+      case job.id <= last {
+        True -> dict.insert(jobs, job.id, job)
+        False -> jobs
+      }
+    })
+  case list.last(page) {
+    Ok(final) if final.id < last ->
+      case list.length(page) == job_page {
+        True -> jobs_between(store, final.id + 1, last, jobs)
+        False -> Ok(jobs)
+      }
+    _ -> Ok(jobs)
+  }
+}
+
+/// What a row's recorded job will do for it, from its listing: the state
+/// and the settlement mark are read together, so a job held uncertain is
+/// told apart by the mark it had when it was listed.
+fn recorded(
+  worker_id: String,
+  job_id: Option(Int),
+  jobs: Dict(Int, admin.JobSummary),
+) -> Recorded {
+  case option.map(job_id, dict.get(jobs, _)) {
+    // The id names no job of this row's worker in this queue: never its
+    // job, pruned, or another runtime's.
+    None | Some(Error(Nil)) -> NoJob
+    Some(Ok(summary)) if summary.worker_id != worker_id -> NoJob
+    Some(Ok(summary)) ->
+      case summary.state {
+        job.Uncertain ->
+          case option.then(summary.settlement, admin.mark_due_at) {
+            Some(_) -> AwaitingSettlement
+            None -> LeftUncertain(job: summary.id)
+          }
+        state ->
+          case job.is_finished(state) {
+            True -> Ended
+            False -> Live
+          }
+      }
+  }
 }
 
 /// What a pending row's recorded Grind job will do for it.
@@ -1579,97 +1786,6 @@ fn readmit_unless_live(
           _ -> #(count + admitted, [job, ..left])
         }
       })
-  }
-}
-
-/// Every uncertain job in the store's queue, by id: `True` while its
-/// settlement mark is due (a settler will decide it), `False` when it has
-/// none or it ended.
-fn uncertain_marks(
-  store: Store,
-  after: Int,
-  marks: Dict(Int, Bool),
-) -> Result(Dict(Int, Bool), StoreError) {
-  let page = 1000
-  use jobs <- result.try(
-    admin.list(
-      store.jobs,
-      admin.query(limit: page)
-        |> admin.in_queue(store.queue)
-        |> admin.in_state(job.Uncertain)
-        |> admin.after(after),
-    )
-    |> result.map_error(fn(error) {
-      store.Unavailable(
-        "Grind's uncertain jobs could not be listed: "
-        <> admin.describe_error(error),
-      )
-    }),
-  )
-  let marks =
-    list.fold(jobs, marks, fn(marks, summary) {
-      let due = case summary.settlement {
-        Some(mark) -> option.is_some(admin.mark_due_at(mark))
-        None -> False
-      }
-      dict.insert(marks, summary.id, due)
-    })
-  let full = list.length(jobs) == page
-  case list.last(jobs) {
-    Ok(last) if full -> uncertain_marks(store, last.id, marks)
-    _ -> Ok(marks)
-  }
-}
-
-/// What a row's recorded job will do for it. `marks` is
-/// `uncertain_marks`, listed before this read.
-fn recorded_job(
-  store: Store,
-  definition: worker.Worker(input, String, String),
-  job_id: Option(Int),
-  marks: Dict(Int, Bool),
-) -> Result(Recorded, StoreError) {
-  case job_id {
-    None -> Ok(NoJob)
-    Some(id) -> {
-      let state =
-        grind.bind(store.jobs, definition, id)
-        |> result.try(grind.state(store.jobs, _))
-      case state {
-        Ok(job.Uncertain) ->
-          case dict.get(marks, id) {
-            Ok(False) -> Ok(LeftUncertain(job: id))
-            Ok(True) | Error(Nil) -> Ok(AwaitingSettlement)
-          }
-        Ok(state) ->
-          case job.is_finished(state) {
-            True -> Ok(Ended)
-            False -> Ok(Live)
-          }
-        Error(grind.ReadUnavailable(error)) ->
-          Error(store.Unavailable(
-            "the job "
-            <> int.to_string(id)
-            <> " could not be read: "
-            <> sql.describe(error),
-          ))
-        Error(grind.ReadNotRunning) ->
-          Error(store.Unavailable(
-            "the job "
-            <> int.to_string(id)
-            <> " could not be read: the Grind runtime is not running",
-          ))
-        // The id names no job of this row's worker in this runtime: never
-        // its job, or pruned.
-        Error(grind.JobNotFound)
-        | Error(grind.QueueMismatch(..))
-        | Error(grind.WorkerMismatch(..))
-        | Error(grind.CodecMismatch(..))
-        | Error(grind.HandleFromAnotherDatabase)
-        | Error(grind.UndecodableValue(_))
-        | Error(grind.CorruptRecord(_)) -> Ok(NoJob)
-      }
-    }
   }
 }
 

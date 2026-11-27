@@ -4,7 +4,8 @@
 # directory, listening on 127.0.0.1 at a random free port with trust
 # authentication, stopped and removed on exit. It needs no existing database.
 # It unsets every PG* variable, so it never reaches another server, and it
-# never starts on a port where something already answers. The tests read the
+# never starts on a port where something already answers. It preloads
+# pg_stat_statements, so a test can count the statements an operation sends. The tests read the
 # cluster's URL from DECISIONS_TEST_DATABASE_URL, which only this script sets.
 # It fails when the package does not exist, because no test ran.
 #
@@ -47,7 +48,7 @@ for _ in 1 2 3 4 5; do
   # Something already answers there: never start next to it.
   if pg_isready -h 127.0.0.1 -p "$port" -t 1 >/dev/null 2>&1; then continue; fi
   if pg_ctl -D "$cluster" -l "$root/postgres.log" -w start -o \
-    "-h 127.0.0.1 -p $port -k $root -c fsync=off -c synchronous_commit=off -c max_connections=300" \
+    "-h 127.0.0.1 -p $port -k $root -c fsync=off -c synchronous_commit=off -c max_connections=300 -c shared_preload_libraries=pg_stat_statements" \
     >/dev/null; then
     started=1
     break
