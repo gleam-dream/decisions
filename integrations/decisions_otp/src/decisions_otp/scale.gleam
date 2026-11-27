@@ -74,7 +74,7 @@ fn desk(
         guard: fn(_, _) { Ok([]) },
         execute: fn(tx, released) {
           target.add(tx, name, decisions.key(released))
-          |> result.map_error(decisions.Refuse)
+          |> result.map_error(vocabulary.Refuse)
         },
       )
     },

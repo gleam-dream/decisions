@@ -85,9 +85,10 @@ import decisions/policy.{type Eligible, type Fault, type Policy, type Sample}
 import decisions/store.{type Port, type StoreError}
 import decisions/vocabulary.{
   type Assessment, type Bundle, type Effect, type Fact, type Facts,
-  type Manifest, type Parent, type Recommendation, type Ref, type Subject,
-  type Trigger, type Validator, type Verdict, type Verdicts, Approve,
-  ApproveOrReject, Correct, Person, Ref, Reject, Superseded,
+  type Manifest, type Parent, type Recommendation, type Ref, type Stop,
+  type Subject, type Trigger, type Validator, type Verdict, type Verdicts,
+  Approve, ApproveOrReject, Correct, Person, Ref, Refuse, Reject, Superseded,
+  Unsure,
 }
 import decisions/wire.{type Codec}
 import gleam/bit_array
@@ -344,20 +345,6 @@ pub fn publishable(
 }
 
 // -- Tools --------------------------------------------------------------------
-
-/// Why a guard, a release check or an executor did not let a release
-/// happen.
-pub type Stop {
-  /// It refuses this release, for good. With a validator present the
-  /// verdict rolls back (`ToolRefused`); with nobody waiting the occurrence
-  /// ends `Refused`.
-  Refuse(reason: String)
-  /// It could not tell: its database connection dropped, a provider timed
-  /// out. Its savepoint rolls back, nothing is recorded as refused, and
-  /// the verb fails with `ToolUnsure`, so the caller or the runtime tries
-  /// again later (counted toward setting the job aside).
-  Unsure(reason: String)
-}
 
 /// A guard states facts about the world for a subject, such as "the
 /// service window is open". Its parameters are the transaction and the
@@ -1642,14 +1629,16 @@ pub fn open(
   use Nil <- result.try(live(draft))
   use Nil <- result.try(may_look(desk, current, validator))
   let allowed = desk.point.verdicts
-  case is_showing(current) {
-    False -> Error(nothing_to_do(current))
-    True -> {
+  let drift = drifted(current, latest)
+  case is_showing(current), unchanged_showing(current, validator, drift) {
+    False, _ -> Error(nothing_to_do(current))
+    // Shown before, and nothing but other showings recorded since: the
+    // same showing, so the record does not grow with every view.
+    True, Some(seen) ->
+      Ok(Card(occurrence: current, validator:, seen:, allowed:))
+    True, None -> {
       let draft =
-        add(
-          draft,
-          entry.Opened(by: validator.subject, drifted: drifted(current, latest)),
-        )
+        add(draft, entry.Opened(by: validator.subject, drifted: drift))
       let seen = list.length(draft.occurrence.entries)
       save(desk, tx, draft)
       |> result.map(Card(occurrence: _, validator:, seen:, allowed:))
@@ -1807,6 +1796,27 @@ fn drifted(current: Occurrence(o), latest: fn(Ref) -> String) -> List(Ref) {
   })
 }
 
+/// Whether `validator` may review a sampled release: not whoever decided
+/// it, asked for it, recommended it as their own act or reviewed it, and,
+/// when the point names reviewers, a holder of that set.
+fn may_review(
+  desk: Desk(o, tx),
+  current: Occurrence(o),
+  validator: Validator,
+) -> Bool {
+  let who = validator.subject
+  let excluded =
+    current.requester == Some(who)
+    || current.recommendation.by == Person(who)
+    || list.any(occurrence.verdicts(current), fn(given) { given.0 == who })
+    || list.any(occurrence.reviews(current), fn(given) { given.0 == who })
+    || case desk.point.reviewers {
+      Some(set) -> !list.contains(validator.holds, set)
+      None -> False
+    }
+  !excluded
+}
+
 /// A waiting occurrence is shown only to holders of a set it waits for,
 /// and one waiting for its review only to the point's reviewers.
 fn may_look(
@@ -1819,8 +1829,9 @@ fn may_look(
     // approver of the output that stands.
     occurrence.Awaiting(eligible:), _ ->
       check(is_eligible(eligible, validator, current), NotEligible)
-    occurrence.Released(..), Some(set) if current.sampled ->
-      check(list.contains(validator.holds, set), NotEligible)
+    // The same rule `review` applies to a sampled release.
+    occurrence.Released(..), _ if current.sampled ->
+      check(may_review(desk, current, validator), NotEligible)
     _, _ -> Ok(Nil)
   }
 }
@@ -1829,6 +1840,39 @@ fn may_look(
 /// occurrence has passed, whether or not its wake-up was delivered.
 fn live(draft: Draft(o)) -> Result(Nil, Refusal) {
   check(!occurrence.has_lapsed(draft.occurrence, draft.now), NotAwaiting)
+}
+
+/// The validator's latest showing, when it showed the same drift and
+/// nothing but showings was recorded after it.
+fn unchanged_showing(
+  current: Occurrence(o),
+  validator: Validator,
+  drift: List(Ref),
+) -> Option(Int) {
+  let shown =
+    list.filter_map(current.entries, fn(entry) {
+      case entry.event {
+        entry.Opened(by:, drifted:) if by == validator.subject ->
+          Ok(#(entry.seq, drifted))
+        _ -> Error(Nil)
+      }
+    })
+    |> list.last
+  case shown {
+    Ok(#(seen, recorded)) if recorded == drift ->
+      case
+        list.all(current.entries, fn(entry) {
+          case entry.event {
+            entry.Opened(..) -> True
+            _ -> entry.seq <= seen
+          }
+        })
+      {
+        True -> Some(seen)
+        False -> None
+      }
+    _ -> None
+  }
 }
 
 /// A showing of the occurrence to this validator is recorded at `seen`.
@@ -1997,21 +2041,14 @@ pub fn review(
   case draft.occurrence.sampled, draft.occurrence.status {
     True, occurrence.Released(..) -> {
       let current = draft.occurrence
-      let who = card.validator.subject
       use Nil <- result.try(check(
         was_shown(current, card.validator, card.seen),
         NeverShown,
       ))
-      let excluded =
-        current.requester == Some(who)
-        || current.recommendation.by == Person(who)
-        || list.any(occurrence.verdicts(current), fn(given) { given.0 == who })
-        || list.any(occurrence.reviews(current), fn(given) { given.0 == who })
-        || case desk.point.reviewers {
-          Some(set) -> !list.contains(card.validator.holds, set)
-          None -> False
-        }
-      use Nil <- result.try(check(!excluded, NotEligible))
+      use Nil <- result.try(check(
+        may_review(desk, current, card.validator),
+        NotEligible,
+      ))
       use Nil <- result.try(allowed_verdict(
         desk.point,
         current,
@@ -2884,21 +2921,16 @@ fn release(
       let key = "release:" <> current.id
       use ran <- result.try(
         desk.port.atomically(tx, fn(tx) {
-          use relied <- result.try(
-            tool.guard(tx, current.subject) |> result.map_error(stop_text),
-          )
-          use checked <- result.try(
-            desk.check(
-              tx,
-              ToRelease(
-                output: final,
-                subject: current.subject,
-                context: current.context,
-                key:,
-              ),
-            )
-            |> result.map_error(stop_text),
-          )
+          use relied <- result.try(tool.guard(tx, current.subject))
+          use checked <- result.try(desk.check(
+            tx,
+            ToRelease(
+              output: final,
+              subject: current.subject,
+              context: current.context,
+              key:,
+            ),
+          ))
           // Built for this release attempt only, after the guard and the
           // check allowed it, and handed to the executor alone.
           let released =
@@ -2912,12 +2944,11 @@ fn release(
               context: current.context,
             )
           tool.execute(tx, released)
-          |> result.map_error(stop_text)
           |> result.replace(list.append(relied, checked))
         })
         |> result.map_error(StoreFailed),
       )
-      case result.map_error(ran, stop_of_text), on_refusal {
+      case ran, on_refusal {
         Ok(relied), _ ->
           Ok(add(draft, entry.Released(key:, tool: tool.name, relied:)))
         Error(Unsure(reason:)), _ -> Error(ToolUnsure(reason:))
@@ -2942,22 +2973,6 @@ fn release(
       }
     }
     _ -> Ok(draft)
-  }
-}
-
-/// A `Stop` as the text the port's `atomically` passes back unchanged.
-fn stop_text(stop: Stop) -> String {
-  case stop {
-    Refuse(reason:) -> "refuse:" <> reason
-    Unsure(reason:) -> "unsure:" <> reason
-  }
-}
-
-fn stop_of_text(text: String) -> Stop {
-  case text {
-    "unsure:" <> reason -> Unsure(reason:)
-    "refuse:" <> reason -> Refuse(reason:)
-    reason -> Refuse(reason:)
   }
 }
 

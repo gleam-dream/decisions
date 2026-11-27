@@ -204,3 +204,17 @@ pub type ExpiryCause {
 pub type Validator {
   Validator(subject: String, holds: List(String))
 }
+
+/// Why a guard, a release check or an executor did not let a release
+/// happen.
+pub type Stop {
+  /// It refuses this release, for good. With a validator present the
+  /// verdict rolls back (`ToolRefused`); with nobody waiting the occurrence
+  /// ends `Refused`.
+  Refuse(reason: String)
+  /// It could not tell: its database connection dropped, a provider timed
+  /// out. Its savepoint rolls back, nothing is recorded as refused, and
+  /// the verb fails with `ToolUnsure`, so the caller or the runtime tries
+  /// again later (counted toward setting the job aside).
+  Unsure(reason: String)
+}

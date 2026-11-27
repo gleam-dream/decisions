@@ -72,7 +72,7 @@ fn desk() -> Desk(Promotion, Memory) {
         guard: fn(tx, subject) {
           case memory.get(tx, "incident:" <> subject.id) {
             Ok(_) ->
-              Error(decisions.Refuse("an incident is open on " <> subject.id))
+              Error(vocabulary.Refuse("an incident is open on " <> subject.id))
             Error(Nil) -> Ok([])
           }
         },

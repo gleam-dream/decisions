@@ -439,7 +439,7 @@ fn desk(
           table,
           decisions.key(released) <> "=" <> decisions.output(released),
         )
-        |> result.map_error(decisions.Refuse)
+        |> result.map_error(vocabulary.Refuse)
       })
     },
     under: fn(_) { Ok(policy) },
@@ -1662,11 +1662,13 @@ fn killed_in_savepoint(target: Target(tx), _load: Load) -> Result(Nil, String) {
     target.adapter.port.atomically(tx, fn(tx) {
       case write_everything(target, tx, id, name) {
         Ok(Nil) -> Ok(hold()) |> result.replace([])
-        Error(reason) -> Error(reason)
+        Error(reason) -> Error(vocabulary.Unsure(reason))
       }
     })
     |> store_text
-    |> result.try(fn(inner) { result.replace(inner, Nil) })
+    |> result.try(fn(inner) {
+      result.replace(inner, Nil) |> result.map_error(fn(stop) { stop.reason })
+    })
   })
 }
 

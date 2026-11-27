@@ -30,7 +30,7 @@
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 
-import decisions/vocabulary.{type Bundle, type Ref, type Subject}
+import decisions/vocabulary.{type Bundle, type Ref, type Stop, type Subject}
 import gleam/option.{type Option}
 import gleam/time/timestamp.{type Timestamp}
 
@@ -243,11 +243,11 @@ pub type Port(tx) {
     /// Run `body` inside a savepoint. When it returns `Error`, everything
     /// it wrote is undone and the transaction stays usable; when it
     /// returns `Ok`, its writes stay. The outer `Result` is the savepoint's
-    /// own failure. The body's error text belongs to the desk: pass it
-    /// back unchanged and do not interpret it. When the body raises, undo
-    /// its writes and let the raise continue.
-    atomically: fn(tx, fn(tx) -> Result(List(Ref), String)) ->
-      Result(Result(List(Ref), String), StoreError),
+    /// own failure. The body's `Stop` belongs to the desk: pass it back
+    /// as it is. When the body raises, undo its writes and let the raise
+    /// continue.
+    atomically: fn(tx, fn(tx) -> Result(List(Ref), Stop)) ->
+      Result(Result(List(Ref), Stop), StoreError),
     /// The wall clock at the moment of the call, at any resolution: the
     /// desk keeps whole milliseconds (rounded down), and every time it
     /// stores, schedules or puts on a head is a whole millisecond. It is

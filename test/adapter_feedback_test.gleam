@@ -166,7 +166,7 @@ pub fn every_refusal_is_classified_test() {
     decisions.desk(
       decisions.point("feedback.point", wire.text()),
       drives: fn(_) {
-        Gated(..tool(), execute: fn(_, _) { Error(decisions.Refuse("closed")) })
+        Gated(..tool(), execute: fn(_, _) { Error(vocabulary.Refuse("closed")) })
       },
       under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),

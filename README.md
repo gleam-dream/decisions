@@ -137,7 +137,7 @@ stateDiagram-v2
 ```
 
 `accepted` lasts only inside a verb. The guard, the release check and the tool
-each answer `decisions.Stop` when they do not allow a release: `Refuse` for
+each answer `vocabulary.Stop` when they do not allow a release: `Refuse` for
 good, or `Unsure` when they could not tell, such as a lost connection. When a
 verdict completes the acceptance and one of them refuses, the verb fails with
 `ToolRefused`, your transaction rolls back, and the occurrence still waits;

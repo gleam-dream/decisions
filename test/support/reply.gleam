@@ -42,7 +42,7 @@ pub fn send_message() -> Gated(String, Memory) {
         timestamp.add(wire.from_milliseconds(latest), duration.hours(24))
       case timestamp.compare(memory.now(tx), closes) {
         order.Lt -> Ok([])
-        _ -> Error(decisions.Refuse("the service window is closed"))
+        _ -> Error(vocabulary.Refuse("the service window is closed"))
       }
     },
     execute: fn(tx, released) {

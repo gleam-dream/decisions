@@ -74,7 +74,7 @@ fn review() -> Desk(String, Memory) {
           )
           |> result.replace(Nil)
           |> result.map_error(fn(refusal) {
-            decisions.Refuse(decisions.describe(refusal))
+            vocabulary.Refuse(decisions.describe(refusal))
           })
         },
       )

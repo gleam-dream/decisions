@@ -256,7 +256,7 @@ pub fn c5_a_refusal_is_recorded_only_from_its_token_test() {
       base_point(),
       drives: fn(_) {
         Gated(..tool(), execute: fn(_, _) {
-          Error(decisions.Refuse("the ledger is closed"))
+          Error(vocabulary.Refuse("the ledger is closed"))
         })
       },
       under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },

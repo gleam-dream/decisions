@@ -240,6 +240,31 @@ decisions.recommend_bundle(desk, tx, bundle: "report-7",
   `recommend_bundle`), and `RepeatedItem` names the item.
 - `bundle_lock_prefix` is reserved, as `subject_lock_prefix` is.
 
+### A tool answers `vocabulary.Stop`, and the port passes it back typed
+
+`Stop`, with `Refuse` and `Unsure`, moves to `decisions/vocabulary`, and the
+port's `atomically` carries it typed. In 0.1 the desk sent it to the port as
+prefixed text and parsed it back, so an adapter that changed the text turned
+`Unsure` into a refusal for good.
+
+```gleam
+// Before (0.1)
+Error(decisions.Refuse("refunds go to companies"))
+atomically: fn(tx, body: fn(Tx) -> Result(List(Ref), String)) { .. }
+
+// After (0.2)
+Error(vocabulary.Refuse("refunds go to companies"))
+atomically: fn(tx, body: fn(Tx) -> Result(List(Ref), vocabulary.Stop)) { .. }
+```
+
+### A card opened again is the same showing
+
+`open` returns the validator's latest showing, with the same ticket and no new
+entry, when nothing but showings was recorded after it and the inputs drifted
+no further. A released, sampled occurrence opens only to someone `review`
+admits; anyone else gets `NotEligible`. A model's raise is recorded with a
+reason of at most 1 024 bytes (`model.max_reason_bytes`).
+
 ### The conformance suite runs every check in a transaction
 
 `decisions/conformance.Adapter` has no `handle`: no port call runs outside a
