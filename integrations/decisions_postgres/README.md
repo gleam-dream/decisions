@@ -214,6 +214,10 @@ Grind with any decision, since a replay finds its row taken.
 ## Upgrading to 0.3.0
 
 - Take decisions 0.2 (`decisions = ">= 0.2.0 and < 0.3.0"`).
+- Apply this package's migration 2 before a 0.3 node writes: `migrate(db)`,
+  or `priv/migrations/20261127000000-decisions_postgres_v2.sql` with the
+  application's tool. It adds the bundle columns and the `decisions_append`
+  function 0.3 calls, so a database at migration 1 refuses every append.
 - Run every verb through `transaction` or `transaction_with` on a `Pool`
   (`decisions_postgres.pool(name)`); `migrate`, `sweep` and `queue.counts`
   take the `Pool` too.
