@@ -60,7 +60,7 @@ pub fn issue_nfse() -> Gated(Invoice, Memory) {
       let key = decisions.key(released)
       case memory.get(tx, "tax_id_held:" <> invoice.taker) {
         Ok(_) ->
-          Error(decisions.Refuse("the taker's tax id is held by another party"))
+          Error(vocabulary.Refuse("the taker's tax id is held by another party"))
         Error(Nil) -> {
           memory.put(tx, "invoice:" <> key, "submitted")
           Ok(world.push(tx, "effects", key <> "|" <> invoice.service_code))

@@ -323,7 +323,7 @@ pub fn d_a_handler_failure_says_what_a_runtime_does_test() {
     decisions.desk(
       base_point(),
       drives: fn(_) {
-        Gated(..tool(), execute: fn(_, _) { Error(decisions.Refuse("closed")) })
+        Gated(..tool(), execute: fn(_, _) { Error(vocabulary.Refuse("closed")) })
       },
       under: fn(_) { Ok(policies.checked(1, [], AnyoneHolding("finance"))) },
       over: memory.port(),
@@ -413,7 +413,7 @@ pub fn g_the_account_and_who_decided_over_every_status_test() {
         |> decisions.allowing(ApproveRejectOrCorrect),
       drives: fn(_) {
         Gated(..tool(), execute: fn(_, _) {
-          Error(decisions.Refuse("account closed"))
+          Error(vocabulary.Refuse("account closed"))
         })
       },
       under: fn(_) {
@@ -523,7 +523,7 @@ pub fn i_a_release_check_records_its_evidence_test() {
     )
     |> decisions.checking(with: fn(_tx, release: decisions.ToRelease(String)) {
       case release.output {
-        "too much" -> Error(decisions.Refuse("the balance does not cover it"))
+        "too much" -> Error(vocabulary.Refuse("the balance does not cover it"))
         _ -> Ok([balance])
       }
     })
@@ -784,7 +784,7 @@ pub fn o_a_release_check_reads_the_context_test() {
     |> decisions.checking(with: fn(_, release: decisions.ToRelease(String)) {
       case release.context.refs {
         [Ref(kind: "request", revision: "1", ..)] -> Ok([])
-        _ -> Error(decisions.Refuse("the request changed revision"))
+        _ -> Error(vocabulary.Refuse("the request changed revision"))
       }
     })
   let assert Ok(paid) =

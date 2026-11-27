@@ -79,7 +79,7 @@ fn decide(db: Memory, desk, id: String, verdict) {
 /// a failed attempt, sent again, is recorded again.
 pub fn record_refusal_is_safe_to_repeat_test() {
   let db = world.new().db
-  let refusing = desk(fn(_, _) { Error(decisions.Refuse("closed")) })
+  let refusing = desk(fn(_, _) { Error(vocabulary.Refuse("closed")) })
   let w = propose(db, refusing, "a", Rules("echo", "1"))
   let assert Error(decisions.ToolRefused(rollback:, ..)) =
     decide(db, refusing, w.id, Approve)

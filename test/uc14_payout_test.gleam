@@ -95,7 +95,7 @@ fn pay_at_provider() -> Gated(Payout, Memory) {
         })
       case check {
         Error(Nil) ->
-          Error(decisions.Refuse(
+          Error(vocabulary.Refuse(
             "nobody has asked the provider whether the account is open",
           ))
         Ok(#(evidence, at)) -> {
@@ -107,12 +107,12 @@ fn pay_at_provider() -> Gated(Payout, Memory) {
             == order.Lt
           case fresh, memory.evidence().get(tx, evidence) {
             False, _ ->
-              Error(decisions.Refuse(
+              Error(vocabulary.Refuse(
                 "the provider's answer is older than 5 minutes",
               ))
             True, Ok("open") -> Ok([evidence])
             True, _ ->
-              Error(decisions.Refuse(
+              Error(vocabulary.Refuse(
                 "the provider says the account is not open",
               ))
           }

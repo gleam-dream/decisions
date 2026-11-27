@@ -301,7 +301,7 @@ pub type Spec {
     validity: Option(Duration),
     superseded_by: List(String),
     /// What the gated tool's executor does.
-    execute: fn(Tx, Released(String)) -> Result(Nil, decisions.Stop),
+    execute: fn(Tx, Released(String)) -> Result(Nil, vocabulary.Stop),
   )
 }
 
@@ -353,7 +353,7 @@ fn tool(spec: Spec) -> Gated(String, Tx) {
 pub fn record_effect(
   tx: Tx,
   released: Released(String),
-) -> Result(Nil, decisions.Stop) {
+) -> Result(Nil, vocabulary.Stop) {
   pog.query(
     "INSERT INTO test_effects (occurrence, key, point) VALUES ($1, $2, $3)",
   )
@@ -363,7 +363,7 @@ pub fn record_effect(
   |> pog.execute(decisions_postgres.connection(tx))
   |> result.replace(Nil)
   |> result.map_error(fn(error) {
-    decisions.Refuse(decisions_postgres_describe(error))
+    vocabulary.Refuse(decisions_postgres_describe(error))
   })
 }
 

@@ -210,8 +210,7 @@ pub fn fold(
         // and the occurrence starts expired. A record that ended by a
         // deadline it never had was not written by the desk.
         [vocabulary.DeadlinePassed], Some(_) ->
-          Ok(list.fold(
-            later,
+          Ok(apply_all(
             Occurrence(
               id:,
               point:,
@@ -231,12 +230,11 @@ pub fn fold(
               sampled: False,
               status: Expired(vocabulary.DeadlinePassed),
             ),
-            apply,
+            later,
           ))
         [_, ..], _ -> Error(NoRecommendation)
         [], _ ->
-          Ok(list.fold(
-            later,
+          Ok(apply_all(
             Occurrence(
               id:,
               point:,
@@ -256,7 +254,7 @@ pub fn fold(
               sampled: False,
               status: Recommended(consulting: None),
             ),
-            apply,
+            later,
           ))
       }
     _, _ -> Error(NoRecommendation)
@@ -392,8 +390,35 @@ fn attempt(entry: Entry(o)) -> Result(Attempt, Nil) {
 /// One more entry. An entry that is not legal from the current status
 /// leaves the status as it is; the desk never writes one.
 pub fn apply(occurrence: Occurrence(o), entry: Entry(o)) -> Occurrence(o) {
-  let occurrence =
-    Occurrence(..occurrence, entries: list.append(occurrence.entries, [entry]))
+  Occurrence(..occurrence, entries: list.append(occurrence.entries, [entry]))
+  |> transition(entry)
+}
+
+/// Fold `later` onto a begun occurrence in time linear in the record: the
+/// entries are gathered newest first and put in order once at the end.
+/// Only a policy answer and a verdict read the record so far (the standing
+/// output and the approvals), so only they are handed it in order.
+fn apply_all(begun: Occurrence(o), later: List(Entry(o))) -> Occurrence(o) {
+  let #(folded, newest_first) =
+    list.fold(later, #(begun, list.reverse(begun.entries)), fn(acc, entry) {
+      let #(occurrence, seen) = acc
+      let seen = [entry, ..seen]
+      let occurrence = case entry.event {
+        entry.PolicyApplied(..) | entry.Decided(..) ->
+          transition(
+            Occurrence(..occurrence, entries: list.reverse(seen)),
+            entry,
+          )
+        _ -> transition(occurrence, entry)
+      }
+      #(occurrence, seen)
+    })
+  Occurrence(..folded, entries: list.reverse(newest_first))
+}
+
+/// The status and the facts an entry changes. A policy answer and a
+/// verdict read `occurrence.entries`, which already end with `entry`.
+fn transition(occurrence: Occurrence(o), entry: Entry(o)) -> Occurrence(o) {
   case entry.event, occurrence.status {
     entry.Informed(facts:, ..), _ ->
       Occurrence(

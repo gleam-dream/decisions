@@ -27,5 +27,7 @@ push(Cell, Ref) ->
 
 describe(_Class, #{message := Message}) when is_binary(Message) ->
     Message;
+%% A depth of 30 keeps the rendering of a large term (a response body, a
+%% state map) small; `decisions/model` cuts the text to its byte bound.
 describe(Class, Reason) ->
-    unicode:characters_to_binary(io_lib:format("~p: ~p", [Class, Reason])).
+    unicode:characters_to_binary(io_lib:format("~p: ~P", [Class, Reason, 30])).

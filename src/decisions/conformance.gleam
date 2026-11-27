@@ -360,14 +360,18 @@ fn savepoint_rolls_back(adapter: Adapter(tx)) -> Result(Nil, String) {
               stored(1, "recommended"),
             ])
           {
-            Ok(Nil) -> Error("the tool refuses after writing")
-            Error(error) -> Error("the write failed: " <> store.describe(error))
+            Ok(Nil) ->
+              Error(vocabulary.Refuse("the tool refuses after writing"))
+            Error(error) ->
+              Error(vocabulary.Refuse(
+                "the write failed: " <> store.describe(error),
+              ))
           }
         })
         |> result.map_error(store.describe),
       )
       use Nil <- result.try(expect(
-        ran == Error("the tool refuses after writing"),
+        ran == Error(vocabulary.Refuse("the tool refuses after writing")),
         "atomically returned " <> string.inspect(ran),
       ))
       // The transaction is still usable after the savepoint rolled back.
@@ -396,6 +400,7 @@ fn savepoint_keeps(adapter: Adapter(tx)) -> Result(Nil, String) {
           append(adapter, tx, inner, head(adapter, "p"), [
             stored(1, "recommended"),
           ])
+          |> result.map_error(vocabulary.Unsure)
           |> result.replace([evidence])
         })
         |> result.map_error(store.describe),
@@ -459,6 +464,7 @@ fn savepoint_in_rollback(adapter: Adapter(tx)) -> Result(Nil, String) {
           append(adapter, tx, inner, head(adapter, "p"), [
             stored(1, "recommended"),
           ])
+          |> result.map_error(vocabulary.Unsure)
           |> result.replace([])
         })
         |> result.map_error(store.describe),
@@ -756,9 +762,9 @@ fn refused_release(adapter: Adapter(tx)) -> Result(Nil, String) {
       append(adapter, tx, side, head(adapter, "side"), [
         stored(1, "recommended"),
       ])
-      |> result.map_error(decisions.Unsure),
+      |> result.map_error(vocabulary.Unsure),
     )
-    Error(decisions.Refuse("the registry refuses"))
+    Error(vocabulary.Refuse("the registry refuses"))
   }
   let #(desk, name) = conformance_desk(adapter, proceed(), None, Some(tool))
   let key = fresh_id(adapter, "key")
@@ -1134,7 +1140,7 @@ fn conformance_desk(
   adapter: Adapter(tx),
   policy: policy.Policy,
   hold: option.Option(duration.Duration),
-  tool: option.Option(fn(tx) -> Result(Nil, decisions.Stop)),
+  tool: option.Option(fn(tx) -> Result(Nil, vocabulary.Stop)),
 ) -> #(Desk(String, tx), String) {
   let name = fresh_id(adapter, "conformance.point")
   let point = decisions.point(name, wire.text())

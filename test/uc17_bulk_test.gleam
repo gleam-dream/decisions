@@ -22,7 +22,7 @@ fn desk() -> Desk(String, Memory) {
       Gated(..classify.store_class(), guard: fn(tx, subject: Subject) {
         case memory.get(tx, "closed:" <> subject.id) {
           Ok(_) ->
-            Error(decisions.Refuse(
+            Error(vocabulary.Refuse(
               "the books of " <> subject.id <> " are closed",
             ))
           Error(Nil) -> Ok([])

@@ -293,7 +293,9 @@ fn with_reads(
 }
 
 /// Run `body` with sources that note every read they answer, and return
-/// what it returned with those reads. A raise becomes `Raised`.
+/// what it returned with those reads. A raise becomes `Raised`, with its
+/// reason cut to `max_reason_bytes`: the reason is kept on the record, and a
+/// model may raise with a whole response body or state.
 fn observing(
   sources: Sources,
   body: fn(Sources) -> a,
@@ -307,7 +309,30 @@ fn observing(
       }),
     )
   })
-  |> result.map_error(Raised)
+  |> result.map_error(fn(reason) { Raised(bounded(reason)) })
+}
+
+/// The most bytes of a raise's reason the record keeps.
+pub const max_reason_bytes = 1024
+
+/// `reason` cut to at most `max_reason_bytes`, on a character boundary,
+/// with an ellipsis when it was cut.
+fn bounded(reason: String) -> String {
+  case string.byte_size(reason) <= max_reason_bytes {
+    True -> reason
+    False -> take(string.to_graphemes(reason), max_reason_bytes - 3, "") <> "…"
+  }
+}
+
+fn take(graphemes: List(String), budget: Int, kept: String) -> String {
+  case graphemes {
+    [first, ..rest] ->
+      case string.byte_size(first) <= budget {
+        True -> take(rest, budget - string.byte_size(first), kept <> first)
+        False -> kept
+      }
+    [] -> kept
+  }
 }
 
 /// Sources that answer from a record and from nothing else. A reference or

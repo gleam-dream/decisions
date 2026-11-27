@@ -151,7 +151,7 @@ pub fn r3_the_check_sees_what_is_about_to_be_released_test() {
     )
     |> decisions.checking(with: fn(tx, release: decisions.ToRelease(String)) {
       world.push(tx, "checked", release.output <> "@" <> release.key)
-      Error(decisions.Refuse("balance does not cover"))
+      Error(vocabulary.Refuse("balance does not cover"))
     })
   let assert Ok(w) = recommend(db, desk, "500")
   assert w.status == occurrence.Refused("balance does not cover")
@@ -341,7 +341,7 @@ pub fn r10_an_unsure_guard_at_a_wake_up_is_tried_again_test() {
       drives: fn(_) {
         Gated(..tool(), guard: fn(tx, _) {
           case memory.get(tx, "db_down") {
-            Ok(_) -> Error(decisions.Unsure("connection reset"))
+            Ok(_) -> Error(vocabulary.Unsure("connection reset"))
             Error(_) -> Ok([])
           }
         })
@@ -467,7 +467,7 @@ fn flaky_desk(in_tool: Bool) -> Desk(String, Memory) {
       drives: fn(_) {
         Gated(..tool(), execute: fn(tx, released) {
           case in_tool && down(tx) {
-            True -> Error(decisions.Unsure("connection reset"))
+            True -> Error(vocabulary.Unsure("connection reset"))
             False -> tool().execute(tx, released)
           }
         })
@@ -480,7 +480,7 @@ fn flaky_desk(in_tool: Bool) -> Desk(String, Memory) {
     False ->
       decisions.checking(desk, with: fn(tx, _) {
         case down(tx) {
-          True -> Error(decisions.Unsure("balance unknown"))
+          True -> Error(vocabulary.Unsure("balance unknown"))
           False -> Ok([])
         }
       })

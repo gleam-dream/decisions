@@ -247,7 +247,7 @@ pub fn defect_6_a_tool_that_writes_then_refuses_leaves_nothing_test() {
       guard: fn(_, _) { Ok([]) },
       execute: fn(tx, _) {
         world.push(tx, "refunds", "half-written")
-        Error(decisions.Refuse("the ledger is closed"))
+        Error(vocabulary.Refuse("the ledger is closed"))
       },
     )
   let desk =

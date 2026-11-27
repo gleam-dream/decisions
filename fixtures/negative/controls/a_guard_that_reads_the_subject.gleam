@@ -7,7 +7,7 @@ pub fn guarded() {
   Gated(..clinic.refund_fee(), guard: fn(_tx, subject: Subject) {
     case subject.kind {
       "company" -> Ok([])
-      _ -> Error(decisions.Refuse("refunds go to companies"))
+      _ -> Error(vocabulary.Refuse("refunds go to companies"))
     }
   })
 }

@@ -94,7 +94,9 @@ import decisions/store.{
   type Stored, type Wake, Conflict, Contended, Inspection, Notice, Port, Stored,
   Unavailable, Wake,
 } as port_types
-import decisions/vocabulary.{type Ref, type Subject as About, type Validator}
+import decisions/vocabulary.{
+  type Ref, type Stop, type Subject as About, type Validator,
+}
 import decisions/wire
 import decisions_otp/backlog.{
   type Backlog, type Job, type Pending, type Submitted, Aside, Backlog,
@@ -882,8 +884,8 @@ fn settled(
 
 fn atomically(
   tx: Tx,
-  body: fn(Tx) -> Result(List(Ref), String),
-) -> Result(Result(List(Ref), String), StoreError) {
+  body: fn(Tx) -> Result(List(Ref), Stop),
+) -> Result(Result(List(Ref), Stop), StoreError) {
   use store, open <- within(tx)
   let before = rows.snapshot(open.buffer)
   case rows.attempt(fn() { body(Tx(store:, open:)) }) {

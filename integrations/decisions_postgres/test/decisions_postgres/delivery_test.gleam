@@ -594,7 +594,7 @@ pub fn a_wake_up_that_meets_an_unsure_tool_is_retried_and_releases_once_test() {
       hold: Some(duration.milliseconds(100)),
       execute: fn(tx, released) {
         case kit.once("unsure:" <> decisions.occurrence_of(released)) {
-          True -> Error(decisions.Unsure("the registry did not answer"))
+          True -> Error(vocabulary.Unsure("the registry did not answer"))
           False -> kit.record_effect(tx, released)
         }
       },

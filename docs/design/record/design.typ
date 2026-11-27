@@ -206,7 +206,7 @@
       [held], [`wake` at or after the hold's end], [released, or refused when the guard or the tool refuses], [`released` or `refused`],
       [held], [`withdraw` by the decider, or `withdraw_as` by the decider or a withdrawer, before the hold's end], [withdrawn], [`withdrawn`],
       [released], [`report`], [released], [`effected`],
-      [released and sampled], [`open` and `review` by an eligible reviewer], [released], [`opened`, `reviewed`],
+      [released and sampled], [`open` and `review` by someone `review` admits (#adr(66))], [released], [`opened`, `reviewed`],
       [any settled status], [`assess`], [unchanged], [`assessed`],
     ))
   ]
@@ -285,7 +285,7 @@
       [`inform`], [A second answer from the same point is `NotConsulting`.],
       [`withdraw`, `review`], [A second call is `NotHeld` or `NotEligible`.],
       [`resume`, `read`], [Write nothing.],
-      [`open`], [Records a new showing each time.],
+      [`open`], [Returns the validator's latest showing when nothing but showings was recorded after it and the inputs drifted no further; records a new showing otherwise (#adr(66)).],
       [`report`, `assess`, `note`, `expand`], [Append again each time; the latest effect report counts. `assess` is refused with `NotSettled` before the occurrence settles (#adr(25)).],
       [`record_failure`], [Records one attempt per call while nothing is recommended, so a repeated call records the attempt again; it writes nothing once a recommendation exists.],
       [`record_refusal`], [The same rollback token twice appends once and returns the occurrence (#adr(27)).],
@@ -351,7 +351,7 @@
   ), caption: [The rollback token carries the point, the occurrence, the validator, the showing, the verdict and the reason. Only the desk makes one, so the record can show only a refusal that happened.],
 ), body: [
   #points(
-    [A gated tool is `Gated(name:, guard:, execute:)`. `drives` picks the tool from the final output, so a point whose output has variants drives one tool per variant. The guard receives the transaction and the subject and returns the evidence it relied on. The executor receives a `Released(output)`. Each of the guard, the release check and the executor fails with `decisions.Stop`: `Refuse(reason)` refuses this release for good; `Unsure(reason)` says it could not tell, such as a lost connection (#adr(37)).],
+    [A gated tool is `Gated(name:, guard:, execute:)`. `drives` picks the tool from the final output, so a point whose output has variants drives one tool per variant. The guard receives the transaction and the subject and returns the evidence it relied on. The executor receives a `Released(output)`. Each of the guard, the release check and the executor fails with `vocabulary.Stop`: `Refuse(reason)` refuses this release for good; `Unsure(reason)` says it could not tell, such as a lost connection (#adr(37)). The port's `atomically` carries the `Stop` back typed, so no adapter can turn one into the other (#adr(67)).],
     [Release runs, inside the port's savepoint (`atomically`), the guard, then the release check the desk was given with `checking`, then the executor. The check receives a `ToRelease(output, subject, context, key)` value, which no executor accepts, so it can compare a fact of the world with the output without being able to perform the effect; `Released` is built only for the executor (#adr(38)). When all succeed the desk appends `released` with the release key, the tool's name, and the evidence the guard and the check relied on. An executor must not keep the `Released` value beyond its call.],
     [`Unsure` from any of the three rolls the savepoint back, records nothing as refused, and fails the verb with `ToolUnsure(reason)`, so the caller or a runtime tries again, counted. `Refuse` undoes what the tool wrote and is a refusal: with a validator present the verdict rolls back (`ToolRefused`); with nobody waiting the occurrence ends `refused`. The guard's parameters carry no output, but a `drives` function can close over the output when it builds the gated tool; a check that needs the output belongs in the release check, where its evidence is recorded, and a threshold on the output alone belongs in the policy (#adr(31)).],
     [What a refusal does depends on who waits. When a verdict completed the acceptance, the verb fails with `ToolRefused(reason, rollback)` so the verdict's transaction rolls back and the occurrence keeps waiting. When the policy proceeded or a hold ended, nobody waits, and the occurrence ends `refused` with the reason.],

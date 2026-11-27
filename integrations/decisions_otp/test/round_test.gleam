@@ -534,7 +534,7 @@ pub fn a_wake_up_meeting_an_unsure_tool_is_backed_off_and_releases_test() {
           guard: fn(_, _) { Ok([]) },
           execute: fn(tx, released) {
             case calls(counter, "send") <= 2 {
-              True -> Error(decisions.Unsure("the provider did not answer"))
+              True -> Error(vocabulary.Unsure("the provider did not answer"))
               False -> {
                 store.add(tx, "review.unsure", decisions.key(released))
                 Ok(Nil)

@@ -111,7 +111,9 @@ import decisions/store.{
   type Head, type Inspection, type Port, type StoreError, type Stored, Head,
   Inspection, Notice, Port, Stored, Wake,
 }
-import decisions/vocabulary.{type Ref, type Subject, type Verdict, Subject}
+import decisions/vocabulary.{
+  type Ref, type Stop, type Subject, type Verdict, Subject,
+}
 import decisions/wire
 import decisions_postgres/internal/migrations
 import decisions_postgres/internal/sql
@@ -619,8 +621,8 @@ fn admit(
 
 fn atomically(
   tx: pog.Connection,
-  body: fn(pog.Connection) -> Result(List(Ref), String),
-) -> Result(Result(List(Ref), String), StoreError) {
+  body: fn(pog.Connection) -> Result(List(Ref), Stop),
+) -> Result(Result(List(Ref), Stop), StoreError) {
   // A name of its own, so a savepoint nested inside another (a tool that
   // drives another point's verb) never rolls back to the wrong one.
   let name = "decisions_tool_" <> int.to_string(sql.unique())
@@ -887,7 +889,7 @@ fn failure_of(error: pog.TransactionError(Refusal)) -> Failure {
 
 /// Why a body run by `transaction_with` ended without committing: a verb
 /// of the desk refused, or the application's own work failed with its own
-/// error. (Not to be confused with `decisions.Stop`, what a guard or a
+/// error. (Not to be confused with `vocabulary.Stop`, what a guard or a
 /// gated tool answers.)
 pub type BodyFailure(error) {
   /// A verb refused, or the store failed under it.

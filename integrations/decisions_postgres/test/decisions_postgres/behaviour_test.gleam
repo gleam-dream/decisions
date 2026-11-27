@@ -32,9 +32,9 @@ import sinal
 fn writes_then_refuses(
   tx: decisions_postgres.Tx,
   released: decisions.Released(String),
-) -> Result(Nil, decisions.Stop) {
+) -> Result(Nil, vocabulary.Stop) {
   use Nil <- result.try(kit.record_effect(tx, released))
-  Error(decisions.Refuse("the registry refuses"))
+  Error(vocabulary.Refuse("the registry refuses"))
 }
 
 /// The verdict's transaction rolls back with the tool's write, and a
@@ -110,7 +110,7 @@ pub fn a_tool_whose_statement_fails_after_a_hold_ends_refused_test() {
         |> pog.execute(decisions_postgres.connection(tx))
         |> result.replace(Nil)
         |> result.map_error(fn(error) {
-          decisions.Refuse(string.inspect(error))
+          vocabulary.Refuse(string.inspect(error))
         })
       },
     )
