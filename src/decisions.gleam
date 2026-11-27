@@ -487,8 +487,16 @@ pub fn hanging_from(proposal: Proposal(o), parent: Parent) -> Proposal(o) {
 ///
 /// Admit every member in one transaction where you can. The desk refuses,
 /// with `BadBundle`, a key that is empty, a size below one, a size that
-/// differs from the one a member already recorded, and a member beyond
-/// the size. For members of one point, `recommend_bundle` admits them all.
+/// differs from the one a member already recorded, a member beyond the
+/// size, a key that already holds an occurrence outside the bundle, and a
+/// key whose record ended before it was recommended. For members of one
+/// point, `recommend_bundle` admits them all.
+///
+/// The size checks read the members committed so far and take no lock.
+/// Two transactions that admit members of one bundle at once can each
+/// pass them and together exceed the size; the bundle is then never
+/// complete, and invariant I9 of `decisions/testing` reports it. Admitting
+/// a bundle in one transaction avoids it.
 pub fn in_bundle(proposal: Proposal(o), bundle: Bundle) -> Proposal(o) {
   Proposal(..proposal, bundle: Some(bundle))
 }
@@ -610,6 +618,15 @@ pub type BundleFault {
   BundleFull
   /// `recommend_bundle` was given this item key more than once.
   RepeatedItem(key: String)
+  /// The key already holds an occurrence that is not a member of this
+  /// bundle: one proposed alone, or a member of another bundle or size.
+  KeyOutsideBundle(key: String)
+  /// The key's record ended before anything was recommended under it (its
+  /// own deadline passed), and its one settlement notice went out then,
+  /// before it belonged to the bundle. Admitted now, it would settle
+  /// without a notice, and if it were the last member to settle nothing
+  /// would see the bundle complete.
+  EndedBefore(key: String)
 }
 
 /// What a verdict refused at release leaves behind once its transaction
@@ -796,6 +813,10 @@ pub fn describe(refusal: Refusal) -> String {
           "a member recorded its size as " <> int.to_string(recorded)
         BundleFull -> "it already holds all its members"
         RepeatedItem(key:) -> "the item key " <> key <> " is given twice"
+        KeyOutsideBundle(key:) ->
+          "the key " <> key <> " already holds an occurrence outside it"
+        EndedBefore(key:) ->
+          "the record under " <> key <> " ended before it was recommended"
       }
     StoreFailed(error:) -> store.describe(error)
   }
@@ -853,7 +874,16 @@ pub fn recommend_once(
 ) -> Result(Occurrence(o), Refusal) {
   use #(entries, now) <- result.try(fetch(desk, tx, key))
   case occurrence.fold(key, entries) {
-    Ok(found) -> mine(desk, found)
+    Ok(found) -> {
+      use found <- result.try(mine(desk, found))
+      // A trigger delivered again finds its member; a key that holds an
+      // occurrence outside the bundle would leave the bundle short.
+      case proposal.bundle {
+        Some(bundle) if found.bundle != Some(bundle) ->
+          Error(BadBundle(bundle: bundle.key, fault: KeyOutsideBundle(key)))
+        _ -> Ok(found)
+      }
+    }
     Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], None, now)
     Error(occurrence.NotYet(pending)) ->
       case pending.ended {
@@ -1308,6 +1338,11 @@ fn begin(
   now: Timestamp,
 ) -> Result(Occurrence(o), Refusal) {
   use Nil <- result.try(admits_member(desk, tx, id, proposal.bundle))
+  use Nil <- result.try(case proposal.bundle, pending {
+    Some(bundle), Some(occurrence.Pending(ended: Some(_), ..)) ->
+      Error(BadBundle(bundle: bundle.key, fault: EndedBefore(id)))
+    _, _ -> Ok(Nil)
+  })
   // The deadline the occurrence was given itself, on its expectation or
   // its proposal; the point's validity bounds it further.
   let own =

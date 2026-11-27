@@ -20,6 +20,8 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import gleam/time/duration
+import gleam/time/timestamp
 import support/world.{type World}
 
 fn line_desk() -> Desk(String, Memory) {
@@ -344,4 +346,101 @@ pub fn an_item_key_given_twice_is_refused_test() {
   assert admitted
     == Error(decisions.BadBundle("r12", decisions.RepeatedItem("r12/a")))
   assert statuses(w, "r12") == []
+}
+
+/// A key that already holds an occurrence proposed alone cannot be counted
+/// as a member: the bundle would never complete. A member delivered again
+/// with its own bundle is still found.
+pub fn a_key_outside_the_bundle_is_refused_test() {
+  let w = world.new()
+  let assert Ok(_) =
+    world.in_tx(w, decisions.recommend_once(
+      line_desk(),
+      _,
+      key: "r13/a",
+      proposal: proposal("alone"),
+    ))
+  let admitted =
+    world.in_tx(
+      w,
+      decisions.recommend_bundle(line_desk(), _, bundle: "r13", items: [
+        #("r13/a", proposal("a")),
+        #("r13/b", proposal("b")),
+      ]),
+    )
+  assert admitted
+    == Error(decisions.BadBundle("r13", decisions.KeyOutsideBundle("r13/a")))
+  // Nothing of the bundle was written.
+  assert statuses(w, "r13") == []
+  // A member of another size is outside too.
+  let _ = admit_lines(w)
+  let again =
+    world.in_tx(w, decisions.recommend_once(
+      line_desk(),
+      _,
+      key: "report-7/l1",
+      proposal: proposal("l1") |> decisions.in_bundle(Bundle("report-7", 4)),
+    ))
+  assert again
+    == Error(decisions.BadBundle(
+      "report-7",
+      decisions.KeyOutsideBundle("report-7/l1"),
+    ))
+}
+
+/// A key whose own deadline passed before anything was recommended has
+/// already sent its one settlement notice; it cannot join a bundle.
+pub fn a_key_that_ended_before_it_was_recommended_is_refused_test() {
+  let w = world.new()
+  let deadline = timestamp.add(world.t0(), duration.minutes(1))
+  let assert Ok(Nil) =
+    world.in_tx(w, decisions.expect_until(
+      receipt_desk(),
+      _,
+      key: "r14/a",
+      trigger: Trigger(kind: "report", id: "r14"),
+      about: world.ana,
+      valid_until: deadline,
+    ))
+  world.at(w, duration.minutes(2))
+  assert world.deliver_due(w, [decisions.waker(receipt_desk())]) == 1
+  let late =
+    world.in_tx(w, decisions.recommend_once(
+      receipt_desk(),
+      _,
+      key: "r14/a",
+      proposal: proposal("late") |> decisions.in_bundle(Bundle("r14", 1)),
+    ))
+  assert late
+    == Error(decisions.BadBundle("r14", decisions.EndedBefore("r14/a")))
+  // Without a bundle the late recommendation is recorded expired, as before.
+  let assert Ok(known) =
+    world.in_tx(w, decisions.recommend_once(
+      receipt_desk(),
+      _,
+      key: "r14/a",
+      proposal: proposal("late"),
+    ))
+  let assert occurrence.Expired(_) = known.status
+}
+
+/// A head the inspection cannot read is reported, not left out of I9.
+pub fn i9_reports_a_head_it_cannot_read_test() {
+  let w = world.new()
+  let _ = admit_lines(w)
+  let inspection = memory.inspection()
+  let failing =
+    store.Inspection(..inspection, head: fn(tx, id) {
+      case id {
+        "report-7/l2" -> Error(store.Unavailable("lost"))
+        _ -> inspection.head(tx, id)
+      }
+    })
+  let assert Error(violations) =
+    testing.check(w.db, failing, [
+      testing.audit(line_desk(), effects: world.effects("lines_paid")),
+    ])
+  assert list.any(violations, fn(v) {
+    v.invariant == "I9" && v.occurrence == "report-7/l2"
+  })
 }

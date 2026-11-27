@@ -46,6 +46,7 @@ import decisions/entry.{type Entry}
 import decisions/occurrence.{type Occurrence}
 import decisions/store.{type Head, type Inspection, type Notice, type Wake}
 import decisions/vocabulary.{Correct}
+import gleam/bool
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -145,20 +146,48 @@ fn bundles(
   inspect: Inspection(tx),
   audits: List(Audit(tx)),
 ) -> List(Violation) {
-  let members =
+  let read =
     list.flat_map(audits, fn(audit) {
       case inspect.occurrences(tx, audit.point) {
         Ok(ids) ->
-          list.filter_map(ids, fn(id) {
+          list.map(ids, fn(id) {
             case inspect.head(tx, id) {
               Ok(Some(store.Head(bundle: Some(bundle), ..))) ->
                 Ok(#(bundle.key, #(id, bundle.size)))
-              _ -> Error(Nil)
+              Ok(_) -> Error(None)
+              Error(error) ->
+                Error(
+                  Some(Violation(
+                    invariant: "I9",
+                    occurrence: id,
+                    detail: "its head could not be read: "
+                      <> store.describe(error),
+                  )),
+                )
             }
           })
-        Error(_) -> []
+        Error(error) -> [
+          Error(
+            Some(Violation(
+              invariant: "I9",
+              occurrence: audit.point,
+              detail: "its records could not be listed: "
+                <> store.describe(error),
+            )),
+          ),
+        ]
       }
     })
+  let unread =
+    list.filter_map(read, fn(one) {
+      case one {
+        Error(Some(violation)) -> Ok(violation)
+        _ -> Error(Nil)
+      }
+    })
+  let members =
+    list.filter_map(read, fn(one) { result.map_error(one, fn(_) { Nil }) })
+  use <- bool.guard(unread != [], unread)
   members
   |> list.group(fn(pair) { pair.0 })
   |> dict.to_list
