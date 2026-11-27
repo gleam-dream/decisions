@@ -361,6 +361,7 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
             approved: [],
             may_not_decide: [],
             review_pending: False,
+            bundle: option.None,
           ),
           [Stored(1, now, "recommended", "{\"not\":\"a recommendation\"}")],
         ),

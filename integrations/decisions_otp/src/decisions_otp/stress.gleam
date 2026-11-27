@@ -6,7 +6,7 @@
 //// A race starts every process at a gate and releases them in shuffled
 //// order (`race`). A crash is `process.kill` at a named point
 //// (`KillPoint`). Every scenario ends with `decisions/testing.check`
-//// (invariants I1 to I8) over the points it used.
+//// (invariants I1 to I9) over the points it used.
 ////
 //// | Scenario | What it shows |
 //// | --- | --- |

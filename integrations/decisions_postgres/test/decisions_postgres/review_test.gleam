@@ -313,6 +313,7 @@ pub fn an_append_with_no_entries_replaces_the_head_test() {
       approved: [],
       may_not_decide: [],
       review_pending: False,
+      bundle: option.None,
     )
   let assert Ok(Nil) =
     port.append(env.db, id, first, [Stored(1, at, "recommended", "{}")])
