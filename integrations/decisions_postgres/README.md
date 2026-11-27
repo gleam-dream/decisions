@@ -3,13 +3,17 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-The PostgreSQL store for [`decisions`](../../README.md): the storage port over
+> **Breaking:** decisions_postgres 0.3.0 requires Sinal 0.2 and Grind 0.3,
+> whose schema version 15 must be applied first. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md).
+
+The PostgreSQL store for [`decisions`](https://github.com/gleam-dream/decisions/blob/main/README.md): the storage port over
 the application's own transactions, the migrations that create its tables, the
 Grind workers that deliver wake-ups and settlement notices, `NOTIFY` on every
 append, and queue queries that never decode an entry. The detailed contract is
 the module documentation of `decisions_postgres`, `decisions_postgres/queue`,
 `decisions_postgres/live` and `decisions_postgres/telemetry`, and the storage
-and runtime contexts of the [design layer](../../docs/design/design-layer.pdf).
+and runtime contexts of the [design layer](https://github.com/gleam-dream/decisions/blob/main/docs/design/design-layer.pdf).
 
 ## Wire it
 
@@ -18,7 +22,7 @@ The application owns the pool and the Grind runtime. In this order:
 1. Run `migrate(db)` at deploy time with a role that may own DDL, or apply the
    SQL in `priv/migrations` with the application's tool, before any worker
    polls. Choose one migration owner per schema. Grind's own schema is
-   Grind's to migrate, and must be at version 14 or later (Grind 0.2):
+   Grind's to migrate, and must be at version 15 or later (Grind 0.3):
    `grind.migrate`, `grind.with_startup_migration`, or Grind's migration
    files in the application's tool.
 2. Build a store with `decisions_postgres.new(grind.named(name))`; the handle
@@ -174,6 +178,19 @@ delivers. The declared settlement reads the job's row in Grind's transaction:
 new job to a row whose job is held uncertain with no settlement to come (left
 for a person). `Swept.left_uncertain` lists those Grind jobs; resolve each in
 Grind with any decision, since a replay finds its row taken.
+
+## Upgrading to 0.3.0
+
+- Take Grind 0.3 (`grind = ">= 0.3.0 and < 0.4.0"`) and Sinal 0.2.
+- Apply Grind's schema version 15 before starting a node that runs the
+  workers. It builds an index concurrently, so run `grind.migrate` outside a
+  transaction, through a session-mode connection.
+- Attach handlers on `decisions_postgres/telemetry` from a long-lived
+  supervised process: Sinal 0.2 detaches a handler when the process that
+  attached it exits.
+
+The [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md)
+gives each change with before and after code.
 
 ## Upgrading to 0.2.0
 

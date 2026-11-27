@@ -1,7 +1,7 @@
 # Decisions OTP integration instructions
 
 - This is a nested package in [decisions](../../AGENTS.md). Use the parent dev shell, design-gate pin and the parent's local `issues/` tracker; this package has no independent flake, gate copy or tracker.
-- It holds the process-safe in-memory store, the supervised runtime, isolated model calls, parallel replay and subscriptions. It depends on the core's Hex release (`decisions = ">= 0.1.0 and < 0.2.0"`), so its tests run against the published core, not the working tree; it also depends on `gleam_otp`, `gleam_erlang` and `sinal`. The core owns the meaning of points, occurrences, entries and policies; this package owns processes, their lifetimes and their failure handling.
+- It holds the process-safe in-memory store, the supervised runtime, isolated model calls, parallel replay and subscriptions. It depends on the core's Hex release (`decisions = ">= 0.1.1 and < 0.3.0"`), so its tests run against the published core, not the working tree; it also depends on `gleam_otp`, `gleam_erlang` and `sinal`. The core owns the meaning of points, occurrences, entries and policies; this package owns processes, their lifetimes and their failure handling.
 - Prove a race with real processes against a real transaction boundary, and a crash with `process.kill`.
 - Run its checks from this directory in the parent shell:
 

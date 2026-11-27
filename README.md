@@ -3,6 +3,10 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
+> **Breaking:** decisions 0.2.0 requires json_blueprint 3, decisions_otp 0.2.0
+> requires Sinal 0.2, and decisions_postgres 0.3.0 requires Sinal 0.2 and Grind 0.3. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md).
+
 Decisions keeps the record of a **decision point** in Gleam: a place in your
 system where a model recommends an output, a policy either proceeds or asks a
 person, the person approves, rejects or corrects it, and the final output
@@ -73,20 +77,20 @@ application code.
 
 `decisions` is published on Hex. The two integrations are not: take them from
 this repository by Git tag, one tag per package and version
-(`decisions_otp-v0.1.1`, `decisions_postgres-v0.2.1`). They may be published on
+(`decisions_otp-v0.2.0`, `decisions_postgres-v0.3.0`). They may be published on
 Hex later.
 
 ```toml
 [dependencies]
-decisions = ">= 0.1.1 and < 0.2.0"
+decisions = ">= 0.2.0 and < 0.3.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
-decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.1.1", path = "integrations/decisions_otp" }
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.2.0", path = "integrations/decisions_otp" }
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.2.1", path = "integrations/decisions_postgres" }
-grind = ">= 0.2.0 and < 0.3.0"
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.3.0", path = "integrations/decisions_postgres" }
+grind = ">= 0.3.0 and < 0.4.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
 ```
@@ -1268,16 +1272,16 @@ copies your values:
 From core 0.1.1, a codec built with `wire.codec` holds only the json_blueprint
 codec it was given, and one built with `wire.plain` holds only its encoder and
 decoder. In 0.1.0, `wire.codec` also holds a rendered schema and two closures
-over the codec. The core requires `json_blueprint >= 2.2.0`, whose combinator
-codecs copy at about their own size; the integrations take the floor through
-the core.
+over the codec. The core requires `json_blueprint >= 3.0.0 and < 4.0.0`, whose
+combinator codecs copy at about their own size; the integrations take the
+range through the core.
 
 To guard what a point costs, assert in a test the bytes a send copies,
 `erts_debug:flat_size(Term)` times the word size, for the term that travels, such as
 `decisions.waker(desk)`. For how to write a codec that stays small (generated
 or combinator, and where to build child codecs), follow json_blueprint's
-[codec practice](https://github.com/lostbean/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
-[ADR-0057](docs/adr/0057-a-codec-holds-what-it-was-built-from.md#adr-0057)
+[codec practice](https://github.com/gleam-dream/json_blueprint/blob/main/docs/CODEC-PRACTICE.md).
+[ADR-0057](https://github.com/gleam-dream/decisions/blob/main/docs/adr/0057-a-codec-holds-what-it-was-built-from.md#adr-0057)
 records decisions' part and the measurements.
 
 ## Learn and replay

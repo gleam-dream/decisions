@@ -36,7 +36,7 @@
 //// | The connection pool and the Grind runtime | The application (`grind.supervised`, or a pool it starts) |
 //// | The workers' registration | The application: `grind.with_worker(wake_worker(..))`, and `settlement_worker(..)` when a point has followers |
 //// | The schema | One migration owner: `migrate` at deploy time, or the SQL in `priv/migrations` through the application's tool |
-//// | Grind's own schema, at version 14 or later | The application, through Grind: `grind.migrate`, `grind.with_startup_migration`, or Grind's migration files in its tool |
+//// | Grind's own schema, at version 15 or later | The application, through Grind: `grind.migrate`, `grind.with_startup_migration`, or Grind's migration files in its tool |
 //// | The tables' rows | This package, through the port and the workers |
 ////
 //// ## Guarantees and what provides them
@@ -997,7 +997,7 @@ pub type Waker =
 ///   than once and keeps to database work; Grind reports the committed
 ///   settlement as `[grind, job, resolved]` and keeps the reason on the job.
 ///
-/// Grind's schema must be at version 14 or later for this (see the
+/// Grind's schema must be at version 15 or later for this (see the
 /// package README).
 ///
 /// A refusal is acted on by `decisions.handling(DeskRefused(refusal))`
