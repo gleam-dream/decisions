@@ -8,11 +8,11 @@ package exposes types of those libraries (`json_blueprint`'s `Codec` in
 modules, Grind's `Grind` in `decisions_postgres.new`), so an application must
 move to the same majors.
 
-| Package              | From  | To    | What changes for the application                                                                                  |
-| -------------------- | ----- | ----- | ----------------------------------------------------------------------------------------------------------------- |
-| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person           |
-| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; a verb runs only in a transaction; accepts core 0.2 |
-| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; a verb runs only in a transaction; accepts core 0.2      |
+| Package              | From  | To    | What changes for the application                                                                                                 |
+| -------------------- | ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person                          |
+| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; a verb runs only in a transaction; ids are UUIDs; accepts core 0.2 |
+| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; a verb runs only in a transaction; accepts core 0.2                     |
 
 ## Install
 
@@ -317,6 +317,16 @@ store.transaction(s, fn(tx) { Ok(store.get(tx, "accounts", "ana")) })
 - `decisions_otp/stress.Target` keeps its fields; `stress.transaction(target,
 body)` runs a body in one of the target's transactions and returns its
   value.
+
+### Occurrence ids are UUIDs
+
+A new occurrence id (`recommend`, `expect` with a fresh id, the port's
+`new_id`) is a UUID version 7 made on the node, as in `decisions_postgres`. In
+0.1 it was `occ-` and a counter of the store's owner, which started again at 1
+when a supervised owner restarted empty, so an external effect keyed by an
+occurrence's id could meet an earlier occurrence's key. Code that parsed the
+`occ-` form, or expected ids in counter order, reads them as opaque text;
+ids made later still sort later.
 
 ### The core range accepts 0.2
 

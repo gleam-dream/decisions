@@ -17,7 +17,17 @@
          apply_writes/2, all_rows/1, load_rows/2, counter/2, peek_counter/2,
          put_counter/3, claim/2, unclaim/2, attempt/1, reraise/1,
          system_ms/0, monotonic_us/0, mailbox/1, schedulers/0, quiet/0,
-         children/1, set_role/1, parent/0, identity/1]).
+         children/1, set_role/1, parent/0, identity/1, new_id/0]).
+
+%% A UUID version 7: 48 bits of Unix milliseconds, then random bits. Ids made
+%% later sort later.
+new_id() ->
+    Ms = erlang:system_time(millisecond),
+    <<RandA:12, RandB:62, _:6>> = crypto:strong_rand_bytes(10),
+    <<A:32, B:16, C:16, D:16, E:48>> =
+        <<Ms:48, 7:4, RandA:12, 2:2, RandB:62>>,
+    iolist_to_binary(io_lib:format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b",
+                                   [A, B, C, D, E])).
 
 new_table() ->
     ets:new(decisions_otp_rows, [ordered_set, public, {read_concurrency, true}]).

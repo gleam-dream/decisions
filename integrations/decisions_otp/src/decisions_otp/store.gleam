@@ -38,6 +38,11 @@
 //// record, so they are durable for as long as the owner lives: a runtime
 //// killed and started again finds every one of them.
 ////
+//// **Ids.** An occurrence id is a UUID version 7 made on the node, as the
+//// PostgreSQL adapter makes it, so it is unique across owners: a store
+//// restarted empty never reuses an id, and an external effect keyed by an
+//// occurrence's id stays unique.
+////
 //// **What is lost when the owner stops.** Everything. The tables live in
 //// the owner's memory, so stopping it (with `stop`, or because the
 //// process that started it exited) loses every record, wake-up, notice
@@ -631,12 +636,19 @@ pub fn port() -> Port(Tx) {
     settled: settled,
     atomically: atomically,
     now: fn(tx: Tx) { now(tx.store) },
-    new_id: fn(tx: Tx) {
-      "occ-" <> int.to_string(rows.next(tx.store.tables.counters, "id"))
-    },
+    new_id: fn(_) { new_id() },
     members: members,
   )
 }
+
+/// A new occurrence id: a UUID version 7 made on the node, as the
+/// PostgreSQL adapter makes it. It is unique by construction, not by a
+/// counter of the owner's, so an owner restarted empty (`supervised`)
+/// never issues an id an earlier owner issued, and an external effect
+/// keyed by an occurrence's id never meets an earlier occurrence's key.
+/// Ids made later sort later.
+@external(erlang, "decisions_otp_ffi", "new_id")
+fn new_id() -> String
 
 fn members(
   tx: Tx,
