@@ -3189,7 +3189,7 @@ fn bundles(target: Target(tx), load: Load) -> Result(Nil, String) {
         bundle:,
         items: list.map(numbers(1, size), fn(n) {
           #(
-            member(bundle, n),
+            int.to_string(n),
             stress_proposal(member(bundle, n), "line " <> int.to_string(n)),
           )
         }),
@@ -3204,7 +3204,11 @@ fn bundles(target: Target(tx), load: Load) -> Result(Nil, String) {
         case known.bundle {
           Some(bundle) -> {
             use members <- result.try(
-              decisions.members(items, tx, bundle: bundle.key)
+              decisions.members(
+                items,
+                tx,
+                bundle: vocabulary.bundle_key(bundle),
+              )
               |> result.map_error(decisions.DeskRefused),
             )
             case decisions.is_complete(members) {
@@ -3213,8 +3217,11 @@ fn bundles(target: Target(tx), load: Load) -> Result(Nil, String) {
                 decisions.recommend_once(
                   follow_on,
                   tx,
-                  key: "after:" <> bundle.key,
-                  proposal: stress_proposal("after:" <> bundle.key, bundle.key),
+                  key: "after:" <> vocabulary.bundle_key(bundle),
+                  proposal: stress_proposal(
+                    "after:" <> vocabulary.bundle_key(bundle),
+                    vocabulary.bundle_key(bundle),
+                  ),
                 )
                 |> result.replace(Nil)
                 |> result.map_error(decisions.DeskRefused)

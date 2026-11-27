@@ -53,10 +53,44 @@ pub type Parent {
 
 /// The bundle an occurrence belongs to: the occurrences one recommendation
 /// proposed together, each judged, released and measured on its own.
-/// `key` names the bundle and `size` is how many occurrences it holds, so
-/// a reader can tell a bundle that is complete from one still arriving.
-pub type Bundle {
+/// Its key names the bundle and its size is how many occurrences it holds,
+/// so a reader can tell a bundle that is complete from one still arriving.
+/// Build it with `bundle`, so its key is never empty and its size is at
+/// least one.
+pub opaque type Bundle {
   Bundle(key: String, size: Int)
+}
+
+/// Why `bundle` refuses a key and a size.
+pub type MalformedBundle {
+  /// The bundle's key is empty.
+  NoBundleKey
+  /// The bundle's size is below one.
+  EmptyBundle
+}
+
+/// A bundle of `size` occurrences named `key`. Bundle keys are one
+/// namespace across every point of a store, as occurrence keys are, so
+/// begin the key with something the application owns.
+pub fn bundle(
+  key key: String,
+  size size: Int,
+) -> Result(Bundle, MalformedBundle) {
+  case key, size {
+    "", _ -> Error(NoBundleKey)
+    _, size if size < 1 -> Error(EmptyBundle)
+    _, _ -> Ok(Bundle(key:, size:))
+  }
+}
+
+/// The bundle's key.
+pub fn bundle_key(bundle: Bundle) -> String {
+  bundle.key
+}
+
+/// How many occurrences the bundle holds.
+pub fn bundle_size(bundle: Bundle) -> Int {
+  bundle.size
 }
 
 /// What recommended. Agreement and accuracy are counted per value of this

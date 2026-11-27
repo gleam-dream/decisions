@@ -153,7 +153,10 @@ fn bundles(
           list.map(ids, fn(id) {
             case inspect.head(tx, id) {
               Ok(Some(store.Head(bundle: Some(bundle), ..))) ->
-                Ok(#(bundle.key, #(id, bundle.size)))
+                Ok(#(
+                  vocabulary.bundle_key(bundle),
+                  #(id, vocabulary.bundle_size(bundle)),
+                ))
               Ok(_) -> Error(None)
               Error(error) ->
                 Error(

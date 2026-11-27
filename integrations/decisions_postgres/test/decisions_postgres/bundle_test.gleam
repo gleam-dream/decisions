@@ -7,7 +7,7 @@
 
 import decisions
 import decisions/store.{Head, Stored}
-import decisions/vocabulary.{Approve, Bundle, Reason, Reject}
+import decisions/vocabulary.{Approve, Reason, Reject}
 import decisions/wire
 import decisions_postgres
 import gleam/dynamic/decode
@@ -39,8 +39,9 @@ fn follower(
     case known.bundle {
       None -> Ok(Nil)
       Some(bundle) -> {
+        let report = vocabulary.bundle_key(bundle)
         use members <- result.try(
-          decisions.members(items, tx, bundle: bundle.key)
+          decisions.members(items, tx, bundle: report)
           |> result.map_error(decisions.DeskRefused),
         )
         case decisions.is_complete(members) {
@@ -49,7 +50,7 @@ fn follower(
             decisions.recommend_once(
               payout,
               tx,
-              key: "payout:" <> bundle.key,
+              key: "payout:" <> report,
               proposal: kit.proposal(
                 decisions.name(decisions.point_of(payout)),
                 kit.ana,
@@ -102,10 +103,7 @@ pub fn each_bundle_starts_exactly_one_payout_test() {
           _,
           bundle:,
           items: list.map(kit.int_range(size), fn(n) {
-            #(
-              bundle <> "/l" <> int.to_string(n),
-              kit.proposal(items.name, kit.ana),
-            )
+            #("l" <> int.to_string(n), kit.proposal(items.name, kit.ana))
           }),
         ))
       list.map(admitted, fn(known) { known.id })
@@ -178,7 +176,7 @@ pub fn a_bundle_key_longer_than_an_id_is_refused_before_the_append_test() {
     port.append(
       env.db,
       id,
-      head(kit.tag("p"), Some(Bundle(key: long, size: 1))),
+      head(kit.tag("p"), Some(bundle_of(long, 1))),
       recommended(),
     )
   assert string.contains(detail, "the bundle key")
@@ -197,7 +195,7 @@ pub fn the_schema_keeps_a_bundle_whole_test() {
     port.append(
       env.db,
       id,
-      head(kit.tag("p"), Some(Bundle(key: kit.tag("b"), size: 2))),
+      head(kit.tag("p"), Some(bundle_of(kit.tag("b"), 2))),
       recommended(),
     )
   let violated = fn(sql) {
@@ -246,7 +244,7 @@ pub fn members_reads_a_bundle_in_id_order_across_points_test() {
   let #(name, store) = kit.store()
   use env <- kit.run(name, store, kit.options(), [], [])
   let port = decisions_postgres.port(env.store)
-  let bundle = Bundle(key: kit.tag("b"), size: 3)
+  let bundle = bundle_of(kit.tag("b"), 3)
   let ids = [kit.tag("m-c"), kit.tag("m-a"), kit.tag("m-b")]
   list.index_map(ids, fn(id, n) {
     let assert Ok(Nil) =
@@ -259,7 +257,12 @@ pub fn members_reads_a_bundle_in_id_order_across_points_test() {
   })
   let assert Ok(Nil) =
     port.append(env.db, kit.tag("other"), head("point-0", None), recommended())
-  let assert Ok(found) = port.members(env.db, bundle.key)
+  let assert Ok(found) = port.members(env.db, vocabulary.bundle_key(bundle))
   assert list.map(found, fn(pair) { pair.0 }) == list.sort(ids, string.compare)
   assert list.all(found, fn(pair) { { pair.1 }.bundle == Some(bundle) })
+}
+
+fn bundle_of(key: String, size: Int) -> vocabulary.Bundle {
+  let assert Ok(made) = vocabulary.bundle(key:, size:)
+  made
 }

@@ -91,7 +91,7 @@ pub fn admit(
     _,
     bundle: report,
     items: list.index_map(amounts, fn(amount, n) {
-      #(report <> "/line-" <> int.to_string(n + 1), proposal(report, amount))
+      #("line-" <> int.to_string(n + 1), proposal(report, amount))
     }),
   ))
   |> result.map(list.map(_, fn(line) { line.id }))
@@ -105,19 +105,16 @@ pub fn settled(tx: Memory, line: String) -> Result(Nil, decisions.Refusal) {
   case known.bundle {
     None -> Ok(Nil)
     Some(bundle) -> {
-      use members <- result.try(decisions.members(
-        lines(),
-        tx,
-        bundle: bundle.key,
-      ))
+      let report = vocabulary.bundle_key(bundle)
+      use members <- result.try(decisions.members(lines(), tx, bundle: report))
       case decisions.is_complete(members) {
         False -> Ok(Nil)
         True ->
           decisions.recommend_once(
             payouts(),
             tx,
-            key: "payout:" <> bundle.key,
-            proposal: proposal(bundle.key, "pay " <> bundle.key),
+            key: "payout:" <> report,
+            proposal: proposal(report, "pay " <> report),
           )
           |> result.replace(Nil)
       }

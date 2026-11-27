@@ -69,7 +69,7 @@ import decisions/store.{
 }
 import decisions/testing
 import decisions/vocabulary.{
-  Approve, Bundle, Manifest, OwnAct, Person, Reason, Recommendation, Ref, Reject,
+  Approve, Manifest, OwnAct, Person, Reason, Recommendation, Ref, Reject,
   Subject, Trigger, Validator,
 }
 import decisions/wire
@@ -493,7 +493,7 @@ fn head_round_trip(adapter: Adapter(tx)) -> Result(Nil, String) {
       approved: ["bia"],
       may_not_decide: ["felipe", "bia"],
       review_pending: False,
-      bundle: Some(Bundle(key: fresh_id(adapter, "bundle"), size: 3)),
+      bundle: Some(bundle_of(fresh_id(adapter, "bundle"), 3)),
     )
   let second =
     Head(
@@ -1012,7 +1012,7 @@ fn bundle_members(adapter: Adapter(tx)) -> Result(Nil, String) {
   let other = fresh_id(adapter, "bundle")
   let point = fresh_id(adapter, "point")
   let in = fn(bundle, point) {
-    Head(..head(adapter, point), bundle: Some(Bundle(key: bundle, size: 3)))
+    Head(..head(adapter, point), bundle: Some(bundle_of(bundle, 3)))
   }
   let c = #(fresh_id(adapter, "m3"), in(key, point))
   let a = #(fresh_id(adapter, "m1"), in(key, point <> ".other"))
@@ -1058,8 +1058,8 @@ fn desk_bundle(adapter: Adapter(tx)) -> Result(Nil, String) {
   let bia = Validator("bia", ["finance"])
   let key = fresh_id(adapter, "bundle")
   let items = [
-    #(key <> "/1", proposal(name)),
-    #(key <> "/2", proposal(name)),
+    #("1", proposal(name)),
+    #("2", proposal(name)),
   ]
   let admit = fn() {
     adapter.transaction(fn(tx) {
@@ -1277,4 +1277,10 @@ fn expect(holds: Bool, otherwise: String) -> Result(Nil, String) {
 /// Every check's name, for an adapter's report.
 pub fn names() -> List(String) {
   list.map(checks(), fn(check) { check.name })
+}
+
+/// A bundle this module names, which is well formed.
+fn bundle_of(key: String, size: Int) -> vocabulary.Bundle {
+  let assert Ok(made) = vocabulary.bundle(key:, size:)
+  made
 }

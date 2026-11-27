@@ -49,8 +49,8 @@
 ////   recommender runs. `happened` locks the point and subject first, so
 ////   two admissions about one subject run one after the other.
 //// - A recommender: `recommend`, `recommend_once`, `record_failure`, and
-////   `recommend_bundle` (or `in_bundle`) for several occurrences proposed
-////   together.
+////   `recommend_bundle` (or `recommend_member`) for several occurrences
+////   proposed together.
 //// - A validator: `open`, `resume` (with a `Ticket`), `expand`, `note`,
 ////   `decide`, `review`, `withdraw`, `record_refusal`.
 //// - The world and the system: `happened`, `inform`, `wake` (or `waker`),
@@ -87,7 +87,7 @@ import decisions/vocabulary.{
   type Assessment, type Bundle, type Effect, type Fact, type Facts,
   type Manifest, type Parent, type Recommendation, type Ref, type Subject,
   type Trigger, type Validator, type Verdict, type Verdicts, Approve,
-  ApproveOrReject, Bundle, Correct, Person, Ref, Reject, Superseded,
+  ApproveOrReject, Correct, Person, Ref, Reject, Superseded,
 }
 import decisions/wire.{type Codec}
 import gleam/bit_array
@@ -535,8 +535,7 @@ pub fn point_of(desk: Desk(o, tx)) -> Point(o) {
 }
 
 /// What a recommender proposes, and about whom. Build one with `proposal`
-/// and add what applies with `asked_by`, `hanging_from`, `in_bundle` and
-/// `valid_until`.
+/// and add what applies with `asked_by`, `hanging_from` and `valid_until`.
 pub opaque type Proposal(output) {
   Proposal(
     trigger: Trigger,
@@ -544,7 +543,6 @@ pub opaque type Proposal(output) {
     context: Manifest,
     recommendation: Recommendation(output),
     parent: Option(Parent),
-    bundle: Option(Bundle),
     requester: Option(String),
     valid_until: Option(Timestamp),
   )
@@ -563,7 +561,6 @@ pub fn proposal(
     context:,
     recommendation:,
     parent: None,
-    bundle: None,
     requester: None,
     valid_until: None,
   )
@@ -579,27 +576,6 @@ pub fn asked_by(proposal: Proposal(o), requester: String) -> Proposal(o) {
 /// What the occurrence hangs from, so settling it can start what follows.
 pub fn hanging_from(proposal: Proposal(o), parent: Parent) -> Proposal(o) {
   Proposal(..proposal, parent: Some(parent))
-}
-
-/// The bundle the occurrence belongs to: one of `bundle.size` occurrences
-/// a recommendation proposed together, possibly at several points. Each is
-/// judged, released and measured on its own; `members` and `is_complete`
-/// tell whoever follows them when every one has settled.
-///
-/// Admit every member in one transaction where you can. The desk refuses,
-/// with `BadBundle`, a key that is empty, a size below one, a size that
-/// differs from the one a member already recorded, a member beyond the
-/// size, a key that already holds an occurrence outside the bundle, and a
-/// key whose record ended before it was recommended. For members of one
-/// point, `recommend_bundle` admits them all.
-///
-/// The size checks read the members committed so far and take no lock.
-/// Two transactions that admit members of one bundle at once can each
-/// pass them and together exceed the size; the bundle is then never
-/// complete, and invariant I9 of `decisions/testing` reports it. Admitting
-/// a bundle in one transaction avoids it.
-pub fn in_bundle(proposal: Proposal(o), bundle: Bundle) -> Proposal(o) {
-  Proposal(..proposal, bundle: Some(bundle))
 }
 
 /// The occurrence's own deadline, an instant the application knows, such
@@ -702,8 +678,8 @@ pub type Refusal {
   Unreadable(reason: String)
   /// The point's codec cannot encode an output to be stored.
   Unencodable(reason: String)
-  /// The proposal's bundle cannot take this occurrence; `fault` says why.
-  /// Nothing was written.
+  /// The bundle cannot take this occurrence; `fault` says why. Nothing was
+  /// written.
   BadBundle(bundle: String, fault: BundleFault)
   /// The store refused or failed.
   StoreFailed(error: StoreError)
@@ -711,16 +687,14 @@ pub type Refusal {
 
 /// Why a bundle cannot take an occurrence.
 pub type BundleFault {
-  /// The bundle's key is empty.
-  NoBundleKey
-  /// The bundle's size is below one.
-  EmptyBundle
+  /// `recommend_bundle` was given an empty key or no items.
+  Malformed(reason: vocabulary.MalformedBundle)
   /// A member already recorded the bundle with this other size.
   SizeDiffers(recorded: Int)
   /// The bundle already holds as many members as its size.
   BundleFull
-  /// `recommend_bundle` was given this item key more than once.
-  RepeatedItem(key: String)
+  /// `recommend_bundle` was given this item more than once.
+  RepeatedItem(item: String)
   /// The key already holds an occurrence that is not a member of this
   /// bundle: one proposed alone, or a member of another bundle or size.
   KeyOutsideBundle(key: String)
@@ -910,12 +884,12 @@ pub fn describe(refusal: Refusal) -> String {
       <> string.inspect(bundle)
       <> " cannot take this occurrence: "
       <> case fault {
-        NoBundleKey -> "its key is empty"
-        EmptyBundle -> "its size is below one"
+        Malformed(reason: vocabulary.NoBundleKey) -> "its key is empty"
+        Malformed(reason: vocabulary.EmptyBundle) -> "it has no items"
         SizeDiffers(recorded:) ->
           "a member recorded its size as " <> int.to_string(recorded)
         BundleFull -> "it already holds all its members"
-        RepeatedItem(key:) -> "the item key " <> key <> " is given twice"
+        RepeatedItem(item:) -> "the item " <> item <> " is given twice"
         KeyOutsideBundle(key:) ->
           "the key " <> key <> " already holds an occurrence outside it"
         EndedBefore(key:) ->
@@ -938,7 +912,7 @@ pub fn recommend(
   proposal: Proposal(o),
 ) -> Result(Occurrence(o), Refusal) {
   let id = desk.port.new_id(tx)
-  begin(desk, tx, id, proposal, [], None, clock(desk, tx))
+  begin(desk, tx, id, proposal, None, [], None, clock(desk, tx))
 }
 
 /// `recommend`, at most once per `key`, which becomes the occurrence's id.
@@ -975,67 +949,140 @@ pub fn recommend_once(
   key key: String,
   proposal proposal: Proposal(o),
 ) -> Result(Occurrence(o), Refusal) {
+  admit_once(desk, tx, key, proposal, None)
+}
+
+/// `recommend_once` under `key`, as a member of `bundle` when it names one.
+fn admit_once(
+  desk: Desk(o, tx),
+  tx: tx,
+  key: String,
+  proposal: Proposal(o),
+  bundle: Option(Bundle),
+) -> Result(Occurrence(o), Refusal) {
   use #(entries, now) <- result.try(fetch(desk, tx, key))
   case occurrence.fold(key, entries) {
     Ok(found) -> {
       use found <- result.try(mine(desk, found))
-      // A trigger delivered again finds its member; a key that holds an
-      // occurrence outside the bundle would leave the bundle short.
-      case proposal.bundle {
-        Some(bundle) if found.bundle != Some(bundle) ->
-          Error(BadBundle(bundle: bundle.key, fault: KeyOutsideBundle(key)))
-        _ -> Ok(found)
+      // A trigger delivered again finds its occurrence; a key that holds
+      // an occurrence outside the bundle would leave the bundle short.
+      case found.bundle == bundle, bundle {
+        True, _ -> Ok(found)
+        False, Some(bundle) ->
+          Error(BadBundle(
+            bundle: vocabulary.bundle_key(bundle),
+            fault: KeyOutsideBundle(key),
+          ))
+        False, None -> Ok(found)
       }
     }
-    Error(occurrence.NoEntries) -> begin(desk, tx, key, proposal, [], None, now)
+    Error(occurrence.NoEntries) ->
+      begin(desk, tx, key, proposal, bundle, [], None, now)
     Error(occurrence.NotYet(pending)) ->
       case pending.ended {
         Some(Superseded(event:)) -> Error(SupersededBefore(event:))
         Some(vocabulary.DeadlinePassed) | None ->
-          begin(desk, tx, key, proposal, entries, Some(pending), now)
+          begin(desk, tx, key, proposal, bundle, entries, Some(pending), now)
       }
     Error(occurrence.NoRecommendation) -> Error(not_a_record())
   }
 }
 
 /// Admit the occurrences one recommendation proposed together, at this
-/// desk's point, as one bundle: `recommend_once` under each item's key,
-/// with the bundle's size the number of items. Call it in one transaction,
-/// so the bundle is admitted whole or not at all. A trigger delivered
-/// again finds every occurrence it already made and writes nothing. The
-/// occurrences come back in the order of `items`.
+/// desk's point, as one bundle: `recommend_member` for each item, with the
+/// bundle's size the number of items. Call it in one transaction, so the
+/// bundle is admitted whole or not at all. A trigger delivered again finds
+/// every occurrence it already made and writes nothing. The occurrences
+/// come back in the order of `items`.
 ///
-/// Keys are one namespace across every point of a store: derive each
-/// item's key from the bundle's, such as `"report-7/l1"`. An empty `items`
-/// is refused with `BadBundle(EmptyBundle)`, and an item key given twice
-/// with `BadBundle(RepeatedItem(key))`, before anything is written. For a
-/// bundle that spans
-/// several points, put `in_bundle` on each proposal and call
-/// `recommend_once` at each point's desk.
+/// Each item names its member, and the member's key is
+/// `member_key(bundle, item)`. An empty key or empty `items` is refused
+/// with `BadBundle(Malformed(..))`, and an item given twice with
+/// `BadBundle(RepeatedItem(item))`, before anything is written. For a
+/// bundle that spans several points, call `recommend_member` at each
+/// point's desk.
 pub fn recommend_bundle(
   desk: Desk(o, tx),
   tx: tx,
   bundle key: String,
   items items: List(#(String, Proposal(o))),
 ) -> Result(List(Occurrence(o)), Refusal) {
-  let keys = list.map(items, fn(item) { item.0 })
+  let names = list.map(items, fn(item) { item.0 })
   let repeated =
-    list.find(keys, fn(item) { list.count(keys, fn(k) { k == item }) > 1 })
-  case items, repeated {
-    [], _ -> Error(BadBundle(bundle: key, fault: EmptyBundle))
+    list.find(names, fn(item) { list.count(names, fn(n) { n == item }) > 1 })
+  case vocabulary.bundle(key:, size: list.length(items)), repeated {
+    Error(malformed), _ ->
+      Error(BadBundle(bundle: key, fault: Malformed(malformed)))
     _, Ok(item) -> Error(BadBundle(bundle: key, fault: RepeatedItem(item)))
-    _, Error(Nil) -> {
-      let bundle = Bundle(key:, size: list.length(items))
+    Ok(bundle), Error(Nil) -> {
+      use Nil <- result.try(lock_bundle(desk, tx, bundle))
       list.try_map(items, fn(item) {
-        recommend_once(
-          desk,
-          tx,
-          key: item.0,
-          proposal: in_bundle(item.1, bundle),
-        )
+        admit_once(desk, tx, member_key(bundle, item.0), item.1, Some(bundle))
       })
     }
   }
+}
+
+/// Admit one occurrence of `bundle`, named `item`, at this desk's point:
+/// `recommend_once` under `member_key(bundle, item)`. Members of one
+/// bundle may belong to several points and be admitted in several
+/// transactions. A trigger delivered again finds its member and writes
+/// nothing.
+///
+/// The desk refuses, with `BadBundle`, a size that differs from the one a
+/// member already recorded, a member beyond the size, a key that already
+/// holds an occurrence outside the bundle, and a key whose record ended
+/// before it was recommended. It first loads `bundle_lock(bundle)`
+/// through the port, which locks that id for the rest of the transaction,
+/// so two transactions admitting members of one bundle run one after the
+/// other and the second sees the first's member: the bundle never holds
+/// more members than its size. Locks are taken in one order: the bundle
+/// lock, then the member's key; in a transaction that also expects a
+/// member of the same bundle, admit members first. Expect the member, or
+/// record its failed attempts, under `member_key(bundle, item)`.
+pub fn recommend_member(
+  desk: Desk(o, tx),
+  tx: tx,
+  of bundle: Bundle,
+  item item: String,
+  proposal proposal: Proposal(o),
+) -> Result(Occurrence(o), Refusal) {
+  use Nil <- result.try(lock_bundle(desk, tx, bundle))
+  admit_once(desk, tx, member_key(bundle, item), proposal, Some(bundle))
+}
+
+/// The key of the member `item` of `bundle`: the bundle's key, a slash and
+/// the item, such as `"report-7/l1"`. It is the member's occurrence id.
+pub fn member_key(bundle: Bundle, item: String) -> String {
+  vocabulary.bundle_key(bundle) <> "/" <> item
+}
+
+/// The prefix of every bundle lock id (`bundle_lock`). It is reserved: do
+/// not use it for keys of your own.
+pub const bundle_lock_prefix = "decisions.bundle-lock:"
+
+/// The id `recommend_member` and `recommend_bundle` load, purely as a
+/// lock, before they count a bundle's members: `bundle_lock_prefix`
+/// followed by the lowercase hex SHA-256 of the bundle's key. No entry is
+/// ever stored under it.
+pub fn bundle_lock(bundle: Bundle) -> String {
+  bundle_lock_prefix
+  <> crypto.hash(
+    crypto.Sha256,
+    bit_array.from_string(vocabulary.bundle_key(bundle)),
+  )
+  |> bit_array.base16_encode
+  |> string.lowercase
+}
+
+fn lock_bundle(
+  desk: Desk(o, tx),
+  tx: tx,
+  bundle: Bundle,
+) -> Result(Nil, Refusal) {
+  desk.port.load(tx, bundle_lock(bundle))
+  |> result.map_error(StoreFailed)
+  |> result.replace(Nil)
 }
 
 /// An occurrence of a bundle, as its head stands: what `members` returns.
@@ -1073,13 +1120,17 @@ pub fn members(
   list.filter_map(found, fn(pair) {
     let #(id, head) = pair
     case head.bundle {
-      Some(bundle) if bundle.key == key ->
-        Ok(Member(
-          occurrence: id,
-          point: head.point,
-          status: head.status,
-          size: bundle.size,
-        ))
+      Some(bundle) ->
+        case vocabulary.bundle_key(bundle) == key {
+          True ->
+            Ok(Member(
+              occurrence: id,
+              point: head.point,
+              status: head.status,
+              size: vocabulary.bundle_size(bundle),
+            ))
+          False -> Error(Nil)
+        }
       _ -> Error(Nil)
     }
   })
@@ -1097,9 +1148,9 @@ pub fn is_complete(members: List(Member)) -> Bool {
   })
 }
 
-/// Whether the bundle of a proposal, if it names one, can take occurrence
-/// `id`: a key, a size of at least one, the size its other members
-/// recorded, and room for one more.
+/// Whether `bundle`, if there is one, can take occurrence `id`: the size its
+/// other members recorded, and room for one more. The caller holds the
+/// bundle's lock.
 fn admits_member(
   desk: Desk(o, tx),
   tx: tx,
@@ -1108,11 +1159,9 @@ fn admits_member(
 ) -> Result(Nil, Refusal) {
   case bundle {
     None -> Ok(Nil)
-    Some(Bundle(key: "", ..)) ->
-      Error(BadBundle(bundle: "", fault: NoBundleKey))
-    Some(Bundle(key:, size:)) if size < 1 ->
-      Error(BadBundle(bundle: key, fault: EmptyBundle))
-    Some(Bundle(key:, size:)) -> {
+    Some(bundle) -> {
+      let key = vocabulary.bundle_key(bundle)
+      let size = vocabulary.bundle_size(bundle)
       use found <- result.try(members(desk, tx, bundle: key))
       let others = list.filter(found, fn(member) { member.occurrence != id })
       case list.find(others, fn(member) { member.size != size }) {
@@ -1436,6 +1485,7 @@ fn begin(
   tx: tx,
   id: String,
   proposal: Proposal(o),
+  bundle: Option(Bundle),
   prior: List(Entry(o)),
   pending: Option(occurrence.Pending),
   now: Timestamp,
@@ -1448,10 +1498,13 @@ fn begin(
       }
     })
   use Nil <- result.try(check(faults == [], InvalidFacts(faults)))
-  use Nil <- result.try(admits_member(desk, tx, id, proposal.bundle))
-  use Nil <- result.try(case proposal.bundle, pending {
+  use Nil <- result.try(admits_member(desk, tx, id, bundle))
+  use Nil <- result.try(case bundle, pending {
     Some(bundle), Some(occurrence.Pending(ended: Some(_), ..)) ->
-      Error(BadBundle(bundle: bundle.key, fault: EndedBefore(id)))
+      Error(BadBundle(
+        bundle: vocabulary.bundle_key(bundle),
+        fault: EndedBefore(id),
+      ))
     _, _ -> Ok(Nil)
   })
   // The deadline the occurrence was given itself, on its expectation or
@@ -1509,7 +1562,7 @@ fn begin(
         context: proposal.context,
         recommendation: proposal.recommendation,
         valid_until: deadline,
-        bundle: proposal.bundle,
+        bundle:,
       ),
     )
   case occurrence.fold(id, list.append(prior_written, [first])) {
