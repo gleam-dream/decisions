@@ -34,9 +34,6 @@ pub fn pool_connection(pool: Pool) -> pog.Connection {
 @external(erlang, "decisions_postgres_ffi", "unique")
 pub fn unique() -> Int
 
-@external(erlang, "decisions_postgres_ffi", "system_ms")
-fn system_ms() -> Int
-
 /// A new occurrence id: a UUID version 7, so ids made later sort later.
 @external(erlang, "decisions_postgres_ffi", "new_id")
 pub fn new_id() -> String
@@ -70,8 +67,11 @@ pub fn describe(error: pog.QueryError) -> String {
 ///   the database refusing a write that breaks the record's rules, and a
 ///   transaction at another isolation level than READ COMMITTED (25000,
 ///   raised by `decisions_load`) breaks the port's contract: `Conflict`;
-/// - a deadlock (`40P01`), a serialization failure (`40001`) or a lock
-///   wait that timed out (`55P03`) wrote nothing: `Contended`;
+/// - a deadlock (`40P01`), a serialization failure (`40001`), a lock
+///   wait that timed out (`55P03`), a statement the server cancelled
+///   (`57014`, a `statement_timeout` among them), a statement in a
+///   transaction an earlier statement aborted (`25P02`) and a pool with
+///   no connection to give (nothing was sent) wrote nothing: `Contended`;
 /// - everything else, a lost connection or a query timeout among them, is
 ///   `Unavailable`: the outcome may be unknown.
 pub fn store_error(error: pog.QueryError) -> StoreError {
@@ -82,7 +82,10 @@ pub fn store_error(error: pog.QueryError) -> StoreError {
     pog.PostgresqlError(code: "25000", ..) -> Conflict(describe(error))
     pog.PostgresqlError(code: "40P01", ..)
     | pog.PostgresqlError(code: "40001", ..)
-    | pog.PostgresqlError(code: "55P03", ..) -> Contended(describe(error))
+    | pog.PostgresqlError(code: "55P03", ..)
+    | pog.PostgresqlError(code: "57014", ..)
+    | pog.PostgresqlError(code: "25P02", ..)
+    | pog.ConnectionUnavailable -> Contended(describe(error))
     _ -> Unavailable(describe(error))
   }
 }
@@ -104,20 +107,20 @@ pub fn run(
 /// The database's clock, to the millisecond, read now (not at the start of
 /// the transaction). The desk reduces it to whole milliseconds as well; it
 /// is read here as an integer of milliseconds because that is how every
-/// time crosses the wire in this package (see `time`). When the query fails the
-/// node's clock stands in: the transaction has failed by then, and its
-/// next write fails with it.
-pub fn now(connection: pog.Connection) -> Timestamp {
-  let read =
-    pog.query(
-      "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint",
-    )
-    |> pog.returning(decode.at([0], decode.int))
-    |> pog.execute(connection)
-  case read {
-    Ok(pog.Returned(rows: [ms], ..)) -> wire.from_milliseconds(ms)
-    _ -> wire.from_milliseconds(system_ms())
-  }
+/// time crosses the wire in this package (see `time`). When the query
+/// fails, its error is the answer: no other clock stands in.
+pub fn now(connection: pog.Connection) -> Result(Timestamp, StoreError) {
+  pog.query(
+    "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint",
+  )
+  |> pog.returning(decode.at([0], decode.int))
+  |> run(connection)
+  |> result.try(fn(rows) {
+    case rows {
+      [ms] -> Ok(wire.from_milliseconds(ms))
+      _ -> Error(Unavailable("the clock query returned no single row"))
+    }
+  })
 }
 
 /// A time read as whole Unix milliseconds (`decisions_ms(column)`). The

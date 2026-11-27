@@ -76,7 +76,7 @@ pub fn a_clock_that_moves_on_every_read_passes_test() {
             tx,
             timestamp.add(memory.now(tx), duration.milliseconds(7)),
           )
-          memory.now(tx)
+          Ok(memory.now(tx))
         })
       }),
     )

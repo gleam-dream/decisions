@@ -11,7 +11,6 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/option.{None, Some}
 import gleam/string
-import gleam/time/duration
 import kit
 import pog
 
@@ -89,10 +88,7 @@ pub fn a_long_lock_wait_is_contention_by_default_test() {
 pub fn the_store_option_changes_the_lock_timeout_test() {
   let #(name, store) = kit.store()
   let store =
-    decisions_postgres.with_lock_timeout(
-      store,
-      Some(duration.milliseconds(100)),
-    )
+    decisions_postgres.with_lock_timeout(store, Some(kit.lock_timeout(100)))
   let spec = kit.spec("lock_short")
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
@@ -145,4 +141,22 @@ pub fn the_store_timeout_overrides_the_caller_setting_test() {
     })
   let assert Ok(Ok(found)) = process.receive(outcomes, 10_000)
   assert found.id == id
+}
+
+/// The shortest timeout there is, one millisecond, still ends a long wait
+/// as contention. (`store.lock_timeout` refuses zero, which PostgreSQL
+/// reads as "wait for ever", and a negative wait, which it refuses on
+/// every load.)
+pub fn the_shortest_timeout_still_bounds_the_wait_test() {
+  let #(name, store) = kit.store()
+  let store =
+    decisions_postgres.with_lock_timeout(store, Some(kit.lock_timeout(1)))
+  let spec = kit.spec("lock_shortest")
+  let desk = kit.desk(store, spec)
+  use env <- kit.run(name, store, kit.options(), [], [])
+  let id = made(env, desk, spec)
+  hold(env, id, 2)
+  let assert Error(decisions.StoreFailed(store.Contended(detail))) =
+    read_with(env, desk, id, None)
+  assert string.contains(detail, "55P03")
 }

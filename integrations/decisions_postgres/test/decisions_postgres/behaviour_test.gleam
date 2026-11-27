@@ -174,7 +174,7 @@ pub fn an_expected_record_expires_at_its_own_deadline_test() {
   let late_desk = kit.desk(later, spec)
   let late_wakers = [decisions.waker(late_desk)]
   use env <- kit.run(name, pg, kit.options(), [], [])
-  let deadline = hour_ahead(pg, env)
+  let deadline = hour_ahead(env)
   let failing = kit.tag("failing")
   let late = kit.tag("late")
   let assert Ok(Nil) =
@@ -245,9 +245,8 @@ pub fn grind_delivers_a_record_s_own_deadline_test() {
   let spec = kit.spec("own-deadline-grind")
   let desk = kit.desk(pg, spec)
   use env <- kit.run(name, pg, kit.delivering(), [decisions.waker(desk)], [])
-  let port = decisions_postgres.port(pg)
   let deadline =
-    timestamp.add(kit.within(env, port.now), duration.seconds(2))
+    timestamp.add(kit.now(env), duration.seconds(2))
     |> wire.milliseconds
     |> wire.from_milliseconds
   let key = kit.tag("grind")
@@ -270,7 +269,7 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
   let desk = kit.desk(pg, spec)
   let late_desk = kit.desk(later, spec)
   use env <- kit.run(name, pg, kit.options(), [], [])
-  let deadline = hour_ahead(pg, env)
+  let deadline = hour_ahead(env)
   let keys =
     list.map([1, 2, 3, 4, 5, 6], fn(n) {
       kit.tag("race") <> "-" <> int.to_string(n)
@@ -320,14 +319,8 @@ pub fn a_wake_up_racing_a_late_recommendation_leaves_one_notice_test() {
 }
 
 /// An hour after the store's clock, in whole milliseconds.
-fn hour_ahead(
-  pg: decisions_postgres.Store,
-  env: kit.Env,
-) -> timestamp.Timestamp {
-  timestamp.add(
-    kit.within(env, decisions_postgres.port(pg).now),
-    duration.hours(1),
-  )
+fn hour_ahead(env: kit.Env) -> timestamp.Timestamp {
+  timestamp.add(kit.now(env), duration.hours(1))
   |> wire.milliseconds
   |> wire.from_milliseconds
 }
@@ -379,7 +372,8 @@ pub fn a_store_clock_behind_the_job_queue_is_waited_for_test() {
   offset_add(behind, -600_000)
   let skewed =
     store.Port(..base, now: fn(tx) {
-      timestamp.add(base.now(tx), duration.milliseconds(offset_get(behind)))
+      base.now(tx)
+      |> result.map(timestamp.add(_, duration.milliseconds(offset_get(behind))))
     })
   let desk = kit.desk_over(skewed, spec)
   let rescheduled = process.new_subject()
@@ -447,9 +441,10 @@ pub fn the_store_clock_is_the_database_clock_test() {
   let assert Ok(#(a, b)) =
     decisions_postgres.transaction(env.pool, fn(tx) {
       let port = decisions_postgres.port(store)
-      let a = port.now(tx)
+      let assert Ok(a) = port.now(tx)
       process.sleep(20)
-      Ok(#(a, port.now(tx)))
+      let assert Ok(b) = port.now(tx)
+      Ok(#(a, b))
     })
     |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
   assert wire.milliseconds(b) - wire.milliseconds(a) >= 20
@@ -501,7 +496,7 @@ pub fn the_transaction_helper_classifies_failures_test() {
   let #(name, store) = kit.store()
   // The store's own lock timeout, short, ends the wait below.
   let store =
-    decisions_postgres.with_lock_timeout(store, Some(duration.milliseconds(50)))
+    decisions_postgres.with_lock_timeout(store, Some(kit.lock_timeout(50)))
   let spec = kit.spec("helper")
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])

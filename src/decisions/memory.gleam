@@ -122,7 +122,7 @@ pub fn port() -> Port(Memory) {
       Ok(Nil)
     },
     atomically: fn(tx, body) { Ok(guarded(tx, fn() { body(tx) })) },
-    now: now,
+    now: fn(tx) { Ok(now(tx)) },
     new_id: fn(tx) {
       let next =
         { raw_get(tx, "next_id") |> result.try(int.parse) |> result.unwrap(0) }

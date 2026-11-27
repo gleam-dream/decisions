@@ -13,7 +13,6 @@ import gleam/list
 import gleam/option.{None}
 import gleam/result
 import gleam/string
-import gleam/time/duration
 import support/lab
 
 /// Loading a lock id locks it until the transaction ends and leaves
@@ -106,10 +105,8 @@ pub fn the_admissions_scenario_needs_the_subject_lock_test() {
 /// `Contended`; the other commits; neither hangs.
 pub fn expect_then_happened_is_a_detected_deadlock_test() {
   lab.quiet()
-  let assert Ok(s) =
-    store.start(
-      store.Config(..lab.config(), lock_timeout: duration.seconds(30)),
-    )
+  let assert Ok(lock_timeout) = port_types.lock_timeout(milliseconds: 30_000)
+  let assert Ok(s) = store.start(store.Config(..lab.config(), lock_timeout:))
   let desk = lab.desk(lab.point("lock.order", None), lab.asking("finance"))
   let about = Subject("person", "ana")
   // A waiting record about the subject, which `happened` will lock.

@@ -282,6 +282,23 @@ conformance.Adapter(port:, inspect:,
   transaction: fn(body) { memory.transaction(store, body) }, cleanup:)
 ```
 
+### The store's clock can fail, and a lock timeout is a `LockTimeout`
+
+The port's `now` returns `Result(Timestamp, StoreError)`; the desk turns its
+error into `StoreFailed`. In 0.1 an adapter that could not read its clock had to
+make up a time. `store.LockTimeout` is the longest a transaction waits for an
+occurrence's lock, a whole number of milliseconds of at least one, built with
+`store.lock_timeout(milliseconds:)`; `store.default_lock_timeout` is 4 seconds.
+
+```gleam
+// Before (0.1)
+now: fn(tx) { read_clock(tx) },
+
+// After (0.2)
+now: fn(tx) { Ok(read_clock(tx)) },
+let assert Ok(timeout) = store.lock_timeout(milliseconds: 250)
+```
+
 ## decisions_otp 0.2.0
 
 ### A handler belongs to the process that attached it
@@ -352,6 +369,22 @@ when a supervised owner restarted empty, so an external effect keyed by an
 occurrence's id could meet an earlier occurrence's key. Code that parsed the
 `occ-` form, or expected ids in counter order, reads them as opaque text;
 ids made later still sort later.
+
+### A lock timeout is a `LockTimeout`
+
+`store.Config.lock_timeout` is a `decisions/store.LockTimeout`, at least one
+millisecond, instead of a `Duration`; a zero or negative duration, which 0.1
+clamped to "refuse at once", cannot be built. `store.defaults()` waits 4
+seconds (`decisions/store.default_lock_timeout`) instead of 5.
+
+```gleam
+// Before (0.1)
+store.Config(..store.defaults(), lock_timeout: duration.milliseconds(50))
+
+// After (0.2)
+let assert Ok(lock_timeout) = port_types.lock_timeout(milliseconds: 50)
+store.Config(..store.defaults(), lock_timeout:)
+```
 
 ### The core range accepts 0.2
 
@@ -435,6 +468,30 @@ decisions_postgres.transaction_with(db, fn(tx) {
   statements, and `grind.submit_in`, on `connection(tx)`.
 - A verb inside the application's own `pog.transaction` no longer compiles;
   move the body into `transaction_with`.
+
+### A lock timeout is a `LockTimeout`, and more failures are contention
+
+`with_lock_timeout` takes an `Option(decisions/store.LockTimeout)`, at least
+one millisecond. In 0.2 a duration under one millisecond was sent as `0ms`,
+which PostgreSQL reads as "wait for ever", and a negative one made every
+`load` fail.
+
+```gleam
+// Before (0.2)
+decisions_postgres.with_lock_timeout(store, Some(duration.milliseconds(250)))
+
+// After (0.3)
+let assert Ok(timeout) = store.lock_timeout(milliseconds: 250)
+decisions_postgres.with_lock_timeout(store, Some(timeout))
+```
+
+- A statement the server cancelled (`57014`), a statement in a transaction an
+  earlier statement aborted (`25P02`) and a pool with no connection to give are
+  `Contended`, not `Unavailable`: nothing was written. A caller that retried
+  only `Contended` now retries these too.
+- The port's `now` returns the clock query's error instead of the node's clock.
+- A settlement delivery that finds its notice held by another delivery snoozes
+  instead of waiting for it, and the sweep skips such a notice.
 
 ### The core range accepts 0.2
 

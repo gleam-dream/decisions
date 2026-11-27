@@ -899,7 +899,8 @@ pub fn recommend(
   proposal: Proposal(o),
 ) -> Result(Occurrence(o), Refusal) {
   let id = desk.port.new_id(tx)
-  begin(desk, tx, id, proposal, None, [], None, clock(desk, tx))
+  use now <- result.try(clock(desk, tx))
+  begin(desk, tx, id, proposal, None, [], None, now)
 }
 
 /// `recommend`, at most once per `key`, which becomes the occurrence's id.
@@ -2640,7 +2641,7 @@ fn fetch(
     list.try_map(stored, entry.from_stored(_, desk.point.output))
     |> result.map_error(Unreadable),
   )
-  let clock = clock(desk, tx)
+  use clock <- result.try(clock(desk, tx))
   let now = case list.last(entries) {
     Ok(last) ->
       case timestamp.compare(clock, last.at) {
@@ -2655,8 +2656,10 @@ fn fetch(
 /// The store's clock in whole milliseconds, the resolution of every stored
 /// time. The desk reduces it here, so an adapter with a finer clock cannot
 /// store a time a wake-up or a head would not match exactly.
-fn clock(desk: Desk(o, tx), tx: tx) -> Timestamp {
-  desk.port.now(tx) |> whole_milliseconds
+fn clock(desk: Desk(o, tx), tx: tx) -> Result(Timestamp, Refusal) {
+  desk.port.now(tx)
+  |> result.map(whole_milliseconds)
+  |> result.map_error(StoreFailed)
 }
 
 /// A time in whole milliseconds, rounded down: the resolution of every

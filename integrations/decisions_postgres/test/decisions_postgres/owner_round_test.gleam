@@ -296,7 +296,7 @@ pub fn refusing_keeps_refusals_and_store_classifications_test() {
   let #(name, store) = kit.store()
   // The store's own lock timeout, short, ends the wait below.
   let store =
-    decisions_postgres.with_lock_timeout(store, Some(duration.milliseconds(50)))
+    decisions_postgres.with_lock_timeout(store, Some(kit.lock_timeout(50)))
   let spec = kit.spec("refusing")
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
@@ -423,7 +423,7 @@ pub fn every_notice_reaches_the_follower_as_not_begun_test() {
   let superseded = kit.tag("superseded")
   let lapsed = kit.tag("lapsed")
   let deadline =
-    kit.within(env, decisions_postgres.port(store).now)
+    kit.now(env)
     |> timestamp.add(duration.seconds(2))
   let assert Ok(Nil) =
     kit.tx(env, fn(tx) {

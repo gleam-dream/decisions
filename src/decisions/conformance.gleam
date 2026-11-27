@@ -1226,7 +1226,13 @@ fn plus(base: Timestamp, seconds: Int) -> Timestamp {
 fn at(adapter: Adapter(tx), seconds: Int) -> Timestamp {
   let now =
     text(adapter, fn(tx) {
-      adapter.port.now(tx) |> wire.milliseconds |> int.to_string
+      case adapter.port.now(tx) {
+        Ok(now) -> now |> wire.milliseconds |> int.to_string
+        Error(error) ->
+          panic as {
+            "decisions/conformance: the clock failed: " <> store.describe(error)
+          }
+      }
     })
   let assert Ok(ms) = int.parse(now) as "the clock came back as text"
   wire.from_milliseconds(ms)

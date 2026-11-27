@@ -5,7 +5,6 @@ import decisions
 import decisions/policy.{AnyoneHolding, PerCent, Proceed, Several}
 import decisions/store
 import decisions/vocabulary.{Approve, Subject, Validator}
-import decisions_postgres
 import decisions_postgres/queue
 import gleam/dynamic/decode
 import gleam/list
@@ -238,7 +237,7 @@ pub fn point_pages_reviews_and_exports_test() {
     )
   assert all == list.sort(mine, string.compare)
   // Settled since a time: decide three, then read them in pages of two.
-  let since = kit.within(env, decisions_postgres.port(store).now)
+  let since = kit.now(env)
   let decided =
     list.map(list.take(mine, 3), fn(id) {
       let assert Ok(_) =

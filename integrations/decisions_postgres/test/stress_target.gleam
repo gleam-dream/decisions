@@ -93,7 +93,8 @@ fn over(
   )
   let base = decisions_postgres.port(store)
   let clock = fn(tx) {
-    timestamp.add(base.now(tx), duration.milliseconds(offset_get(offset)))
+    base.now(tx)
+    |> result.map(timestamp.add(_, duration.milliseconds(offset_get(offset))))
   }
   let port = store.Port(..base, now: clock)
   Ok(
@@ -104,7 +105,14 @@ fn over(
         transaction: fn(body) { in_transaction(env, body) },
         cleanup: fn() { kit.stop(env) },
       ),
-      backlog: backlog(env, fn() { kit.within(env, clock) }, claims),
+      backlog: backlog(
+        env,
+        fn() {
+          let assert Ok(now) = kit.within(env, clock)
+          now
+        },
+        claims,
+      ),
       add: fn(tx, table, row) {
         pog.query("INSERT INTO test_rows (tbl, value) VALUES ($1, $2)")
         |> pog.parameter(pog.text(table))

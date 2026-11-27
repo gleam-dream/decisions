@@ -127,7 +127,8 @@ fn h1_decomposed(point: String) -> Nil {
   let options = kit.Options(..kit.options(), pool_size: pool_size)
   use env <- kit.run(name, store, options, [], [])
   let base = decisions_postgres.port(store)
-  let node_clock = store.Port(..base, now: fn(_) { timestamp.system_time() })
+  let node_clock =
+    store.Port(..base, now: fn(_) { Ok(timestamp.system_time()) })
   let bare = store.Port(..node_clock, atomically: fn(tx, body) { Ok(body(tx)) })
   let run = fn(what: String, port: store.Port(decisions_postgres.Tx)) {
     let desk = kit.desk_over(port, spec)
@@ -331,8 +332,8 @@ fn h5(env: kit.Env, store: decisions_postgres.Store, held: kit.Spec) -> Nil {
   // Every hold is created with the store's clock frozen at `start`, so all
   // 5 000 end at the same millisecond, `start + 12 s`.
   let port = decisions_postgres.port(store)
-  let start = kit.within(env, port.now)
-  let frozen = store.Port(..port, now: fn(_) { start })
+  let start = kit.now(env)
+  let frozen = store.Port(..port, now: fn(_) { Ok(start) })
   let creating =
     kit.desk_over(frozen, kit.Spec(..held, hold: Some(duration.seconds(12))))
   let made =
