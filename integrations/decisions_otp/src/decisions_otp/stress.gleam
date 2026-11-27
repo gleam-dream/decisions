@@ -1834,9 +1834,10 @@ fn wall_clock(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let #(_, go) =
     holder(target, steps, fn(tx) {
       use _ <- result.try(port.load(tx, id) |> store_text)
-      let first = port.now(tx)
+      use first <- result.try(port.now(tx) |> store_text)
       process.sleep(30)
-      process.send(readings, #(first, port.now(tx)))
+      use second <- result.try(port.now(tx) |> store_text)
+      process.send(readings, #(first, second))
       Ok(Nil)
     })
   use Nil <- result.try(expect(
@@ -1860,7 +1861,8 @@ fn wall_clock(target: Target(tx), _load: Load) -> Result(Nil, String) {
       transaction(target, fn(tx) {
         process.send(waited, Waiting)
         use _ <- result.try(port.load(tx, id) |> store_text)
-        process.send(waited, Locked(port.now(tx)))
+        use now <- result.try(port.now(tx) |> store_text)
+        process.send(waited, Locked(now))
         Ok(Nil)
       })
   })

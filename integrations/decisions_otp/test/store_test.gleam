@@ -17,10 +17,9 @@ import support/policies
 
 pub fn a_lock_wait_longer_than_the_timeout_is_refused_test() {
   lab.quiet()
+  let assert Ok(lock_timeout) = port_types.lock_timeout(milliseconds: 50)
   let assert Ok(s) =
-    store.start(
-      store.Config(..store.defaults(), lock_timeout: duration.milliseconds(50)),
-    )
+    store.start(store.Config(..store.defaults(), lock_timeout:))
   let holding = process.new_subject()
   let holder =
     process.spawn_unlinked(fn() {

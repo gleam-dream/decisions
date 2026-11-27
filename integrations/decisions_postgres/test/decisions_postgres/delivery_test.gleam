@@ -81,7 +81,7 @@ pub fn schedule_leaves_a_delivered_wake_up_alone_test() {
       kit.jobs(env, "decisions.wake") == [#("succeeded", 1)]
     })
   let port = decisions_postgres.port(store)
-  let later = timestamp.add(kit.within(env, port.now), duration.hours(1))
+  let later = timestamp.add(kit.now(env), duration.hours(1))
   let assert Ok(Nil) =
     kit.within(env, port.schedule(_, spec.name, held.id, [later]))
   let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
@@ -345,7 +345,7 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
   // would be.
   let port = decisions_postgres.port(store)
   let bad = kit.tag("bad")
-  let now = kit.within(env, port.now)
+  let now = kit.now(env)
   let soon = timestamp.add(now, duration.milliseconds(300))
   let assert Ok(Nil) =
     decisions_postgres.transaction(env.pool, fn(tx) {
@@ -539,7 +539,7 @@ pub fn a_wake_up_that_cannot_consult_is_counted_and_set_aside_test() {
   // step is due now; the desk that wakes it reads the real clock.
   let behind =
     store.Port(..base, now: fn(tx) {
-      timestamp.add(base.now(tx), duration.seconds(-61))
+      base.now(tx) |> result.map(timestamp.add(_, duration.seconds(-61)))
     })
   let making = kit.desk_over(behind, spec)
   let waking = kit.desk(store, spec)
@@ -627,4 +627,78 @@ pub fn a_wake_up_that_meets_an_unsure_tool_is_retried_and_releases_once_test() {
   let assert occurrence.Released(..) = known.status
   assert kit.effects_of(env.db, held.id) == 1
   kit.check(env, [desk])
+}
+
+/// A notice another delivery holds is not waited for: the delivery
+/// snoozes at once, without holding a connection for the other's time,
+/// and delivers once the holder has gone.
+pub fn a_notice_held_by_another_delivery_is_not_waited_for_test() {
+  let #(name, store) = kit.store()
+  let spec = kit.Spec(..kit.spec("held_notice"), policy: kit.proceed())
+  let store = decisions_postgres.following(store, spec.name)
+  let desk = kit.desk(store, spec)
+  let follower = #(spec.name, fn(tx, id) {
+    pog.query(
+      "INSERT INTO test_effects (point, occurrence, key) VALUES ($1, $2, 'followed')",
+    )
+    |> pog.parameter(pog.text("follow:" <> spec.name))
+    |> pog.parameter(pog.text(id))
+    |> pog.execute(decisions_postgres.connection(tx))
+    |> result.replace(Nil)
+    |> result.map_error(fn(_) { decisions.ApplicationFailed("insert failed") })
+  })
+  use env <- kit.run(name, store, kit.options(), [], [follower])
+  let assert Ok(released) =
+    kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
+  let notice =
+    kit.scalar(
+      env.db,
+      "SELECT id FROM decisions_settled WHERE occurrence_id = $1",
+      [pog.text(released.id)],
+      decode.int,
+    )
+  let job =
+    decisions_postgres.NoticeJob(
+      notice:,
+      point: spec.name,
+      occurrence: released.id,
+    )
+  let worker = decisions_postgres.settlement_worker(store, [follower])
+  let context =
+    grind_testing.context(job_id: 1, attempt: 1)
+    |> grind_testing.with_connection(env.db)
+  // Another delivery holds the notice's row for 3 seconds.
+  let tag = kit.tag("held")
+  process.spawn_unlinked(fn() {
+    let _ =
+      pog.query("SELECT pg_sleep(3)::text /* " <> tag <> " */ FROM (
+           SELECT 1 FROM decisions_settled WHERE id = $1 FOR UPDATE) AS l")
+      |> pog.parameter(pog.int(notice))
+      |> pog.timeout(10_000)
+      |> pog.execute(env.db)
+    Nil
+  })
+  let assert True =
+    kit.eventually(5000, fn() {
+      kit.scalar(
+        env.db,
+        "SELECT count(*) FROM pg_stat_activity
+         WHERE wait_event = 'PgSleep' AND query LIKE $1",
+        [pog.text("%" <> tag <> "%")],
+        decode.int,
+      )
+      == 1
+    })
+  let started = kit.monotonic_us()
+  let assert Ok(worker.Snoozed(..)) =
+    grind_testing.perform_with(worker, context, job)
+  assert kit.monotonic_us() - started < 1_000_000
+  assert kit.effects(env.db, "follow:" <> spec.name) == 0
+  // Once the holder has gone, the next delivery delivers.
+  let assert True =
+    kit.eventually(10_000, fn() {
+      grind_testing.perform_with(worker, context, job)
+      == Ok(worker.Succeeded("delivered"))
+    })
+  assert kit.effects(env.db, "follow:" <> spec.name) == 1
 }

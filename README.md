@@ -1753,7 +1753,8 @@ for tests and operators. Run the application as a role that does not own the
 tables, with the grants the package README lists: the append-only rule holds
 against every such role. An occurrence id and a point name are at most 255
 bytes. A wait for a contended occurrence's lock ends after 4 seconds as
-contention (`with_lock_timeout`), before `pog`'s connection checkout limit
+contention (`with_lock_timeout`, with a `store.LockTimeout` of at least one
+millisecond), before `pog`'s connection checkout limit
 would report it as an unknown outcome. `decisions_postgres/queue` reads queue pages, counts, summaries and
 pages of a point's occurrences from heads alone, each on one index.
 `decisions_postgres/live` forwards `NOTIFY` hints; `subscribe` is acknowledged

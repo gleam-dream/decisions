@@ -77,8 +77,10 @@
 //// (`decisions_postgres/queue`, `sweep`) take the `Pool`.
 ////
 //// The port reports an integrity violation (SQLSTATE class 23) as
-//// `store.Conflict`; a deadlock, a serialization failure or a lock wait
-//// that timed out as `store.Contended`; every other failure as
+//// `store.Conflict`; a deadlock, a serialization failure, a lock wait
+//// that timed out, a cancelled statement, a statement in an aborted
+//// transaction and a pool with no connection to give (none of which
+//// wrote anything) as `store.Contended`; every other failure as
 //// `store.Unavailable`.
 ////
 //// Every transaction that uses the port must run at `READ COMMITTED`, the
@@ -108,8 +110,8 @@
 import decisions.{type Card, type Desk, type Refusal}
 import decisions/occurrence.{type Occurrence}
 import decisions/store.{
-  type Head, type Inspection, type Port, type StoreError, type Stored, Head,
-  Inspection, Notice, Port, Stored, Wake,
+  type Head, type Inspection, type LockTimeout, type Port, type StoreError,
+  type Stored, Head, Inspection, Notice, Port, Stored, Wake,
 }
 import decisions/vocabulary.{
   type Ref, type Stop, type Subject, type Verdict, Subject,
@@ -153,7 +155,7 @@ pub opaque type Store {
     settlement_attempts: Int,
     wake_attempts: Int,
     snooze_limit: Int,
-    lock_timeout: Option(Duration),
+    lock_timeout: Option(LockTimeout),
   )
 }
 
@@ -172,14 +174,16 @@ pub fn new(jobs: grind.Grind) -> Store {
     settlement_attempts: 20,
     wake_attempts: 20,
     snooze_limit: 1000,
-    lock_timeout: Some(duration.seconds(4)),
+    lock_timeout: Some(store.default_lock_timeout),
   )
 }
 
 /// How long `load` waits for an occurrence's lock before the database
 /// gives up, which the port reports as `store.Contended` (nothing written,
-/// safe to run again); 4 seconds unless set, `None` to leave the
-/// connection's own setting alone.
+/// safe to run again); `store.default_lock_timeout` (4 seconds) unless
+/// set, `None` to leave the connection's own setting alone. A
+/// `store.LockTimeout` is at least one millisecond, so the store never
+/// sends PostgreSQL's `0`, which means "wait for ever".
 ///
 /// Why a default: `pog.transaction` checks a connection out for at most 5
 /// seconds, and a transaction still waiting then loses its connection,
@@ -192,7 +196,7 @@ pub fn new(jobs: grind.Grind) -> Store {
 /// **overrides** a `lock_timeout` the caller set earlier in that
 /// transaction. With `None`, the caller's setting, or the role's, is
 /// respected.
-pub fn with_lock_timeout(store: Store, timeout: Option(Duration)) -> Store {
+pub fn with_lock_timeout(store: Store, timeout: Option(LockTimeout)) -> Store {
   Store(..store, lock_timeout: timeout)
 }
 
@@ -326,7 +330,8 @@ fn in_transaction(
 /// - `settled` admits the notice, and a Grind job for it when the point
 ///   has a follower (`following`).
 /// - `atomically` is a savepoint.
-/// - `now` is the database's clock to the millisecond.
+/// - `now` is the database's clock to the millisecond, or the error of
+///   the query that read it.
 /// - `new_id` is a UUID version 7 made on this node.
 /// - `members` reads the heads of a bundle through the partial index
 ///   `decisions_occurrences_bundle`, without a lock, set-aside records
@@ -356,8 +361,8 @@ pub fn port(store: Store) -> Port(Tx) {
 }
 
 /// The store's clock: the database's, plus the store's test offset.
-fn clock(store: Store, tx: pog.Connection) -> Timestamp {
-  timestamp.add(sql.now(tx), store.offset)
+fn clock(store: Store, tx: pog.Connection) -> Result(Timestamp, StoreError) {
+  sql.now(tx) |> result.map(timestamp.add(_, store.offset))
 }
 
 fn load(
@@ -369,7 +374,7 @@ fn load(
   |> pog.parameter(pog.text(id))
   |> pog.parameter(pog.nullable(
     fn(timeout) {
-      pog.text(int.to_string(duration.to_milliseconds(timeout)) <> "ms")
+      pog.text(int.to_string(store.lock_timeout_milliseconds(timeout)) <> "ms")
     },
     store.lock_timeout,
   ))
@@ -833,8 +838,11 @@ pub type Failure {
   /// the whole call again is safe: it reads the record again. A conflict
   /// that repeats points at a writer that does not take the lock.
   Conflict(detail: String)
-  /// Contention: a deadlock, a serialization failure or a lock wait that
-  /// timed out. Nothing was written; running the call again is safe.
+  /// Contention, or another failure after which nothing was written: a
+  /// deadlock, a serialization failure, a lock wait that timed out, a
+  /// statement the server cancelled, a statement in an aborted
+  /// transaction, or no connection to be had. Running the call again is
+  /// safe.
   Contended(detail: String)
   /// The database could not do it and the outcome may be unknown: a lost
   /// connection, a query timeout, or a failure in the reply to the commit,
@@ -1289,7 +1297,9 @@ fn deliver_one(
                     |> sql.run(tx)
                     |> result.map_error(WakeStore),
                   )
-                  let now = clock(store, tx)
+                  use now <- result.try(
+                    clock(store, tx) |> result.map_error(WakeStore),
+                  )
                   Ok(Done(
                     lag_ms: wire.milliseconds(now) - wire.milliseconds(at),
                   ))
@@ -1298,7 +1308,10 @@ fn deliver_one(
                 // the snooze is the time left on that clock, so a store
                 // clock ahead of or behind the node's cannot make it a time
                 // already past.
-                Ok(Ok(Some(until))) -> Ok(Early(until:, now: clock(store, tx)))
+                Ok(Ok(Some(until))) ->
+                  clock(store, tx)
+                  |> result.map(fn(now) { Early(until:, now:) })
+                  |> result.map_error(WakeStore)
                 Ok(Error(refusal)) -> Error(WakeRefused(refusal))
               }
           }
@@ -1412,13 +1425,14 @@ pub fn deliver_due(
   limit limit: Int,
 ) -> Result(Int, StoreError) {
   let db = sql.pool_connection(db)
+  use now <- result.try(clock(store, db))
   use due <- result.try(
     pog.query(
       "SELECT id, point, occurrence_id, decisions_ms(at) FROM decisions_wakes
        WHERE set_aside_at IS NULL AND at <= decisions_at($1)
        ORDER BY at, id LIMIT $2",
     )
-    |> pog.parameter(sql.at(clock(store, db)))
+    |> pog.parameter(sql.at(now))
     |> pog.parameter(pog.int(limit))
     |> pog.returning(wake_row())
     |> sql.run(db),
@@ -1794,7 +1808,9 @@ fn readmit_unless_live(
   }
 }
 
-/// Lock the row (still pending, or skip it), admit its job, commit.
+/// Lock the row (still pending, or skip it), admit its job, commit. A row
+/// another transaction holds is skipped, not waited for: a delivery is
+/// working on it, and a delivery that hangs must not hold the sweep too.
 fn readmit(
   db: pog.Connection,
   table: String,
@@ -1812,7 +1828,7 @@ fn readmit(
         <> table
         <> " WHERE id = $1 AND "
         <> pending
-        <> " FOR UPDATE",
+        <> " FOR UPDATE SKIP LOCKED",
       )
       |> pog.parameter(pog.int(id))
       |> pog.returning(decode.at([0], decode.int))
@@ -2162,6 +2178,8 @@ type NoticeFailure {
 type NoticeOutcome {
   DeliveredBefore
   Delivered
+  /// Another delivery holds the notice's row: it is not waited for.
+  HeldElsewhere
 }
 
 /// What one delivery of a notice did. The worker and `deliver_notices`
@@ -2216,19 +2234,12 @@ fn notice_one(
       let outcome =
         pog.transaction(db, fn(tx) {
           use pending <- result.try(
-            pog.query(
-              "SELECT id FROM decisions_settled
-               WHERE id = $1 AND delivered_at IS NULL AND set_aside_at IS NULL
-               FOR UPDATE",
-            )
-            |> pog.parameter(pog.int(input.notice))
-            |> pog.returning(decode.at([0], decode.int))
-            |> sql.run(tx)
-            |> result.map_error(NoticeStore),
+            lock_notice(tx, input.notice) |> result.map_error(NoticeStore),
           )
           case pending {
-            [] -> Ok(DeliveredBefore)
-            _ -> {
+            NoticeGone -> Ok(DeliveredBefore)
+            NoticeHeld -> Ok(HeldElsewhere)
+            NoticeLocked -> {
               // A follower that raises is an application failure.
               let followed = case
                 sql.rescue(fn() { follow(Tx(tx), input.occurrence) })
@@ -2250,6 +2261,8 @@ fn notice_one(
         })
       case outcome {
         Ok(DeliveredBefore) -> NoticeBefore
+        Ok(HeldElsewhere) ->
+          NoticeRetry("another delivery of the notice is in progress")
         Ok(Delivered) -> {
           sinal.emit(
             telemetry.settlement_delivered(),
@@ -2297,6 +2310,50 @@ fn notice_one(
         }
       }
     }
+  }
+}
+
+/// What `lock_notice` found.
+type NoticeLock {
+  /// The notice is pending and this transaction holds its row.
+  NoticeLocked
+  /// The notice is pending and another transaction holds its row.
+  NoticeHeld
+  /// The notice was delivered or set aside.
+  NoticeGone
+}
+
+/// Lock a pending notice's row without waiting for it. A delivery whose
+/// follower hangs holds the row for as long as it hangs; a replay of its
+/// job then snoozes instead of holding a connection of the pool on the
+/// same row. The second read, only when the row was skipped, tells a held
+/// notice from one that is no longer pending.
+fn lock_notice(
+  tx: pog.Connection,
+  notice: Int,
+) -> Result(NoticeLock, StoreError) {
+  let pending =
+    "FROM decisions_settled
+     WHERE id = $1 AND delivered_at IS NULL AND set_aside_at IS NULL"
+  use locked <- result.try(
+    pog.query("SELECT id " <> pending <> " FOR UPDATE SKIP LOCKED")
+    |> pog.parameter(pog.int(notice))
+    |> pog.returning(decode.at([0], decode.int))
+    |> sql.run(tx),
+  )
+  case locked {
+    [_, ..] -> Ok(NoticeLocked)
+    [] ->
+      pog.query("SELECT count(*) " <> pending)
+      |> pog.parameter(pog.int(notice))
+      |> pog.returning(decode.at([0], decode.int))
+      |> sql.run(tx)
+      |> result.map(fn(counted) {
+        case counted {
+          [0] | [] -> NoticeGone
+          _ -> NoticeHeld
+        }
+      })
   }
 }
 

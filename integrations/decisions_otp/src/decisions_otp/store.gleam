@@ -90,9 +90,9 @@
 
 import decisions/model.{type Evidence, Evidence}
 import decisions/store.{
-  type Head, type Inspection, type Notice, type Port, type StoreError,
-  type Stored, type Wake, Conflict, Contended, Inspection, Notice, Port, Stored,
-  Unavailable, Wake,
+  type Head, type Inspection, type LockTimeout, type Notice, type Port,
+  type StoreError, type Stored, type Wake, Conflict, Contended, Inspection,
+  Notice, Port, Stored, Unavailable, Wake,
 } as port_types
 import decisions/vocabulary.{
   type Ref, type Stop, type Subject as About, type Validator,
@@ -154,8 +154,9 @@ type Open {
 pub type Config {
   Config(
     /// How long a transaction waits for a lock before it is refused with
-    /// `Contended`.
-    lock_timeout: Duration,
+    /// `Contended`: at least a millisecond, as in every store
+    /// (`decisions/store.lock_timeout`).
+    lock_timeout: LockTimeout,
     /// How many messages a subscriber's mailbox may hold before hints to
     /// it are dropped and counted (see `decisions_otp/live`).
     hint_capacity: Int,
@@ -178,11 +179,12 @@ pub type Clock {
   Stopped(at: Timestamp)
 }
 
-/// A five-second lock wait, room for 1 000 messages per subscriber, the
-/// wall clock, and a retry backoff of one second.
+/// The shared four-second lock wait (`decisions/store.default_lock_timeout`),
+/// room for 1 000 messages per subscriber, the wall clock, and a retry
+/// backoff of one second.
 pub fn defaults() -> Config {
   Config(
-    lock_timeout: duration.seconds(5),
+    lock_timeout: port_types.default_lock_timeout,
     hint_capacity: 1000,
     clock: Wall,
     retry_backoff: duration.seconds(1),
@@ -277,7 +279,7 @@ fn start_loaded(
       _, _ -> Nil
     }
   }
-  let lock_timeout = int.max(0, duration.to_milliseconds(config.lock_timeout))
+  let lock_timeout = port_types.lock_timeout_milliseconds(config.lock_timeout)
   let backoff = int.max(1, duration.to_milliseconds(config.retry_backoff))
   use started <- result.map(owner.start(
     capacity,
@@ -637,7 +639,7 @@ pub fn port() -> Port(Tx) {
     schedule: schedule,
     settled: settled,
     atomically: atomically,
-    now: fn(tx: Tx) { now(tx.store) },
+    now: fn(tx: Tx) { Ok(now(tx.store)) },
     new_id: fn(_) { new_id() },
     members: members,
   )

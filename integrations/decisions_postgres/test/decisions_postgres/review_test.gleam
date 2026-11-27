@@ -205,7 +205,7 @@ pub fn settled_since_never_skips_a_late_commit_test() {
   let spec = kit.Spec(..kit.spec("paged"), policy: kit.proceed())
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
-  let since = kit.within(env, decisions_postgres.port(store).now)
+  let since = kit.now(env)
   let holding = process.new_subject()
   // The first transaction settles A and waits before committing.
   process.spawn(fn() {

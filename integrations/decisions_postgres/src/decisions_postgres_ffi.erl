@@ -1,7 +1,7 @@
 %% The few things decisions_postgres needs below pog: ids, a unique
 %% savepoint suffix, and a `pgo_notifications` listener for `LISTEN`.
 -module(decisions_postgres_ffi).
--export([rescue/1, listener_connected/1, on_raise/2, new_id/0, unique/0, system_ms/0, listen/7, stop_listener/1]).
+-export([rescue/1, listener_connected/1, on_raise/2, new_id/0, unique/0, listen/7, stop_listener/1]).
 
 %% A UUID version 7: 48 bits of Unix milliseconds, then random bits. Ids made
 %% later sort later, which keeps the primary key's inserts at one end.
@@ -22,8 +22,6 @@ on_raise(Body, Cleanup) ->
     end.
 
 unique() -> erlang:unique_integer([positive]).
-
-system_ms() -> erlang:system_time(millisecond).
 
 %% Start a `pgo_notifications` process linked to the caller, with its own
 %% connection outside any pool, and LISTEN on Channel. Notifications reach

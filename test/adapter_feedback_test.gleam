@@ -16,6 +16,7 @@ import decisions/vocabulary.{
 import decisions/wire
 import gleam/list
 import gleam/option.{None}
+import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
 import support/policies
@@ -97,7 +98,8 @@ pub fn a_finer_clock_is_kept_in_whole_milliseconds_test() {
     store.Port(
       ..base,
       now: fn(tx) {
-        timestamp.add(base.now(tx), duration.nanoseconds(123_456_000))
+        base.now(tx)
+        |> result.map(timestamp.add(_, duration.nanoseconds(123_456_000)))
       },
       schedule: fn(tx, point, id, at) {
         let _ = case list.all(at, whole) {
@@ -128,6 +130,38 @@ pub fn a_finer_clock_is_kept_in_whole_milliseconds_test() {
   assert list.all(memory.wakes(db), fn(wake) { whole(wake.at) })
   let assert Ok(_) =
     testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+}
+
+/// A store whose clock cannot be read reports the clock's error, and
+/// nothing is written at a time the store did not give.
+pub fn a_clock_that_fails_is_the_store_failing_test() {
+  let db = world.new().db
+  let base = memory.port()
+  let failing =
+    store.Port(..base, now: fn(_) {
+      Error(store.Contended("the clock read was cancelled"))
+    })
+  let desk =
+    desk_over(failing, policies.checked(1, [], AnyoneHolding("finance")))
+  let assert Error(refusal) =
+    memory.transaction(db, decisions.recommend(
+      desk,
+      _,
+      proposal(Rules("r", "1")),
+    ))
+  assert refusal
+    == decisions.StoreFailed(store.Contended("the clock read was cancelled"))
+  assert memory.heads(db) == []
+}
+
+/// A lock timeout is a whole number of milliseconds, at least one: zero,
+/// which PostgreSQL reads as "wait for ever", and a negative wait cannot
+/// be asked for.
+pub fn a_lock_timeout_is_at_least_one_millisecond_test() {
+  assert store.lock_timeout(milliseconds: 0) == Error(Nil)
+  assert store.lock_timeout(milliseconds: -5) == Error(Nil)
+  let assert Ok(timeout) = store.lock_timeout(milliseconds: 1)
+  assert store.lock_timeout_milliseconds(timeout) == 1
 }
 
 /// 3. Contention says nothing was written and a retry is safe.

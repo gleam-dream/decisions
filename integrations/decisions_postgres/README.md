@@ -78,8 +78,10 @@ connection, which reaches the caller as `Unavailable` (outcome unknown).
 it. So that a long wait for a contended occurrence ends as `Contended`
 (nothing written, safe to retry) instead, the port's `load` sets the
 transaction's `lock_timeout` to 4 seconds before it locks
-(`with_lock_timeout(store, Some(duration))` changes it, `None` leaves the
-connection's own setting). It is set with `SET LOCAL` semantics, so it
+(`with_lock_timeout(store, Some(timeout))` changes it, with a
+`decisions/store.LockTimeout` of at least one millisecond, so PostgreSQL's
+`0`, "wait for ever", cannot be sent; `None` leaves the connection's own
+setting). It is set with `SET LOCAL` semantics, so it
 applies to the rest of the caller's transaction too, and it overrides a
 `lock_timeout` the caller set earlier in that transaction; pass `None` to keep
 the caller's. A transaction that does more than wait can still reach the 5
@@ -115,9 +117,14 @@ that from `PUBLIC`.
 | One settlement notice per occurrence                          | Unique constraint `decisions_settled_once`                                                                                         |
 | The store clock                                               | `clock_timestamp()` at the moment of the call, never `now()`, truncated to the millisecond                                         |
 
-The port reports an integrity violation (SQLSTATE class 23) as `Conflict`, a
-deadlock, a serialization failure or a lock wait that timed out as
-`Contended`, and every other failure as `Unavailable`. `transaction` and
+The port reports an integrity violation (SQLSTATE class 23) as `Conflict`; a
+deadlock, a serialization failure, a lock wait that timed out, a statement the
+server cancelled (`57014`), a statement in a transaction an earlier statement
+aborted (`25P02`) and a pool with no connection to give, none of which wrote
+anything, as `Contended`; and every other failure as `Unavailable`. A clock
+read that fails returns its error; no other clock stands in. A settlement
+delivery that finds its notice held by another delivery snoozes instead of
+waiting for it. `transaction` and
 `decide` return `Refused(refusal)`, `RefusedUnrecorded(refusal, detail)` when
 the second transaction that keeps a refused verdict on the record failed,
 `Conflict`, `Contended` or `Unavailable`; in every case the transaction rolled

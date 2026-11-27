@@ -2,7 +2,7 @@
 %% running a body with a cleanup whatever it does.
 -module(kit_ffi).
 -export([offset_new/0, offset_get/1, offset_add/2, claims_new/0, claim/2, unclaim/2, machine/0, once/1, write_file/2, getenv/1, unique/0, monotonic_us/0, ensure/2, read_file/1,
-         plain_arguments/0, quiet_pool_shutdown/0, rescue/1]).
+         plain_arguments/0, quiet_pool_shutdown/0, rescue/1, reductions/1]).
 
 getenv(Name) ->
     case os:getenv(binary_to_list(Name)) of
@@ -110,3 +110,8 @@ claim(Table, Id) ->
 unclaim(Table, Id) ->
     ets:delete(Table, Id),
     nil.
+
+%% The reductions a process has run so far: a measure of its work.
+reductions(Pid) ->
+    {reductions, Count} = erlang:process_info(Pid, reductions),
+    Count.

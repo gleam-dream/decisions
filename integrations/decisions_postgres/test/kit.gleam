@@ -40,6 +40,10 @@ pub fn unique() -> Int
 @external(erlang, "kit_ffi", "monotonic_us")
 pub fn monotonic_us() -> Int
 
+/// The reductions `pid` has run so far: a measure of its work.
+@external(erlang, "kit_ffi", "reductions")
+pub fn reductions(pid: process.Pid) -> Int
+
 @external(erlang, "kit_ffi", "ensure")
 fn ensure(body: fn() -> a, cleanup: fn() -> b) -> a
 
@@ -541,7 +545,7 @@ pub fn wait_for_store_clock(env: Env, at: timestamp.Timestamp) -> Nil {
   let port = decisions_postgres.port(env.store)
   let assert True =
     eventually(10_000, fn() {
-      let assert Ok(now) = tx(env, fn(tx) { Ok(port.now(tx)) })
+      let assert Ok(now) = within(env, port.now)
       timestamp.compare(now, at) != order.Lt
     })
   Nil
@@ -579,6 +583,19 @@ pub fn scalar(
   let assert Ok(pog.Returned(rows: [value], ..)) =
     query |> pog.returning(decode.at([0], decoder)) |> pog.execute(db)
   value
+}
+
+/// A lock timeout of `milliseconds`, at least one.
+pub fn lock_timeout(milliseconds: Int) -> store.LockTimeout {
+  let assert Ok(timeout) = store.lock_timeout(milliseconds:)
+  timeout
+}
+
+/// The store's clock (`port.now`), read in a transaction of its own.
+pub fn now(env: Env) -> timestamp.Timestamp {
+  let port = decisions_postgres.port(env.store)
+  let assert Ok(now) = within(env, port.now)
+  now
 }
 
 /// Run `body` in a transaction of its own and return what it returned: a

@@ -44,6 +44,7 @@ import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
+import gleam/set.{type Set}
 import pog
 
 /// The channel every append notifies.
@@ -82,8 +83,14 @@ pub opaque type Listener {
 
 type State {
   State(
-    subscribers: List(#(Subject(Change), Topic)),
-    monitors: Dict(Pid, process.Monitor),
+    /// Each subscriber's one topic.
+    topics: Dict(Subject(Change), Topic),
+    /// The subscribers of each topic, so a notification reaches the
+    /// subscribers of its three topics without looking at any other.
+    by_topic: Dict(Topic, Set(Subject(Change))),
+    /// Each subscriber process's monitor and subjects, so its exit removes
+    /// exactly its subscriptions.
+    owners: Dict(Pid, #(process.Monitor, Set(Subject(Change)))),
     /// The `pgo_notifications` process that holds the connection.
     connection: Pid,
     /// How to start another when it is lost.
@@ -203,8 +210,9 @@ fn builder(config: pog.Config) -> actor.Builder(State, Message, Listener) {
         }
       })
     actor.initialised(State(
-      subscribers: [],
-      monitors: dict.new(),
+      topics: dict.new(),
+      by_topic: dict.new(),
+      owners: dict.new(),
       connection:,
       reconnect:,
       self: subject,
@@ -221,45 +229,35 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Subscribe(subject:, topic:, reply:) -> {
       process.send(reply, process.self())
-      let others = list.filter(state.subscribers, fn(s) { s.0 != subject })
-      let monitors = case process.subject_owner(subject) {
-        Ok(pid) ->
-          case dict.has_key(state.monitors, pid) {
-            True -> state.monitors
-            False -> dict.insert(state.monitors, pid, process.monitor(pid))
-          }
-        Error(Nil) -> state.monitors
-      }
-      actor.continue(
-        State(..state, subscribers: [#(subject, topic), ..others], monitors:),
-      )
+      actor.continue(subscribe_one(state, subject, topic))
     }
-    Unsubscribe(subject:) ->
-      actor.continue(
-        State(
-          ..state,
-          subscribers: list.filter(state.subscribers, fn(s) { s.0 != subject }),
-        ),
-      )
+    Unsubscribe(subject:) -> actor.continue(unsubscribe_one(state, subject))
     SubscriberDown(pid:) ->
-      actor.continue(
-        State(
-          ..state,
-          subscribers: list.filter(state.subscribers, fn(s) {
-            process.subject_owner(s.0) != Ok(pid)
-          }),
-          monitors: dict.delete(state.monitors, pid),
-        ),
-      )
+      case dict.get(state.owners, pid) {
+        Ok(#(_, subjects)) ->
+          set.fold(
+            subjects,
+            State(..state, owners: dict.delete(state.owners, pid)),
+            drop_topic,
+          )
+          |> actor.continue
+        Error(Nil) -> actor.continue(state)
+      }
     Notified(payload:) -> {
       case json.parse(payload, change_decoder()) {
         Ok(change) ->
-          list.each(state.subscribers, fn(s) {
-            case wants(s.1, change) {
-              True -> process.send(s.0, change)
-              False -> Nil
-            }
-          })
+          list.each(
+            [Everything, Point(change.point), Occurrence(change.occurrence)],
+            fn(topic) {
+              case dict.get(state.by_topic, topic) {
+                Ok(subjects) ->
+                  set.each(subjects, fn(subject) {
+                    process.send(subject, change)
+                  })
+                Error(Nil) -> Nil
+              }
+            },
+          )
         // A payload this version does not understand is no change.
         Error(_) -> Nil
       }
@@ -287,11 +285,82 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   }
 }
 
-fn wants(topic: Topic, change: Change) -> Bool {
-  case topic {
-    Everything -> True
-    Point(name:) -> name == change.point
-    Occurrence(id:) -> id == change.occurrence
+/// Subscribe `subject` to `topic` in place of any topic it had, and
+/// monitor its owner once.
+fn subscribe_one(
+  state: State,
+  subject: Subject(Change),
+  topic: Topic,
+) -> State {
+  let state = drop_topic(state, subject)
+  let owners = case process.subject_owner(subject) {
+    // A named subject without a process: nothing to monitor.
+    Error(Nil) -> state.owners
+    Ok(pid) ->
+      case dict.get(state.owners, pid) {
+        Ok(#(monitor, subjects)) ->
+          dict.insert(state.owners, pid, #(
+            monitor,
+            set.insert(subjects, subject),
+          ))
+        Error(Nil) ->
+          dict.insert(state.owners, pid, #(
+            process.monitor(pid),
+            set.from_list([subject]),
+          ))
+      }
+  }
+  State(
+    ..state,
+    topics: dict.insert(state.topics, subject, topic),
+    by_topic: dict.upsert(state.by_topic, topic, fn(subjects) {
+      option.unwrap(subjects, set.new()) |> set.insert(subject)
+    }),
+    owners:,
+  )
+}
+
+/// Stop sending to `subject`; its owner's monitor stays while the owner
+/// has other subscriptions.
+fn unsubscribe_one(state: State, subject: Subject(Change)) -> State {
+  let state = drop_topic(state, subject)
+  let owners = case process.subject_owner(subject) {
+    Error(Nil) -> state.owners
+    Ok(pid) ->
+      case dict.get(state.owners, pid) {
+        Error(Nil) -> state.owners
+        Ok(#(monitor, subjects)) -> {
+          let subjects = set.delete(subjects, subject)
+          case set.is_empty(subjects) {
+            True -> {
+              process.demonitor_process(monitor)
+              dict.delete(state.owners, pid)
+            }
+            False -> dict.insert(state.owners, pid, #(monitor, subjects))
+          }
+        }
+      }
+  }
+  State(..state, owners:)
+}
+
+/// Remove `subject` from its topic's subscribers.
+fn drop_topic(state: State, subject: Subject(Change)) -> State {
+  case dict.get(state.topics, subject) {
+    Error(Nil) -> state
+    Ok(topic) -> {
+      let by_topic = case dict.get(state.by_topic, topic) {
+        Error(Nil) -> state.by_topic
+        Ok(subjects) -> {
+          let subjects = set.delete(subjects, subject)
+          case set.is_empty(subjects) {
+            True -> dict.delete(state.by_topic, topic)
+            False -> dict.insert(state.by_topic, topic, subjects)
+          }
+        }
+      }
+      State(..state, topics: dict.delete(state.topics, subject), by_topic:)
+    }
   }
 }
 

@@ -190,6 +190,35 @@ pub type StoreError {
   Unavailable(detail: String)
 }
 
+/// The longest a transaction waits for an occurrence's lock before the
+/// store gives up with `Contended`: a whole number of milliseconds, at
+/// least one, with this meaning in every adapter. Build it with
+/// `lock_timeout`, so a wait that is never bounded, or that ends before
+/// it starts, cannot be asked for.
+pub opaque type LockTimeout {
+  LockTimeout(milliseconds: Int)
+}
+
+/// Four seconds: below `pog`'s five-second connection checkout, so in
+/// PostgreSQL a long wait ends as contention rather than as a lost
+/// connection. Both integrations use it unless told otherwise.
+pub const default_lock_timeout = LockTimeout(milliseconds: 4000)
+
+/// A lock timeout of `milliseconds`; `Error(Nil)` when it is below one.
+pub fn lock_timeout(
+  milliseconds milliseconds: Int,
+) -> Result(LockTimeout, Nil) {
+  case milliseconds < 1 {
+    True -> Error(Nil)
+    False -> Ok(LockTimeout(milliseconds:))
+  }
+}
+
+/// The lock timeout in milliseconds, at least one.
+pub fn lock_timeout_milliseconds(timeout: LockTimeout) -> Int {
+  timeout.milliseconds
+}
+
 /// A wake-up the store holds: deliver `decisions.wake` (or the point's
 /// `decisions.waker`) for `occurrence` at `at`.
 pub type Wake {
@@ -257,7 +286,9 @@ pub type Port(tx) {
     /// entry earlier than the one before it. One process cannot check this
     /// clause honestly (a frozen clock looks the same), so
     /// `decisions/conformance` does not; the multi-process suites do.
-    now: fn(tx) -> Timestamp,
+    /// A store that cannot read its clock returns the error, as every other
+    /// function does; it never stands in another clock's time.
+    now: fn(tx) -> Result(Timestamp, StoreError),
     /// A new, unique occurrence id.
     new_id: fn(tx) -> String,
     /// The ids and heads of every occurrence, of any point, whose head
