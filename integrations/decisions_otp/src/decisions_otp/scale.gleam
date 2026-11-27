@@ -110,7 +110,7 @@ fn within(
   target: Target(tx),
   body: fn(tx) -> Result(a, decisions.Refusal),
 ) -> Result(Nil, String) {
-  target.adapter.transaction(fn(tx) {
+  stress.transaction(target, fn(tx) {
     body(tx) |> result.replace(Nil) |> result.map_error(decisions.describe)
   })
 }
@@ -168,7 +168,7 @@ fn all_ok(
 }
 
 fn count(target: Target(tx), table: String) -> Result(Int, String) {
-  target.rows(target.adapter.handle, table) |> result.map(list.length)
+  stress.transaction(target, target.rows(_, table)) |> result.map(list.length)
 }
 
 fn expect(holds: Bool, otherwise: String) -> Result(Nil, String) {
@@ -327,8 +327,10 @@ pub fn h3(target: Target(tx), entries: Int) -> Result(Int, String) {
     timed(fn() {
       list.try_each(numbers(1, 20), fn(_) {
         use known <- result.try(
-          decisions.read(desk, target.adapter.handle, occurrence: key)
-          |> result.map_error(decisions.describe),
+          stress.transaction(target, fn(tx) {
+            decisions.read(desk, tx, occurrence: key)
+            |> result.map_error(decisions.describe)
+          }),
         )
         expect(
           list.length(known.entries) == int.max(entries, 3),
@@ -354,7 +356,7 @@ pub fn h4(target: Target(tx), count count_: Int) -> Result(Int, String) {
   )
   use #(Nil, us) <- result.try(
     timed(fn() {
-      target.adapter.transaction(fn(tx) {
+      stress.transaction(target, fn(tx) {
         use done <- result.try(
           decisions.happened(desk, tx, "superseded", about: ana)
           |> result.map_error(decisions.describe),
@@ -409,8 +411,10 @@ pub fn waiting(target: Target(tx), count count_: Int) -> Result(Int, String) {
     timed(fn() {
       list.try_each(numbers(1, 100), fn(_) {
         use ids <- result.try(
-          target.adapter.port.waiting(target.adapter.handle, name, ana)
-          |> result.map_error(store.describe),
+          stress.transaction(target, fn(tx) {
+            target.adapter.port.waiting(tx, name, ana)
+            |> result.map_error(store.describe)
+          }),
         )
         expect(
           list.length(ids) == count_ / 10,
@@ -519,8 +523,10 @@ pub fn h6(
   use examples <- result.try(
     list.try_map(all, fn(key) {
       use known <- result.try(
-        decisions.read(desk, target.adapter.handle, occurrence: key)
-        |> result.map_error(decisions.describe),
+        stress.transaction(target, fn(tx) {
+          decisions.read(desk, tx, occurrence: key)
+          |> result.map_error(decisions.describe)
+        }),
       )
       learning.example(known, as_of: now, from: archive)
       |> result.map_error(string.inspect)
@@ -658,11 +664,8 @@ fn read_all(
   posts: List(Int),
 ) -> Result(List(occurrence.Occurrence(String)), String) {
   list.try_map(posts, fn(n) {
-    decisions.read(
-      desk,
-      target.adapter.handle,
-      occurrence: "post-" <> int.to_string(n),
-    )
+    use tx <- stress.transaction(target)
+    decisions.read(desk, tx, occurrence: "post-" <> int.to_string(n))
     |> result.map_error(decisions.describe)
   })
 }

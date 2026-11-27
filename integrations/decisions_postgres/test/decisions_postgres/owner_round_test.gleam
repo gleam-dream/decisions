@@ -63,7 +63,7 @@ pub fn a_held_occurrence_superseded_releases_nothing_test() {
   let assert Ok(superseded) =
     kit.tx(env, decisions.happened(desk, _, "closed", about:))
   assert list.map(superseded.expired, fn(o) { o.id }) == [held.id]
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert !list.any(wakes, fn(w) { w.occurrence == held.id })
   // The hold's job arrives at its time and does nothing.
   let assert [#("succeeded", 1)] = kit.finished_jobs(env, "decisions.wake")
@@ -94,7 +94,7 @@ pub fn expect_commits_with_the_application_row_and_job_test() {
   use env <- kit.run(name, store, kit.options(), [], [])
   let about = subject()
   let receive = fn(key, commit) {
-    pog.transaction(env.db, fn(tx) {
+    kit.own(env, fn(tx) {
       use Nil <- result.try(
         decisions.expect(
           desk,
@@ -111,11 +111,11 @@ pub fn expect_commits_with_the_application_row_and_job_test() {
         )
         |> pog.parameter(pog.text("app:" <> spec.name))
         |> pog.parameter(pog.text(key))
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
       use _ <- result.try(
         grind.submit_in(
           env.jobs,
-          tx,
+          decisions_postgres.connection(tx),
           job.new(trigger_worker(), key) |> job.with_id("trigger:" <> key),
         )
         |> result.map_error(grind.describe_submit_error),
@@ -128,7 +128,8 @@ pub fn expect_commits_with_the_application_row_and_job_test() {
   }
   let kept = kit.tag("kept")
   let assert Ok(Nil) = receive(kept, True)
-  let assert Ok(Some(head)) = decisions_postgres.inspection().head(env.db, kept)
+  let assert Ok(Some(head)) =
+    kit.within(env, decisions_postgres.inspection().head(_, kept))
   assert head.status == store.Pending
   assert kit.effects_of(env.db, kept) == 1
   assert list.length(kit.jobs(env, "test.trigger")) == 1
@@ -141,11 +142,13 @@ pub fn expect_commits_with_the_application_row_and_job_test() {
       trigger: Trigger("message", kept),
       about:,
     ))
-  let assert Ok([_]) = decisions_postgres.port(store).load(env.db, kept)
+  let assert Ok([_]) =
+    kit.within(env, decisions_postgres.port(store).load(_, kept))
   // Rolled back: no record, no row, no job.
   let dropped = kit.tag("dropped")
   let assert Error(_) = receive(dropped, False)
-  let assert Ok(None) = decisions_postgres.inspection().head(env.db, dropped)
+  let assert Ok(None) =
+    kit.within(env, decisions_postgres.inspection().head(_, dropped))
   assert kit.effects_of(env.db, dropped) == 0
   assert list.length(kit.jobs(env, "test.trigger")) == 1
 }
@@ -178,7 +181,7 @@ pub fn an_expected_key_superseded_is_refused_at_recommend_once_test() {
     kit.tx(env, decisions.happened(desk, _, "closed", about:))
   assert superseded.not_begun == [key]
   let port = decisions_postgres.port(store)
-  let assert Ok(before) = port.load(env.db, key)
+  let assert Ok(before) = kit.within(env, port.load(_, key))
   let assert Error(decisions_postgres.Refused(decisions.SupersededBefore(_))) =
     kit.tx(env, decisions.recommend_once(
       desk,
@@ -186,7 +189,7 @@ pub fn an_expected_key_superseded_is_refused_at_recommend_once_test() {
       key:,
       proposal: kit.proposal(spec.name, about),
     ))
-  let assert Ok(after) = port.load(env.db, key)
+  let assert Ok(after) = kit.within(env, port.load(_, key))
   assert after == before
   assert kit.effects_of(env.db, key) == 0
   // It settled: one settlement notice, and the invariants hold.
@@ -216,23 +219,23 @@ pub fn pending_records_are_found_and_kept_out_of_queues_test() {
   let assert Ok(waiting) =
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
   let assert Ok([first, second]) =
-    queue.pending(env.db, point: spec.name, limit: 2, after: None)
+    queue.pending(env.pool, point: spec.name, limit: 2, after: None)
   let assert Ok(rest) =
-    queue.pending(env.db, point: spec.name, limit: 10, after: Some(second))
+    queue.pending(env.pool, point: spec.name, limit: 10, after: Some(second))
   let found = list.map([first, second, ..rest], fn(r) { r.occurrence })
   assert found == keys
   assert list.all([first, second, ..rest], fn(r) { r.status == store.Pending })
   let validator = kit.finance(kit.tag("bia"))
   let assert Ok(page) =
     queue.page_at(
-      env.db,
+      env.pool,
       point: spec.name,
       for: validator,
       limit: 50,
       after: None,
     )
   assert list.map(page, fn(c) { c.occurrence }) == [waiting.id]
-  let assert Ok(counts) = queue.counts(env.db, spec.name)
+  let assert Ok(counts) = queue.counts(env.pool, spec.name)
   assert list.contains(counts, queue.Count(store.Pending, 3))
   kit.check(env, [desk])
 }
@@ -298,13 +301,13 @@ pub fn refusing_keeps_refusals_and_store_classifications_test() {
   let desk = kit.desk(store, spec)
   use env <- kit.run(name, store, kit.options(), [], [])
   let assert Error(decisions.UnknownOccurrence) =
-    decisions_postgres.refusing(env.db, decisions.read(
+    decisions_postgres.refusing(env.pool, decisions.read(
       desk,
       _,
       occurrence: kit.tag("absent"),
     ))
   let assert Ok(made) =
-    decisions_postgres.refusing(env.db, decisions.recommend(
+    decisions_postgres.refusing(env.pool, decisions.recommend(
       desk,
       _,
       kit.proposal(spec.name, kit.ana),
@@ -314,19 +317,19 @@ pub fn refusing_keeps_refusals_and_store_classifications_test() {
   let holder = process.new_subject()
   process.spawn_unlinked(fn() {
     let _ =
-      pog.transaction(env.db, fn(tx) {
+      decisions_postgres.transaction(env.pool, fn(tx) {
         let _ = port.load(tx, made.id)
         let release = process.new_subject()
         process.send(holder, release)
         let _ = process.receive(release, 10_000)
         Ok(Nil)
       })
-      |> result.map_error(fn(_: pog.TransactionError(Nil)) { Nil })
+      |> result.map_error(fn(_: decisions_postgres.Failure) { Nil })
     Nil
   })
   let assert Ok(release) = process.receive(holder, 5000)
   let assert Error(decisions.StoreFailed(store.Contended(detail))) =
-    decisions_postgres.refusing(env.db, fn(tx) {
+    decisions_postgres.refusing(env.pool, fn(tx) {
       decisions.read(desk, tx, occurrence: made.id)
     })
   assert string.contains(detail, "55P03")
@@ -408,7 +411,7 @@ pub fn every_notice_reaches_the_follower_as_not_begun_test() {
     |> pog.parameter(pog.text(id))
     |> pog.parameter(pog.text(handed))
     |> pog.parameter(pog.text(followed))
-    |> pog.execute(tx)
+    |> pog.execute(decisions_postgres.connection(tx))
     |> result.replace(Nil)
     |> result.map_error(fn(error) {
       decisions.ApplicationFailed(string.inspect(error))
@@ -420,7 +423,7 @@ pub fn every_notice_reaches_the_follower_as_not_begun_test() {
   let superseded = kit.tag("superseded")
   let lapsed = kit.tag("lapsed")
   let deadline =
-    decisions_postgres.port(store).now(env.db)
+    kit.within(env, decisions_postgres.port(store).now)
     |> timestamp.add(duration.seconds(2))
   let assert Ok(Nil) =
     kit.tx(env, fn(tx) {

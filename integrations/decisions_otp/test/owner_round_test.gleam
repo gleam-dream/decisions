@@ -47,8 +47,8 @@ fn sound() -> model.Model(String) {
 }
 
 fn calls(counter: store.Store, name: String) -> Int {
-  store.add(store.handle(counter), "calls", name)
-  store.rows(store.handle(counter), "calls")
+  lab.within(counter, store.add(_, "calls", name))
+  lab.within(counter, store.rows(_, "calls"))
   |> list.count(fn(pair) { pair.1 == name })
 }
 
@@ -75,13 +75,7 @@ pub fn a_precondition_says_skip_or_could_not_check_test() {
       },
     )
   // Neither wrote anything.
-  assert store.occurrences_of(
-      store.handle(s),
-      "owner.skip",
-      after: None,
-      limit: 10,
-    ).ids
-    == []
+  assert store.occurrences_of(s, "owner.skip", after: None, limit: 10).ids == []
 }
 
 /// Issue 01, in the runtime: a precondition that could not check is
@@ -128,12 +122,7 @@ pub fn the_runtime_retries_a_precondition_that_could_not_check_test() {
     )
   assert lab.wait_until(
     fn() {
-      store.occurrences_of(
-        store.handle(s),
-        "owner.check",
-        after: None,
-        limit: 10,
-      ).ids
+      store.occurrences_of(s, "owner.check", after: None, limit: 10).ids
       == ["check-1"]
       && store.backlog(s).claim_trigger() == Ok(None)
     },
@@ -165,7 +154,7 @@ pub fn a_failed_model_s_evidence_is_on_the_attempt_test() {
   assert model.evidence_of(failure) == [exchange]
   assert attempt.evidence == [exchange]
   let assert Error(decisions.NotRecommended(attempts: [recorded])) =
-    decisions.read(desk, store.handle(s), occurrence: "ev-1")
+    store.transaction(s, decisions.read(desk, _, occurrence: "ev-1"))
   assert recorded.evidence == [exchange]
 }
 
@@ -192,7 +181,7 @@ pub fn a_key_superseded_before_it_is_recommended_is_superseded_test() {
       request: isolated.Request(..request("ex-1"), about:),
       model: sound(),
     )
-  assert store.queue(store.handle(s), "finance") == []
+  assert store.queue(s, "finance") == []
 }
 
 /// `expect_until` with `isolated.recommend`: after the key's own deadline a
@@ -218,7 +207,7 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
       ))
   })
   store.advance(s, duration.minutes(2))
-  let before = decisions.read_record(desk, store.handle(s), key: "od-1")
+  let before = store.transaction(s, decisions.read_record(desk, _, key: "od-1"))
   let failing = model.new(fn(_, _) { Error(model.Raised("down")) })
   let assert Ok(isolated.Lapsed(deadline: at)) =
     isolated.recommend(
@@ -229,7 +218,8 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
     )
   assert at == deadline
   // Nothing was written for the late failure.
-  assert decisions.read_record(desk, store.handle(s), key: "od-1") == before
+  assert store.transaction(s, decisions.read_record(desk, _, key: "od-1"))
+    == before
   let assert Ok(isolated.Recommended(late)) =
     isolated.recommend(
       desk,
@@ -238,7 +228,7 @@ pub fn a_key_past_its_own_deadline_is_lapsed_or_recorded_expired_test() {
       model: sound(),
     )
   assert late.status == occurrence.Expired(vocabulary.DeadlinePassed)
-  assert store.queue(store.handle(s), "finance") == []
+  assert store.queue(s, "finance") == []
 }
 
 /// A record shaped expected, expired, recommended (the wake-up came before

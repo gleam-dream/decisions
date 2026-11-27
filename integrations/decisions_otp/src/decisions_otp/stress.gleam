@@ -74,8 +74,8 @@ import sinal
 /// `Adapter`.
 pub type Target(tx) {
   Target(
-    /// The port, the inspection, a handle on which each call commits by
-    /// itself, and the transaction function.
+    /// The port, the inspection and the transaction function. The
+    /// scenarios read and write only inside transactions.
     adapter: Adapter(tx),
     /// The store's backlog, for the scenarios that run the runtime.
     backlog: Backlog(tx),
@@ -274,7 +274,6 @@ pub fn over_store(s: memory.Store, config: memory.Config) -> Target(memory.Tx) {
     adapter: conformance.Adapter(
       port: memory.port(),
       inspect: memory.inspection(),
-      handle: memory.handle(s),
       transaction: fn(body) { memory.transaction(s, body) },
       cleanup: fn() { memory.stop(s) },
     ),
@@ -283,9 +282,7 @@ pub fn over_store(s: memory.Store, config: memory.Config) -> Target(memory.Tx) {
     rows: fn(tx, table) {
       Ok(list.map(memory.rows(tx, table), fn(pair) { pair.1 }))
     },
-    queue: fn(set, limit) {
-      Ok(memory.queue_page(memory.handle(s), set, limit))
-    },
+    queue: fn(set, limit) { Ok(memory.queue_page(s, set, limit)) },
     advance: fn(by) { memory.advance(s, by) },
     poison: fn(id) { Ok(memory.tamper(s, id, 1, "{not json")) },
     restart: fn() {
@@ -348,25 +345,35 @@ fn within(
       let outcome = body(tx)
       process.send(box, outcome)
       case outcome {
-        Ok(_) -> Ok(Nil)
+        Ok(_) -> Ok("")
         Error(refusal) -> Error(decisions.describe(refusal))
       }
     })
   case committed, process.receive(box, 0) {
-    Ok(Nil), Ok(Ok(value)) -> Ok(value)
+    Ok(_), Ok(Ok(value)) -> Ok(value)
     Error(_), Ok(Error(refusal)) -> Error(Refused(refusal))
     Error(reason), _ -> Error(StoreSaid(reason))
-    Ok(Nil), _ ->
-      Error(StoreSaid("the transaction committed without an answer"))
+    Ok(_), _ -> Error(StoreSaid("the transaction committed without an answer"))
   }
 }
 
-/// Run `body` in one transaction and roll it back when it fails.
-fn within_text(
+/// Run `body` in one transaction of the target, roll it back when it
+/// fails, and return what it returned. Every read of the scenarios runs in
+/// one too: the port has no value that stands for "no transaction".
+pub fn transaction(
   target: Target(tx),
-  body: fn(tx) -> Result(Nil, String),
-) -> Result(Nil, String) {
-  target.adapter.transaction(body)
+  body: fn(tx) -> Result(a, String),
+) -> Result(a, String) {
+  let box = process.new_subject()
+  use _ <- result.try(
+    target.adapter.transaction(fn(tx) {
+      use value <- result.map(body(tx))
+      process.send(box, value)
+      ""
+    }),
+  )
+  process.receive(box, 0)
+  |> result.replace_error("the transaction committed without an answer")
 }
 
 fn said(said: Said) -> String {
@@ -377,7 +384,10 @@ fn said(said: Said) -> String {
 }
 
 fn unique(target: Target(tx), prefix: String) -> String {
-  prefix <> "-" <> target.adapter.port.new_id(target.adapter.handle)
+  case transaction(target, fn(tx) { Ok(target.adapter.port.new_id(tx)) }) {
+    Ok(id) -> prefix <> "-" <> id
+    Error(reason) -> panic as { "no new id: " <> reason }
+  }
 }
 
 fn score() -> Key(Float) {
@@ -441,7 +451,7 @@ fn effects(
   target: Target(tx),
   desk: Desk(String, tx),
 ) -> Result(List(String), String) {
-  target.rows(target.adapter.handle, decisions.name(decisions.point_of(desk)))
+  transaction(target, target.rows(_, decisions.name(decisions.point_of(desk))))
 }
 
 fn audit(target: Target(tx), desk: Desk(String, tx)) -> testing.Audit(tx) {
@@ -455,11 +465,8 @@ fn invariants(
   target: Target(tx),
   desks: List(Desk(String, tx)),
 ) -> Result(Nil, String) {
-  testing.check(
-    target.adapter.handle,
-    target.adapter.inspect,
-    list.map(desks, audit(target, _)),
-  )
+  use tx <- transaction(target)
+  testing.check(tx, target.adapter.inspect, list.map(desks, audit(target, _)))
   |> result.replace(Nil)
   |> result.map_error(fn(violations) {
     "invariants broken: " <> string.inspect(violations)
@@ -514,7 +521,8 @@ fn read(
   desk: Desk(String, tx),
   id: String,
 ) -> Result(occurrence.Occurrence(String), String) {
-  decisions.read(desk, target.adapter.handle, occurrence: id)
+  use tx <- transaction(target)
+  decisions.read(desk, tx, occurrence: id)
   |> result.map_error(decisions.describe)
 }
 
@@ -551,12 +559,15 @@ fn load_entries(
   target: Target(tx),
   id: String,
 ) -> Result(List(Stored), String) {
-  target.adapter.port.load(target.adapter.handle, id) |> store_text
+  use tx <- transaction(target)
+  target.adapter.port.load(tx, id) |> store_text
 }
 
 fn status_of(target: Target(tx), id: String) -> Result(String, String) {
   use head <- result.try(
-    target.adapter.inspect.head(target.adapter.handle, id) |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.head(tx, id) |> store_text
+    }),
   )
   case head {
     Some(head) -> Ok(store.status_name(head.status))
@@ -703,12 +714,14 @@ fn a2(target: Target(tx), load: Load) -> Result(Nil, String) {
   use counts <- result.try(result.all(decided))
   use rows <- result.try(effects(target, desk))
   use waiting <- result.try(
-    target.adapter.port.waiting(
-      target.adapter.handle,
-      decisions.name(decisions.point_of(desk)),
-      clinica,
-    )
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(
+        tx,
+        decisions.name(decisions.point_of(desk)),
+        clinica,
+      )
+      |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     int.sum(counts) == load.a2_queue,
@@ -904,11 +917,13 @@ fn a4(target: Target(tx), load: Load) -> Result(Nil, String) {
     }),
   )
   use ids <- result.try(
-    target.adapter.inspect.occurrences(
-      target.adapter.handle,
-      decisions.name(decisions.point_of(desk)),
-    )
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.occurrences(
+        tx,
+        decisions.name(decisions.point_of(desk)),
+      )
+      |> store_text
+    }),
   )
   use statuses <- result.try(list.try_map(ids, status_of(target, _)))
   use Nil <- result.try(expect(
@@ -1059,8 +1074,10 @@ fn expect_closes_window(target: Target(tx), load: Load) -> Result(Nil, String) {
         }),
       )
       use waiting <- result.try(
-        target.adapter.port.waiting(target.adapter.handle, name, about)
-        |> store_text,
+        transaction(target, fn(tx) {
+          target.adapter.port.waiting(tx, name, about)
+          |> store_text
+        }),
       )
       expect(
         waiting == [],
@@ -1088,8 +1105,10 @@ fn expect_closes_window(target: Target(tx), load: Load) -> Result(Nil, String) {
     |> result.map_error(said),
   )
   use waiting <- result.try(
-    target.adapter.port.waiting(target.adapter.handle, name, about)
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(tx, name, about)
+      |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     waiting == [key],
@@ -1180,15 +1199,21 @@ fn admissions(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let lock = decisions.subject_lock(point: name, subject: about)
   use held <- result.try(load_entries(target, lock))
   use head <- result.try(
-    target.adapter.inspect.head(target.adapter.handle, lock) |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.head(tx, lock) |> store_text
+    }),
   )
   use waiting <- result.try(
-    target.adapter.port.waiting(target.adapter.handle, name, about)
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(tx, name, about)
+      |> store_text
+    }),
   )
   use ids <- result.try(
-    target.adapter.inspect.occurrences(target.adapter.handle, name)
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.occurrences(tx, name)
+      |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     held == []
@@ -1263,11 +1288,13 @@ fn one_key(target: Target(tx), _load: Load) -> Result(Nil, String) {
   use ids <- result.try(result.all(results) |> result.map_error(said))
   use rows <- result.try(effects(target, desk))
   use found <- result.try(
-    target.adapter.inspect.occurrences(
-      target.adapter.handle,
-      decisions.name(decisions.point_of(desk)),
-    )
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.occurrences(
+        tx,
+        decisions.name(decisions.point_of(desk)),
+      )
+      |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     list.unique(ids) == [key],
@@ -1312,7 +1339,7 @@ fn holder(
       let go = process.new_subject()
       process.send(gate, go)
       let ended =
-        within_text(target, fn(tx) {
+        transaction(target, fn(tx) {
           use Nil <- result.try(body(tx))
           process.send(steps, Holding)
           let _ = process.receive(go, 60_000)
@@ -1330,10 +1357,14 @@ fn waits(target: Target(tx), existing: Bool) -> Result(Nil, String) {
   let name = decisions.name(decisions.point_of(desk))
   let id = unique(target, "lock")
   let first = stored_entry(1, "recommended")
-  use Nil <- result.try(case existing {
-    True -> append(target, target.adapter.handle, id, name, [first])
-    False -> Ok(Nil)
-  })
+  use Nil <- result.try(
+    transaction(target, fn(tx) {
+      case existing {
+        True -> append(target, tx, id, name, [first])
+        False -> Ok(Nil)
+      }
+    }),
+  )
   let steps = process.new_subject()
   let #(_, go) =
     holder(target, steps, fn(tx) {
@@ -1350,7 +1381,7 @@ fn waits(target: Target(tx), existing: Bool) -> Result(Nil, String) {
   let second = process.new_subject()
   process.spawn_unlinked(fn() {
     let loaded =
-      within_text(target, fn(tx) {
+      transaction(target, fn(tx) {
         process.send(second, Trying)
         use found <- result.try(target.adapter.port.load(tx, id) |> store_text)
         process.send(second, Loaded(list.length(found), at: monotonic_us()))
@@ -1460,7 +1491,7 @@ fn traces(
   id: String,
   name: String,
 ) -> Result(List(String), String) {
-  let handle = target.adapter.handle
+  use handle <- transaction(target)
   let inspect = target.adapter.inspect
   use head <- result.try(inspect.head(handle, id) |> store_text)
   use wakes <- result.try(inspect.wakes(handle) |> store_text)
@@ -1559,7 +1590,7 @@ fn observe_rows(
   counts: List(Int),
 ) -> Nil {
   let count =
-    target.rows(target.adapter.handle, table)
+    transaction(target, target.rows(_, table))
     |> result.map(list.length)
     |> result.unwrap(-1)
   case process.receive(stop, 0) {
@@ -1567,7 +1598,7 @@ fn observe_rows(
     // started after it.
     Ok(Nil) -> {
       let last =
-        target.rows(target.adapter.handle, table)
+        transaction(target, target.rows(_, table))
         |> result.map(list.length)
         |> result.unwrap(-1)
       process.send(observed, [last, count, ..counts])
@@ -1591,7 +1622,7 @@ fn killed(
   }
   let pid =
     process.spawn_unlinked(fn() {
-      within_text(target, fn(tx) { body(tx, id, name, hold) })
+      transaction(target, fn(tx) { body(tx, id, name, hold) })
     })
   use Nil <- result.try(expect(
     process.receive(steps, 5000) == Ok(Holding),
@@ -1740,7 +1771,9 @@ fn survive_restart(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> result.map_error(said),
   )
   use wakes <- result.try(
-    target.adapter.inspect.wakes(target.adapter.handle) |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.wakes(tx) |> store_text
+    }),
   )
   use notices <- result.try(target.backlog.undelivered(1000) |> store_text)
   // Commits in flight: four processes commit rows and report each commit
@@ -1759,7 +1792,7 @@ fn survive_restart(target: Target(tx), _load: Load) -> Result(Nil, String) {
   use again <- result.try(target.restart())
   list.each(writers, process.kill)
   let acknowledged = drain_strings(acked, [first_ack])
-  use kept <- result.try(again.rows(again.adapter.handle, table))
+  use kept <- result.try(transaction(again, fn(tx) { again.rows(tx, table) }))
   use Nil <- result.try(expect(
     acknowledged != [],
     "no commit was acknowledged before the restart",
@@ -1772,7 +1805,7 @@ fn survive_restart(target: Target(tx), _load: Load) -> Result(Nil, String) {
       <> " acknowledged commits were lost in the restart",
   ))
   use wakes_after <- result.try(
-    again.adapter.inspect.wakes(again.adapter.handle) |> store_text,
+    transaction(again, fn(tx) { again.adapter.inspect.wakes(tx) |> store_text }),
   )
   use notices_after <- result.try(again.backlog.undelivered(1000) |> store_text)
   use Nil <- result.try(expect(
@@ -1822,7 +1855,7 @@ fn wall_clock(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let waited = process.new_subject()
   process.spawn_unlinked(fn() {
     let _ =
-      within_text(target, fn(tx) {
+      transaction(target, fn(tx) {
         process.send(waited, Waiting)
         use _ <- result.try(port.load(tx, id) |> store_text)
         process.send(waited, Locked(port.now(tx)))
@@ -1875,7 +1908,9 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let later = at(60)
   let latest = at(120)
   use Nil <- result.try(
-    port.schedule(target.adapter.handle, name, id, [first]) |> store_text,
+    transaction(target, fn(tx) {
+      port.schedule(tx, name, id, [first]) |> store_text
+    }),
   )
   let wake = store.Wake(point: name, occurrence: id, at: first)
   let steps = process.new_subject()
@@ -1892,8 +1927,9 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
   process.spawn_unlinked(fn() {
     process.send(
       scheduled,
-      port.schedule(target.adapter.handle, name, id, [first, later])
-        |> store_text,
+      transaction(target, fn(tx) {
+        port.schedule(tx, name, id, [first, later]) |> store_text
+      }),
     )
   })
   process.sleep(30)
@@ -1908,8 +1944,9 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> result.flatten,
   )
   let pending = fn() {
-    target.adapter.inspect.wakes(target.adapter.handle)
-    |> store_text
+    transaction(target, fn(tx) {
+      target.adapter.inspect.wakes(tx) |> store_text
+    })
     |> result.map(fn(wakes) {
       list.filter_map(wakes, fn(wake) {
         case wake.occurrence == id {
@@ -1928,7 +1965,7 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
   // A wake-up delivered and committed is not brought back by a schedule
   // that replaces the others.
   use taken <- result.try(
-    within_text(target, fn(tx) {
+    transaction(target, fn(tx) {
       target.backlog.take_wake(tx, wake)
       |> store_text
       |> result.try(expect(_, "the wake-up was gone"))
@@ -1936,8 +1973,10 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> result.replace(True),
   )
   use Nil <- result.try(
-    port.schedule(target.adapter.handle, name, id, [later, latest])
-    |> store_text,
+    transaction(target, fn(tx) {
+      port.schedule(tx, name, id, [later, latest])
+      |> store_text
+    }),
   )
   use now <- result.try(pending())
   use Nil <- result.try(expect(
@@ -1945,7 +1984,7 @@ fn delivered_alone(target: Target(tx), _load: Load) -> Result(Nil, String) {
     "after the second schedule, pending: " <> string.inspect(now),
   ))
   use again <- result.try(
-    within_text(target, fn(tx) {
+    transaction(target, fn(tx) {
       target.backlog.take_wake(tx, wake)
       |> store_text
       |> result.try(fn(found) {
@@ -1965,7 +2004,7 @@ fn write_rows(
   acked: process.Subject(String),
 ) -> Nil {
   let key = int.to_string(writer) <> "-" <> int.to_string(n)
-  case within_text(target, fn(tx) { target.add(tx, table, key) }) {
+  case transaction(target, fn(tx) { target.add(tx, table, key) }) {
     Ok(Nil) -> process.send(acked, key)
     Error(_) -> Nil
   }
@@ -2032,8 +2071,8 @@ fn nothing(_submitted: Submitted) -> Result(Nil, decisions.HandlerFailure) {
 /// Count one more attempt at `key`, in a transaction of its own, and
 /// return how many there have been.
 fn attempt(target: Target(tx), key: String) -> Int {
-  let _ = within_text(target, fn(tx) { target.add(tx, "attempts", key) })
-  target.rows(target.adapter.handle, "attempts")
+  let _ = transaction(target, fn(tx) { target.add(tx, "attempts", key) })
+  transaction(target, target.rows(_, "attempts"))
   |> result.unwrap([])
   |> list.count(fn(row) { row == key })
 }
@@ -2070,7 +2109,7 @@ fn b1(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> result.map_error(fn(e) { decisions.ApplicationFailed(said(e)) })
   }
   use Nil <- result.try(
-    within_text(target, fn(tx) {
+    transaction(target, fn(tx) {
       list.try_each(keys, fn(key) {
         target.backlog.submit(tx, key, case key {
           _ if key == in_model -> "dies_in_model"
@@ -2101,8 +2140,10 @@ fn b1(target: Target(tx), _load: Load) -> Result(Nil, String) {
   let _ = sinal.detach(attachment)
   use Nil <- result.try(expect(done, "the triggers were not all worked"))
   use ids <- result.try(
-    target.adapter.inspect.occurrences(target.adapter.handle, name)
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.occurrences(tx, name)
+      |> store_text
+    }),
   )
   use rows <- result.try(effects(target, desk))
   use aside <- result.try(target.backlog.aside() |> store_text)
@@ -2291,12 +2332,14 @@ fn b4(target: Target(tx), load: Load) -> Result(Nil, String) {
   stop_runtime(second)
   use rows <- result.try(effects(target, replies))
   use waiting <- result.try(
-    target.adapter.port.waiting(
-      target.adapter.handle,
-      decisions.name(decisions.point_of(refunds)),
-      clinica,
-    )
-    |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(
+        tx,
+        decisions.name(decisions.point_of(refunds)),
+        clinica,
+      )
+      |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     all_sent,
@@ -2403,7 +2446,9 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> quick
   use supervisor <- result.try(start_runtime(config))
   let status = fn(id) {
-    again.adapter.inspect.head(again.adapter.handle, id)
+    transaction(again, fn(tx) {
+      again.adapter.inspect.head(tx, id) |> store_text
+    })
     |> result.map(option.map(_, fn(head: store.Head) { head.status }))
   }
   let expired =
@@ -2467,7 +2512,9 @@ fn own_deadline(target: Target(tx), _load: Load) -> Result(Nil, String) {
   use rows <- result.try(effects(again, replies))
   use Nil <- result.try(expect(rows == [], "something was released"))
   use notices <- result.try(
-    again.adapter.inspect.notices(again.adapter.handle) |> store_text,
+    transaction(again, fn(tx) {
+      again.adapter.inspect.notices(tx) |> store_text
+    }),
   )
   let noticed = fn(id) {
     list.count(notices, fn(notice: store.Notice) { notice.occurrence == id })
@@ -2605,7 +2652,7 @@ fn every_notice(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> quick
   use supervisor <- result.try(start_runtime(config))
   let rows = fn() {
-    target.rows(target.adapter.handle, table) |> result.unwrap([])
+    transaction(target, target.rows(_, table)) |> result.unwrap([])
   }
   let keys = [superseded, lapsed, late, woken, rejected]
   let settled =
@@ -2615,7 +2662,9 @@ fn every_notice(target: Target(tx), _load: Load) -> Result(Nil, String) {
         || {
           // The head first: a lapse and its notice commit together, so
           // an empty backlog read after it holds no notice of the lapse.
-          target.adapter.inspect.head(target.adapter.handle, lapsed)
+          transaction(target, fn(tx) {
+            target.adapter.inspect.head(tx, lapsed) |> store_text
+          })
           |> result.map(option.map(_, fn(head: store.Head) { head.status }))
           == Ok(Some(store.Expired))
           && target.backlog.undelivered(100) == Ok([])
@@ -2653,7 +2702,9 @@ fn every_notice(target: Target(tx), _load: Load) -> Result(Nil, String) {
     "notices left: " <> string.inspect(#(undelivered, aside)),
   ))
   use notices <- result.try(
-    target.adapter.inspect.notices(target.adapter.handle) |> store_text,
+    transaction(target, fn(tx) {
+      target.adapter.inspect.notices(tx) |> store_text
+    }),
   )
   use Nil <- result.try(expect(
     list.all(keys, fn(id) {
@@ -2778,7 +2829,7 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
   let triggers = load.b5_triggers
   let prefix = unique(target, "c")
   let submit = fn(batch: List(Int)) {
-    within_text(target, fn(tx) {
+    transaction(target, fn(tx) {
       list.try_each(batch, fn(n) {
         target.backlog.submit(
           tx,
@@ -2851,7 +2902,7 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
   let settled =
     wait_until(
       fn() {
-        case target.rows(target.adapter.handle, "followed") {
+        case transaction(target, target.rows(_, "followed")) {
           Ok(rows) -> list.length(rows) == triggers
           Error(_) -> False
         }
@@ -2864,7 +2915,9 @@ fn b5(target: Target(tx), load: Load) -> Result(Nil, String) {
   process.sleep(20)
   stop_runtime(tree)
   let killed = killed_while_feeding + drain(kills, 0)
-  use followed <- result.try(target.rows(target.adapter.handle, "followed"))
+  use followed <- result.try(
+    transaction(target, fn(tx) { target.rows(tx, "followed") }),
+  )
   use aside <- result.try(target.backlog.aside() |> store_text)
   use auto_rows <- result.try(effects(target, automatic))
   use held_rows <- result.try(effects(target, held))
@@ -2921,7 +2974,11 @@ fn validate(
   name: String,
   validator: vocabulary.Validator,
 ) -> Nil {
-  case target.adapter.port.waiting(target.adapter.handle, name, ana) {
+  case
+    transaction(target, fn(tx) {
+      target.adapter.port.waiting(tx, name, ana) |> store_text
+    })
+  {
     Ok([_, ..] as waiting) -> {
       let assert [id, ..] = list.shuffle(waiting)
       let _ = within(target, open_and_decide(desk, _, id, validator, Approve))
@@ -3014,17 +3071,19 @@ fn b6(target: Target(tx), _load: Load) -> Result(Nil, String) {
     |> result.map_error(said),
   )
   use Nil <- result.try(
-    within_text(target, fn(tx) {
+    transaction(target, fn(tx) {
       target.backlog.submit(tx, doomed, "") |> store_text
     }),
   )
   use Nil <- result.try(target.poison(bad))
   // The bad record is visible as what it is: a typed refusal, not a crash.
   use Nil <- result.try(
-    case decisions.read(poisoned, target.adapter.handle, occurrence: bad) {
-      Error(decisions.Unreadable(_)) -> Ok(Nil)
-      other -> Error("the poisoned record read as " <> string.inspect(other))
-    },
+    transaction(target, fn(tx) {
+      case decisions.read(poisoned, tx, occurrence: bad) {
+        Error(decisions.Unreadable(_)) -> Ok(Nil)
+        other -> Error("the poisoned record read as " <> string.inspect(other))
+      }
+    }),
   )
   target.advance(duration.minutes(2))
   // Three attempts, set here so the scenario does not depend on the

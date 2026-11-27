@@ -51,9 +51,9 @@ pub fn the_wiring_example_follows_a_refund_test() {
       Approve,
     ))
   assert lab.wait_until(
-    fn() { store.count(store.handle(s), "outbox") == 1 },
+    fn() { lab.within(s, store.count(_, "outbox")) == 1 },
     within: 5000,
   )
-  assert store.count(store.handle(s), "refunds") == 1
+  assert lab.within(s, store.count(_, "refunds")) == 1
   lab.stop_runtime(tree)
 }

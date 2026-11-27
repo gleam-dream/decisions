@@ -43,6 +43,25 @@ fn port(
   }
 }
 
+/// An adapter whose transaction commits what its body wrote whatever the
+/// body returned.
+fn never_rolls_back(adapter: Adapter(Memory)) -> Adapter(Memory) {
+  conformance.Adapter(..adapter, transaction: fn(body) {
+    let ran =
+      adapter.transaction(fn(tx) {
+        case body(tx) {
+          Ok(text) -> Ok("ok:" <> text)
+          Error(reason) -> Ok("error:" <> reason)
+        }
+      })
+    case ran {
+      Ok("ok:" <> text) -> Ok(text)
+      Ok("error:" <> reason) -> Error(reason)
+      other -> other
+    }
+  })
+}
+
 pub fn the_memory_store_conforms_test() {
   assert failed(fn(adapter) { adapter }) == []
 }
@@ -106,11 +125,7 @@ pub fn each_check_catches_its_broken_adapter_test() {
     #("a repeated sequence number is refused", lenient),
     #("a gap in sequence numbers is refused", lenient),
     #("a second release is refused", lenient),
-    #("a rolled-back transaction leaves nothing", fn(adapter: Adapter(Memory)) {
-      conformance.Adapter(..adapter, transaction: fn(body) {
-        body(adapter.handle)
-      })
-    }),
+    #("a rolled-back transaction leaves nothing", never_rolls_back),
     #("a savepoint rolls back alone", no_savepoint),
     #(
       "a savepoint keeps what succeeded",
@@ -127,11 +142,7 @@ pub fn each_check_catches_its_broken_adapter_test() {
     #("a savepoint whose body raises rolls back alone", no_savepoint),
     #(
       "a savepoint inside a rolled-back transaction leaves nothing",
-      fn(adapter: Adapter(Memory)) {
-        conformance.Adapter(..adapter, transaction: fn(body) {
-          body(adapter.handle)
-        })
-      },
+      never_rolls_back,
     ),
     #(
       "the head comes back as written",

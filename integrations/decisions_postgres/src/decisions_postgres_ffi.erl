@@ -1,14 +1,7 @@
-%% The few things decisions_postgres needs below pog: telling a pool from a
-%% transaction's connection, ids, a unique savepoint suffix, and a
-%% `pgo_notifications` listener for `LISTEN`.
+%% The few things decisions_postgres needs below pog: ids, a unique
+%% savepoint suffix, and a `pgo_notifications` listener for `LISTEN`.
 -module(decisions_postgres_ffi).
--export([rescue/1, listener_connected/1, on_raise/2, is_pool/1, new_id/0, unique/0, system_ms/0, listen/7, stop_listener/1]).
-
-%% pog's `Connection` is `{pool, Name}` or `{single_connection, Conn}`; the
-%% second is the connection `pog.transaction` hands its callback. Grind
-%% relies on the same shape and pins pog's minor version for it.
-is_pool({pool, _}) -> true;
-is_pool(_) -> false.
+-export([rescue/1, listener_connected/1, on_raise/2, new_id/0, unique/0, system_ms/0, listen/7, stop_listener/1]).
 
 %% A UUID version 7: 48 bits of Unix milliseconds, then random bits. Ids made
 %% later sort later, which keeps the primary key's inserts at one end.

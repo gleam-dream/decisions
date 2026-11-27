@@ -8,11 +8,11 @@ package exposes types of those libraries (`json_blueprint`'s `Codec` in
 modules, Grind's `Grind` in `decisions_postgres.new`), so an application must
 move to the same majors.
 
-| Package              | From  | To    | What changes for the application                                                                        |
-| -------------------- | ----- | ----- | ------------------------------------------------------------------------------------------------------- |
-| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person |
-| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; accepts core 0.2                          |
-| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; accepts core 0.2                               |
+| Package              | From  | To    | What changes for the application                                                                                  |
+| -------------------- | ----- | ----- | ----------------------------------------------------------------------------------------------------------------- |
+| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person           |
+| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; a verb runs only in a transaction; accepts core 0.2 |
+| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; a verb runs only in a transaction; accepts core 0.2      |
 
 ## Install
 
@@ -240,6 +240,23 @@ decisions.recommend_bundle(desk, tx, bundle: "report-7",
   `recommend_bundle`), and `RepeatedItem` names the item.
 - `bundle_lock_prefix` is reserved, as `subject_lock_prefix` is.
 
+### The conformance suite runs every check in a transaction
+
+`decisions/conformance.Adapter` has no `handle`: no port call runs outside a
+transaction. `transaction` returns what its body returned, so the checks pass
+a value such as a new id out of it. An adapter's `transaction` that wraps a
+generic transaction function compiles unchanged once the field is gone.
+
+```gleam
+// Before (0.1)
+conformance.Adapter(port:, inspect:, handle: store,
+  transaction: fn(body) { memory.transaction(store, body) }, cleanup:)
+
+// After (0.2)
+conformance.Adapter(port:, inspect:,
+  transaction: fn(body) { memory.transaction(store, body) }, cleanup:)
+```
+
 ## decisions_otp 0.2.0
 
 ### A handler belongs to the process that attached it
@@ -271,6 +288,36 @@ gone: detached before, removed after a failure, or released because its owner
 exited. Treat it as "already gone". Sinal's diagnostics are counted rather than
 logged on every occurrence; read them with `sinal.diagnostics()`. See Sinal's
 [migration guide](https://github.com/gleam-dream/sinal/blob/main/docs/MIGRATION.md).
+
+### A verb runs only in a transaction
+
+`store.handle` and `store.store_of` are removed. A verb run on the handle took
+its lock, ran the gated tool and recorded the release in three separate
+commits, so racing processes could each release the same occurrence. Only
+`store.transaction` makes a `Tx`, and it takes the `Store`, so a transaction
+cannot be opened inside another.
+
+```gleam
+// Before (0.1)
+decisions.read(desk, store.handle(s), occurrence: id)
+store.queue(store.handle(s), "finance")
+store.get(store.handle(s), "accounts", "ana")
+
+// After (0.2)
+store.transaction(s, decisions.read(desk, _, occurrence: id))
+store.queue(s, "finance")
+store.transaction(s, fn(tx) { Ok(store.get(tx, "accounts", "ana")) })
+```
+
+- The reads `queue`, `queue_page`, `queue_for`, `queue_page_for`,
+  `review_queue`, `review_queue_of`, `occurrences_of`, `settled_since`,
+  `entries`, `heads`, `wakes` and `notices` take the `Store` and see committed
+  rows.
+- Application rows (`get`, `put`, `add`, `remove`, `rows`, `count`) and
+  `inspection` stay on `Tx`.
+- `decisions_otp/stress.Target` keeps its fields; `stress.transaction(target,
+body)` runs a body in one of the target's transactions and returns its
+  value.
 
 ### The core range accepts 0.2
 
@@ -313,6 +360,47 @@ package's settlement of an abandoned delivery is unchanged. Two Grind 0.3
 changes are visible: a delivery that loses its lease is stopped at Grind's next
 lease renewal instead of running to its timeout, and Grind claims into every
 free slot with one statement.
+
+### A verb runs only in a transaction the package opened
+
+The port's transaction value is `decisions_postgres.Tx`, which only the
+transaction helpers and the workers make. A verb run on the pool took its
+lock, ran the gated tool and recorded the release in separate commits, so
+racing processes each released the same occurrence. The helpers take a
+`Pool`, made from the pool's name, so a helper handed a transaction's
+connection can no longer commit that transaction early.
+
+```gleam
+// Before (0.2)
+let db = grind.connection(jobs)
+decisions_postgres.transaction(db, decisions.recommend(desk, _, proposal))
+decisions.read(desk, db, occurrence: id)
+pog.transaction(db, fn(tx) {
+  use waiting <- result.try(decisions.recommend(desk, tx, proposal))
+  save_request(tx, waiting.id)
+})
+
+// After (0.3)
+let db = decisions_postgres.pool(pool_config.pool_name)
+decisions_postgres.transaction(db, decisions.recommend(desk, _, proposal))
+decisions_postgres.transaction(db, decisions.read(desk, _, occurrence: id))
+decisions_postgres.transaction_with(db, fn(tx) {
+  use waiting <- result.try(
+    decisions.recommend(desk, tx, proposal) |> decisions_postgres.desk,
+  )
+  save_request(decisions_postgres.connection(tx), waiting.id)
+  |> result.map_error(decisions_postgres.Own)
+})
+```
+
+- `transaction`, `transaction_with`, `refusing`, `decide`, `migrate`,
+  `sweep`, `deliver_due`, `deliver_notices`, `set_aside` and every
+  `decisions_postgres/queue` read take the `Pool`.
+- `port(store)` is `Port(Tx)` and `inspection()` is `Inspection(Tx)`. A gated
+  tool's executor, a `Waker` and a `Follower` receive a `Tx`; run their own
+  statements, and `grind.submit_in`, on `connection(tx)`.
+- A verb inside the application's own `pog.transaction` no longer compiles;
+  move the body into `transaction_with`.
 
 ### The core range accepts 0.2
 

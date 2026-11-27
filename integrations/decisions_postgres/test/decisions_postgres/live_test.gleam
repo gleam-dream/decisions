@@ -5,13 +5,13 @@
 
 import decisions
 import decisions/vocabulary.{Approve}
+import decisions_postgres
 import decisions_postgres/live
 import decisions_postgres/queue
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
 import kit
-import pog
 
 pub fn a_committed_append_notifies_its_subscribers_test() {
   let #(name, store) = kit.store()
@@ -64,10 +64,10 @@ pub fn a_committed_append_notifies_its_subscribers_test() {
   // A transaction that rolls back notifies nobody: the next change the
   // point's subscriber receives is the one committed after it.
   let assert Error(_) =
-    pog.transaction(env.db, fn(tx) {
-      let assert Ok(rolled) =
+    decisions_postgres.transaction(env.pool, fn(tx) {
+      let assert Ok(_) =
         decisions.recommend(desk, tx, kit.proposal(spec.name, kit.ana))
-      Error(rolled.id)
+      Error(decisions.NotAwaiting)
     })
   let assert Ok(committed) =
     kit.tx(env, decisions.recommend(desk, _, kit.proposal(spec.name, kit.ana)))
@@ -189,7 +189,7 @@ pub fn the_listener_reconnects_and_polling_shows_what_was_missed_test() {
   assert heard
   // Polling the positions of the cards a client holds shows the change it
   // may have missed: the last sequence number moved past what it saw.
-  let assert Ok([#(_, seq)]) = queue.positions(env.db, [first.id])
+  let assert Ok([#(_, seq)]) = queue.positions(env.pool, [first.id])
   assert seq == list.length(decided.entries)
   assert seq > 2
   process.unlink(started.pid)

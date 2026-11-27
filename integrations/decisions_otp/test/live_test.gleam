@@ -54,7 +54,7 @@ pub fn the_other_validator_is_told_when_the_card_is_decided_test() {
     store.unsubscribe(s, subscription)
     // A hint is a reason to read again. The truth is the record.
     let assert Ok(now) =
-      decisions.read(desk, store.handle(s), occurrence: "refund-1")
+      store.transaction(s, decisions.read(desk, _, occurrence: "refund-1"))
     process.send(report, case told, now.status {
       True, occurrence.Released(by: occurrence.ByValidator(who), ..) ->
         "decided by " <> who
@@ -73,7 +73,7 @@ pub fn the_other_validator_is_told_when_the_card_is_decided_test() {
   assert process.receive(report, 1000) == Ok("decided by bia")
   // Someone who was not listening lost nothing: the record says the same.
   let assert Ok(late) =
-    decisions.read(desk, store.handle(s), occurrence: "refund-1")
+    store.transaction(s, decisions.read(desk, _, occurrence: "refund-1"))
   let assert occurrence.Released(by: occurrence.ByValidator("bia"), ..) =
     late.status
 }

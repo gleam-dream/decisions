@@ -17,8 +17,8 @@ import decisions_postgres
 /// The running pieces an application keeps.
 pub type Wired {
   Wired(
-    db: pog.Connection,
-    refunds: decisions.Desk(String, pog.Connection),
+    db: decisions_postgres.Pool,
+    refunds: decisions.Desk(String, decisions_postgres.Tx),
     store: decisions_postgres.Store,
   )
 }
@@ -31,7 +31,7 @@ pub fn migrate_at_deploy(pool: pog.Config) -> Result(Nil, String) {
     pog.start(pool) |> result.replace_error("no database to migrate"),
   )
   let migrated =
-    decisions_postgres.migrate(started.data)
+    decisions_postgres.migrate(decisions_postgres.pool(pool.pool_name))
     |> result.map_error(decisions_postgres.describe_migrate_error)
   process.unlink(started.pid)
   process.kill(started.pid)
@@ -78,7 +78,8 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
     |> supervisor.start
     |> result.replace_error("the supervision tree did not start"),
   )
-  let db = grind.connection(jobs)
+  // Grind owns the pool; the package reaches it by its name.
+  let db = decisions_postgres.pool(pool.pool_name)
   use _ <- result.try(
     decisions_postgres.sweep(store, db)
     |> result.replace_error("the sweep could not read the store"),
@@ -88,7 +89,9 @@ pub fn start(pool: pog.Config) -> Result(Wired, String) {
 
 // snips-end: postgres-wiring
 
-fn refund_tool(_output: String) -> decisions.Gated(String, pog.Connection) {
+fn refund_tool(
+  _output: String,
+) -> decisions.Gated(String, decisions_postgres.Tx) {
   decisions.Gated(
     name: "refund_fee",
     guard: fn(_, _) { Ok([]) },
@@ -97,7 +100,7 @@ fn refund_tool(_output: String) -> decisions.Gated(String, pog.Connection) {
 }
 
 fn notify_customer(
-  _tx: pog.Connection,
+  _tx: decisions_postgres.Tx,
   _occurrence: String,
 ) -> Result(Nil, decisions.HandlerFailure) {
   Ok(Nil)

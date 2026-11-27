@@ -73,9 +73,9 @@ pub fn migrate_again_and_at_once_applies_each_step_once_test() {
   let #(name, store) = kit.store()
   use env <- kit.run(name, store, kit.options(), [], [])
   let results =
-    kit.race(8, 30_000, fn(_) { decisions_postgres.migrate(env.db) })
+    kit.race(8, 30_000, fn(_) { decisions_postgres.migrate(env.pool) })
   assert list.unique(results) == [Ok(Nil)]
-  assert decisions_postgres.migrate(env.db) == Ok(Nil)
+  assert decisions_postgres.migrate(env.pool) == Ok(Nil)
   let versions =
     kit.scalar(
       env.db,

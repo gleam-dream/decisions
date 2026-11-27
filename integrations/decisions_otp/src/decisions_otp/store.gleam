@@ -63,9 +63,15 @@
 //// specification for the owner; `named(name)` gives the handle. See
 //// `supervised` for what the owner's exit means for the tree.
 ////
-//// The transaction value `Tx` is valid only inside the body it was handed
-//// to. `handle(store)` is a `Tx` usable outside any transaction: each call
-//// on it is a transaction of its own.
+//// **Only a transaction runs a verb.** The transaction value `Tx` is
+//// valid only inside the body `transaction` handed it to, and nothing
+//// else makes one, so the lock a verb takes, the gated tool's writes and
+//// the entry that records the release always commit together.
+//// `transaction` takes the `Store`, not a `Tx`, so one cannot be opened
+//// inside another. The reads an application makes outside a transaction
+//// (the queues, the pages, `entries`, `heads`, `wakes`, `notices`) take
+//// the `Store` and see committed rows; read a record through its desk
+//// with `store.transaction(s, decisions.read(desk, _, occurrence: id))`.
 ////
 //// ```gleam
 //// import decisions_otp/store
@@ -124,10 +130,12 @@ pub opaque type Store {
   )
 }
 
-/// The transaction value of the port: a transaction in progress, or the
-/// store's handle, on which each call is a transaction of its own.
+/// The transaction value of the port: a transaction in progress. Only
+/// `transaction` makes one, so every port call, and every verb of a desk
+/// over this store, runs inside a transaction that commits or rolls back
+/// whole.
 pub opaque type Tx {
-  Tx(store: Store, open: Option(Open))
+  Tx(store: Store, open: Open)
 }
 
 type Open {
@@ -343,7 +351,7 @@ pub fn restart(
 /// outcome unknown; the raise says so.
 pub fn transaction(store: Store, body: fn(Tx) -> Result(a, e)) -> Result(a, e) {
   let open = begin(store)
-  case rows.attempt(fn() { body(Tx(store:, open: Some(open))) }) {
+  case rows.attempt(fn() { body(Tx(store:, open:)) }) {
     Ok(Ok(value)) -> {
       commit(store, open)
       Ok(value)
@@ -357,17 +365,6 @@ pub fn transaction(store: Store, body: fn(Tx) -> Result(a, e)) -> Result(a, e) {
       rows.reraise(crash)
     }
   }
-}
-
-/// The store as a `Tx` outside any transaction: each port call on it is a
-/// transaction of its own.
-pub fn handle(store: Store) -> Tx {
-  Tx(store:, open: None)
-}
-
-/// The store a transaction belongs to.
-pub fn store_of(tx: Tx) -> Store {
-  tx.store
 }
 
 fn begin(store: Store) -> Open {
@@ -473,31 +470,19 @@ fn ask_forever(
   answer
 }
 
-/// Run `body` with the open transaction, opening one when `tx` is the
-/// handle.
-fn within(
-  tx: Tx,
-  body: fn(Store, Open) -> Result(a, StoreError),
-) -> Result(a, StoreError) {
-  case tx.open {
-    Some(open) -> body(tx.store, open)
-    None ->
-      transaction(tx.store, fn(inner) {
-        case inner.open {
-          Some(open) -> body(tx.store, open)
-          None -> Error(Unavailable("no transaction"))
-        }
-      })
-  }
+/// Run `body` with the transaction's store and buffer.
+fn within(tx: Tx, body: fn(Store, Open) -> a) -> a {
+  body(tx.store, tx.open)
 }
 
-/// `within`, for a body that cannot fail.
-fn simply(tx: Tx, body: fn(Store, Open) -> a) -> a {
-  case within(tx, fn(store, open) { Ok(body(store, open)) }) {
+/// Run a read in a transaction of its own, which writes nothing. It sees
+/// committed rows only.
+fn reading(store: Store, body: fn(Store, Open) -> a) -> a {
+  case transaction(store, fn(tx) { Ok(body(tx.store, tx.open)) }) {
     Ok(value) -> value
-    // `body` cannot fail, and `transaction` raises rather than return an
-    // error of its own.
-    Error(error) -> panic as port_types.describe(error)
+    // The body cannot fail, and `transaction` raises rather than return
+    // an error of its own.
+    Error(Nil) -> panic as "decisions_otp/store: a read failed"
   }
 }
 
@@ -573,7 +558,7 @@ fn range(
 
 /// Lock a name of the application's own until the transaction ends, as an
 /// advisory lock in a database. Another transaction that locks the same
-/// name waits. On the handle, the lock is taken and released at once.
+/// name waits.
 pub fn lock(tx: Tx, name: String) -> Result(Nil, StoreError) {
   within(tx, fn(store, open) { take(store, open, rows.NamedLock(name)) })
 }
@@ -635,8 +620,7 @@ fn take(store: Store, open: Open, lock: Lock) -> Result(Nil, StoreError) {
 
 // -- The port ----------------------------------------------------------------------
 
-/// The storage port. Every function runs in the caller's transaction, or
-/// in a transaction of its own on the handle.
+/// The storage port. Every function runs in the caller's transaction.
 pub fn port() -> Port(Tx) {
   Port(
     load: load,
@@ -680,9 +664,9 @@ fn load(tx: Tx, id: String) -> Result(List(Stored), StoreError) {
   Ok(entries_in(store, open, id))
 }
 
-/// The entries of an occurrence. Callers hold its lock (`load`, `append`)
-/// or read it whole on the handle, so no commit can change these rows
-/// while they are read: no `stable` needed.
+/// The entries of an occurrence. Callers hold its lock (`load`, `append`),
+/// or read entries already committed, which no commit changes: no
+/// `stable` needed.
 fn entries_in(store: Store, open: Open, id: String) -> List(Stored) {
   rows.scan(store.tables.rows, open.buffer, EntryKey(id, 0))
   |> list.filter_map(fn(pair) {
@@ -889,7 +873,7 @@ fn atomically(
 ) -> Result(Result(List(Ref), String), StoreError) {
   use store, open <- within(tx)
   let before = rows.snapshot(open.buffer)
-  case rows.attempt(fn() { body(Tx(store:, open: Some(open))) }) {
+  case rows.attempt(fn() { body(Tx(store:, open:)) }) {
     Ok(Ok(refs)) -> Ok(Ok(refs))
     Ok(Error(reason)) -> {
       rows.restore(open.buffer, before)
@@ -922,8 +906,8 @@ pub fn inspection() -> Inspection(Tx) {
         _ -> Ok(None)
       }
     },
-    wakes: fn(tx) { Ok(wakes(tx)) },
-    notices: fn(tx) { Ok(notices(tx)) },
+    wakes: fn(tx) { Ok(within(tx, wakes_in)) },
+    notices: fn(tx) { Ok(within(tx, notices_in)) },
   )
 }
 
@@ -931,13 +915,13 @@ pub fn inspection() -> Inspection(Tx) {
 pub fn evidence() -> Evidence(Tx) {
   Evidence(
     put: fn(tx, ref, body) {
-      simply(tx, fn(_, open) {
+      within(tx, fn(_, open) {
         rows.put(open.buffer, EvidenceKey(ref, 0), EvidenceRow(body))
       })
       Ok(Nil)
     },
     get: fn(tx, ref: Ref) {
-      simply(tx, fn(store, open) {
+      within(tx, fn(store, open) {
         case rows.read(store.tables.rows, open.buffer, EvidenceKey(ref, 0)) {
           Ok(EvidenceRow(body:)) -> Ok(body)
           _ -> Error("no evidence stored for " <> ref.kind <> ":" <> ref.id)
@@ -949,26 +933,26 @@ pub fn evidence() -> Evidence(Tx) {
 
 // -- What an application and a test read --------------------------------------------
 
-/// The stored entries of a record, in sequence order, without a lock.
-pub fn entries(tx: Tx, id: String) -> List(Stored) {
-  simply(tx, fn(store, open) { entries_in(store, open, id) })
+/// The committed entries of a record, in sequence order, without a lock.
+pub fn entries(store: Store, id: String) -> List(Stored) {
+  reading(store, fn(store, open) { entries_in(store, open, id) })
 }
 
-/// Every record's head, by id.
-pub fn heads(tx: Tx) -> List(#(String, Head)) {
-  simply(tx, heads_in)
+/// Every committed record's head, by id.
+pub fn heads(store: Store) -> List(#(String, Head)) {
+  reading(store, heads_in)
 }
 
 /// The occurrences waiting for a holder of `set`: the soonest due first,
 /// those with no due time last, then in arrival order. Read from an
 /// index kept in queue order, so its cost grows with what it returns.
-pub fn queue(tx: Tx, set: String) -> List(String) {
-  queue_page(tx, set, 0)
+pub fn queue(store: Store, set: String) -> List(String) {
+  queue_page(store, set, 0)
 }
 
-/// The first `limit` of `queue(tx, set)`; every one when `limit` is 0.
-pub fn queue_page(tx: Tx, set: String, limit: Int) -> List(String) {
-  simply(tx, fn(store, open) { indexed(store, open, set, limit) })
+/// The first `limit` of `queue(store, set)`; every one when `limit` is 0.
+pub fn queue_page(store: Store, set: String, limit: Int) -> List(String) {
+  reading(store, fn(store, open) { indexed(store, open, set, limit) })
   |> list.map(fn(entry) { entry.1 })
 }
 
@@ -994,25 +978,21 @@ fn indexed(
 /// The occurrences a validator may decide, in queue order: waiting for a
 /// set they hold, not already approved by them, and not barred from them
 /// (`Head.may_not_decide`, such as the person who asked).
-pub fn queue_for(tx: Tx, validator: Validator) -> List(String) {
-  queue_page_for(tx, validator, 0)
+pub fn queue_for(store: Store, validator: Validator) -> List(String) {
+  queue_page_for(store, validator, 0)
 }
 
-/// The first `limit` of `queue_for(tx, validator)`; every one when `limit`
-/// is 0. With a limit, it walks each held set's queue index in step, in
-/// queue order, and stops once it has `limit` that the validator may
-/// decide, so a page costs about what it returns. Inside a transaction
-/// that has itself changed a queue, it reads every held set in full, so
-/// that it sees its own writes.
+/// The first `limit` of `queue_for(store, validator)`; every one when
+/// `limit` is 0. With a limit, it walks each held set's queue index in
+/// step, in queue order, and stops once it has `limit` that the validator
+/// may decide, so a page costs about what it returns.
 pub fn queue_page_for(
-  tx: Tx,
+  store: Store,
   validator: Validator,
   limit: Int,
 ) -> List(String) {
-  simply(tx, fn(store, open) {
-    let own_writes =
-      rows.written_of_kind(open.buffer, QueueKey("", #(0, 0, ""))) != []
-    case limit > 0 && !own_writes {
+  reading(store, fn(store, open) {
+    case limit > 0 {
       True -> {
         let chunk = int.max(16, limit)
         let streams =
@@ -1174,8 +1154,8 @@ fn compare_order(
 
 /// Sampled, released occurrences waiting for a review after the fact,
 /// of every point, by point and then by id. Read from an index.
-pub fn review_queue(tx: Tx) -> List(String) {
-  simply(tx, fn(store, open) {
+pub fn review_queue(store: Store) -> List(String) {
+  reading(store, fn(store, open) {
     scan_kind(store, open.buffer, ReviewKey("", ""))
     |> list.filter_map(fn(pair) {
       case pair.0 {
@@ -1188,8 +1168,12 @@ pub fn review_queue(tx: Tx) -> List(String) {
 
 /// `review_queue` of one point, by id, at most `limit` (every one when
 /// `limit` is 0).
-pub fn review_queue_of(tx: Tx, point: String, limit: Int) -> List(String) {
-  simply(tx, fn(store, open) {
+pub fn review_queue_of(
+  store: Store,
+  point: String,
+  limit: Int,
+) -> List(String) {
+  reading(store, fn(store, open) {
     let probe = ReviewKey(point, "")
     case limit > 0 {
       True -> scan_limit(store, open.buffer, probe, limit)
@@ -1224,12 +1208,12 @@ pub opaque type Cursor {
 /// returns. Read each occurrence with `decisions.read`. For learning and
 /// export, such as `decisions/learning.example`.
 pub fn occurrences_of(
-  tx: Tx,
+  store: Store,
   point: String,
   after after: Option(Cursor),
   limit limit: Int,
 ) -> Page {
-  paged(tx.store, PointKey(point, #(-1, "")), after, None, limit, fn(key) {
+  paged(store, PointKey(point, #(-1, "")), after, None, limit, fn(key) {
     case key {
       PointKey(at: #(_, id), ..) -> Ok(id)
       _ -> Error(Nil)
@@ -1244,7 +1228,7 @@ pub fn occurrences_of(
 /// `next` reads each settlement once, including one that commits while it
 /// reads. Committed rows only; a page costs what it returns.
 pub fn settled_since(
-  tx: Tx,
+  store: Store,
   point: String,
   since since: Timestamp,
   after after: Option(Cursor),
@@ -1252,7 +1236,7 @@ pub fn settled_since(
 ) -> Page {
   let from = SettledKey(point, #(wire.milliseconds(since), -1, ""))
   paged(
-    tx.store,
+    store,
     SettledKey(point, #(-1, -1, "")),
     after,
     Some(from),
@@ -1288,12 +1272,14 @@ fn paged(
   }
 }
 
-/// Every pending wake-up.
-pub fn wakes(tx: Tx) -> List(Wake) {
-  simply(tx, fn(store, open) {
-    scan_kind(store, open.buffer, WakeKey(#("", ""), 0))
-    |> list.filter_map(wake_of)
-  })
+/// Every committed pending wake-up.
+pub fn wakes(store: Store) -> List(Wake) {
+  reading(store, wakes_in)
+}
+
+fn wakes_in(store: Store, open: Open) -> List(Wake) {
+  scan_kind(store, open.buffer, WakeKey(#("", ""), 0))
+  |> list.filter_map(wake_of)
 }
 
 fn wake_of(pair: #(Key, Row)) -> Result(Wake, Nil) {
@@ -1304,17 +1290,19 @@ fn wake_of(pair: #(Key, Row)) -> Result(Wake, Nil) {
   }
 }
 
-/// Every settlement notice admitted, delivered or not, in the order
+/// Every committed settlement notice, delivered or not, in the order
 /// admitted.
-pub fn notices(tx: Tx) -> List(Notice) {
-  simply(tx, fn(store, open) {
-    scan_kind(store, open.buffer, NoticeKey(0, 0))
-    |> list.filter_map(fn(pair) {
-      case pair.1 {
-        NoticeRow(notice:, ..) -> Ok(notice)
-        _ -> Error(Nil)
-      }
-    })
+pub fn notices(store: Store) -> List(Notice) {
+  reading(store, notices_in)
+}
+
+fn notices_in(store: Store, open: Open) -> List(Notice) {
+  scan_kind(store, open.buffer, NoticeKey(0, 0))
+  |> list.filter_map(fn(pair) {
+    case pair.1 {
+      NoticeRow(notice:, ..) -> Ok(notice)
+      _ -> Error(Nil)
+    }
   })
 }
 
@@ -1322,17 +1310,22 @@ pub fn notices(tx: Tx) -> List(Notice) {
 /// port, as damage to a database would. It exists to test what happens
 /// around a record that no longer decodes.
 pub fn tamper(store: Store, id: String, seq: Int, text: String) -> Nil {
-  simply(handle(store), fn(store, open) {
-    case rows.read(store.tables.rows, open.buffer, EntryKey(id, seq)) {
-      Ok(EntryRow(stored:)) ->
-        rows.put(
-          open.buffer,
-          EntryKey(id, seq),
-          EntryRow(Stored(..stored, event: text)),
-        )
-      _ -> Nil
-    }
-  })
+  // In a transaction of its own; it must commit.
+  let assert Ok(Nil) =
+    transaction(store, fn(tx) {
+      use store, open <- within(tx)
+      case rows.read(store.tables.rows, open.buffer, EntryKey(id, seq)) {
+        Ok(EntryRow(stored:)) ->
+          rows.put(
+            open.buffer,
+            EntryKey(id, seq),
+            EntryRow(Stored(..stored, event: text)),
+          )
+        _ -> Nil
+      }
+      Ok(Nil)
+    })
+  Nil
 }
 
 // -- Rows of the application's own ------------------------------------------------------
@@ -1342,14 +1335,14 @@ pub fn tamper(store: Store, id: String, seq: Int, text: String) -> Nil {
 /// transactions that write one key both succeed and the later commit
 /// stands; take `lock` first where that matters.
 pub fn put(tx: Tx, table: String, key: String, value: String) -> Nil {
-  simply(tx, fn(_, open) {
+  within(tx, fn(_, open) {
     rows.put(open.buffer, AppKey(table, key), AppRow(value))
   })
 }
 
 /// An application's own row.
 pub fn get(tx: Tx, table: String, key: String) -> Result(String, Nil) {
-  simply(tx, fn(store, open) {
+  within(tx, fn(store, open) {
     case rows.read(store.tables.rows, open.buffer, AppKey(table, key)) {
       Ok(AppRow(value:)) -> Ok(value)
       _ -> Error(Nil)
@@ -1359,7 +1352,7 @@ pub fn get(tx: Tx, table: String, key: String) -> Result(String, Nil) {
 
 /// Remove an application's own row.
 pub fn remove(tx: Tx, table: String, key: String) -> Nil {
-  simply(tx, fn(_, open) { rows.delete(open.buffer, AppKey(table, key)) })
+  within(tx, fn(_, open) { rows.delete(open.buffer, AppKey(table, key)) })
 }
 
 /// Add a row to `table` under a new key that sorts after every key `add`
@@ -1371,7 +1364,7 @@ pub fn add(tx: Tx, table: String, value: String) -> Nil {
 
 /// Every row of `table`, as `#(key, value)` in key order.
 pub fn rows(tx: Tx, table: String) -> List(#(String, String)) {
-  simply(tx, fn(store, open) {
+  within(tx, fn(store, open) {
     scan(store, open.buffer, AppKey(table, ""))
     |> list.filter_map(fn(pair) {
       case pair {

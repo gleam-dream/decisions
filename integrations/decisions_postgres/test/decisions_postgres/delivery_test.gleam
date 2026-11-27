@@ -55,7 +55,7 @@ pub fn a_hold_ends_and_grind_releases_it_test() {
     kit.tx(env, decisions.read(desk, _, occurrence: held.id))
   let assert occurrence.Released(..) = known.status
   assert kit.effects_of(env.db, held.id) == 1
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert !list.any(wakes, fn(w) { w.occurrence == held.id })
   kit.check(env, [desk])
 }
@@ -81,9 +81,10 @@ pub fn schedule_leaves_a_delivered_wake_up_alone_test() {
       kit.jobs(env, "decisions.wake") == [#("succeeded", 1)]
     })
   let port = decisions_postgres.port(store)
-  let later = timestamp.add(port.now(env.db), duration.hours(1))
-  let assert Ok(Nil) = port.schedule(env.db, spec.name, held.id, [later])
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let later = timestamp.add(kit.within(env, port.now), duration.hours(1))
+  let assert Ok(Nil) =
+    kit.within(env, port.schedule(_, spec.name, held.id, [later]))
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert list.filter(wakes, fn(w) { w.occurrence == held.id })
     == [store.Wake(point: spec.name, occurrence: held.id, at: later)]
   // The later wake-up is a new job, scheduled an hour away; the delivered
@@ -92,8 +93,8 @@ pub fn schedule_leaves_a_delivered_wake_up_alone_test() {
     kit.jobs(env, "decisions.wake")
   assert kit.effects_of(env.db, held.id) == 1
   // Cancelling removes only the pending one.
-  let assert Ok(Nil) = port.schedule(env.db, spec.name, held.id, [])
-  let assert Ok(wakes) = decisions_postgres.inspection().wakes(env.db)
+  let assert Ok(Nil) = kit.within(env, port.schedule(_, spec.name, held.id, []))
+  let assert Ok(wakes) = kit.within(env, decisions_postgres.inspection().wakes)
   assert !list.any(wakes, fn(w) { w.occurrence == held.id })
   kit.check(env, [desk])
 }
@@ -144,7 +145,7 @@ pub fn a_settlement_reaches_its_follower_once_test() {
     )
     |> pog.parameter(pog.text("follow:" <> spec.name))
     |> pog.parameter(pog.text(id))
-    |> pog.execute(tx)
+    |> pog.execute(decisions_postgres.connection(tx))
     |> result.replace(Nil)
     |> result.map_error(fn(_) { decisions.ApplicationFailed("insert failed") })
   })
@@ -202,7 +203,7 @@ pub fn a_follower_that_meets_contention_is_delivered_again_test() {
         )
         |> pog.parameter(pog.text("follow:" <> spec.name))
         |> pog.parameter(pog.text(id))
-        |> pog.execute(tx)
+        |> pog.execute(decisions_postgres.connection(tx))
         |> result.replace(Nil)
         |> result.map_error(fn(_) {
           decisions.ApplicationFailed("insert failed")
@@ -344,10 +345,10 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
   // would be.
   let port = decisions_postgres.port(store)
   let bad = kit.tag("bad")
-  let now = port.now(env.db)
+  let now = kit.within(env, port.now)
   let soon = timestamp.add(now, duration.milliseconds(300))
   let assert Ok(Nil) =
-    pog.transaction(env.db, fn(tx) {
+    decisions_postgres.transaction(env.pool, fn(tx) {
       use Nil <- result.try(
         port.append(
           tx,
@@ -365,9 +366,11 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
             bundle: option.None,
           ),
           [Stored(1, now, "recommended", "{\"not\":\"a recommendation\"}")],
-        ),
+        )
+        |> result.map_error(decisions.StoreFailed),
       )
       port.schedule(tx, poisoned.name, bad, [soon])
+      |> result.map_error(decisions.StoreFailed)
     })
     |> result.map_error(fn(_) { Nil })
   let good =
@@ -381,7 +384,7 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
       waiting.id
     })
   let bia = kit.finance(kit.tag("bia"))
-  let assert Ok(page) = queue.page(env.db, for: bia, limit: 10, after: None)
+  let assert Ok(page) = queue.page(env.pool, for: bia, limit: 10, after: None)
   assert list.any(page, fn(card) { card.occurrence == bad })
   // The first good one is decided; the other two expire at their deadline.
   let assert [first, ..] = good
@@ -413,9 +416,9 @@ pub fn a_poisoned_occurrence_is_set_aside_and_blocks_nothing_test() {
         }
       })
     })
-  let assert Ok(page) = queue.page(env.db, for: bia, limit: 10, after: None)
+  let assert Ok(page) = queue.page(env.pool, for: bia, limit: 10, after: None)
   assert !list.any(page, fn(card) { card.occurrence == bad })
-  let assert Ok(set_aside) = queue.set_aside(env.db, limit: 100)
+  let assert Ok(set_aside) = queue.set_aside(env.pool, limit: 100)
   assert list.any(set_aside, fn(record) { record.occurrence == bad })
   let assert Error(decisions_postgres.Refused(decisions.Unreadable(_))) =
     kit.tx(env, decisions.read(poisoned_desk, _, occurrence: bad))
@@ -457,7 +460,7 @@ pub fn deliver_due_delivers_an_escalation_once_after_a_restart_test() {
       kit.proposal(spec.name, kit.ana),
     ))
   let assert Ok(Some(head)) =
-    decisions_postgres.inspection().head(first.db, waiting.id)
+    kit.within(first, decisions_postgres.inspection().head(_, waiting.id))
   assert head.awaiting == ["finance"]
   kit.stop(first)
   // A new runtime, with the store's clock an hour ahead.
@@ -483,13 +486,13 @@ pub fn deliver_due_delivers_an_escalation_once_after_a_restart_test() {
       decode.int,
     )
   let assert Ok(1) =
-    decisions_postgres.deliver_due(later, second.db, wakers, limit: 100)
+    decisions_postgres.deliver_due(later, second.pool, wakers, limit: 100)
   let assert Ok(Some(head)) =
-    decisions_postgres.inspection().head(second.db, waiting.id)
+    kit.within(second, decisions_postgres.inspection().head(_, waiting.id))
   assert head.awaiting == ["managers"]
   // Nothing else is due, and the Grind job, when it comes, does nothing.
   let assert Ok(0) =
-    decisions_postgres.deliver_due(later, second.db, wakers, limit: 100)
+    decisions_postgres.deliver_due(later, second.pool, wakers, limit: 100)
   let worker = decisions_postgres.wake_worker(later, wakers)
   let context =
     grind_testing.context(job_id: 1, attempt: 1)

@@ -12,7 +12,9 @@ import decisions/vocabulary.{
   RuleFired, Rules, Subject, Trigger, Validator,
 }
 import decisions/wire
-import decisions_postgres.{type Follower, type Store, type Waker}
+import decisions_postgres.{
+  type Follower, type Pool, type Store, type Tx, type Waker,
+}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
@@ -103,6 +105,9 @@ pub type Env {
   Env(
     jobs: grind.Grind,
     name: process.Name(grind.Message),
+    /// The pool, for the package's transactions and reads.
+    pool: Pool,
+    /// The same pool as a pog connection, for the tests' own statements.
     db: pog.Connection,
     store: Store,
     config: pog.Config,
@@ -232,7 +237,8 @@ fn start_in(
     }
     None -> Nil
   }
-  let assert Ok(Nil) = decisions_postgres.migrate(db)
+  let pool = decisions_postgres.pool(config.pool_name)
+  let assert Ok(Nil) = decisions_postgres.migrate(pool)
   let assert Ok(_) =
     pog.query(
       "CREATE TABLE IF NOT EXISTS test_effects (
@@ -240,7 +246,7 @@ fn start_in(
          written_at timestamptz NOT NULL DEFAULT clock_timestamp())",
     )
     |> pog.execute(db)
-  Env(jobs:, name:, db:, store:, config:, schema:)
+  Env(jobs:, name:, pool:, db:, store:, config:, schema:)
 }
 
 /// The jobs of a worker in this runtime's Grind schema, as
@@ -295,7 +301,7 @@ pub type Spec {
     validity: Option(Duration),
     superseded_by: List(String),
     /// What the gated tool's executor does.
-    execute: fn(pog.Connection, Released(String)) -> Result(Nil, decisions.Stop),
+    execute: fn(Tx, Released(String)) -> Result(Nil, decisions.Stop),
   )
 }
 
@@ -312,15 +318,12 @@ pub fn spec(prefix: String) -> Spec {
   )
 }
 
-pub fn desk(store: Store, spec: Spec) -> Desk(String, pog.Connection) {
+pub fn desk(store: Store, spec: Spec) -> Desk(String, Tx) {
   desk_over(decisions_postgres.port(store), spec)
 }
 
 /// A desk over a port a test changed, such as one with a skewed clock.
-pub fn desk_over(
-  port: store.Port(pog.Connection),
-  spec: Spec,
-) -> Desk(String, pog.Connection) {
+pub fn desk_over(port: store.Port(Tx), spec: Spec) -> Desk(String, Tx) {
   let point = decisions.point(spec.name, wire.text())
   let point = case spec.hold {
     Some(hold) -> decisions.with_hold(point, hold)
@@ -342,13 +345,13 @@ pub fn desk_over(
   )
 }
 
-fn tool(spec: Spec) -> Gated(String, pog.Connection) {
+fn tool(spec: Spec) -> Gated(String, Tx) {
   Gated(name: "test_tool", guard: fn(_, _) { Ok([]) }, execute: spec.execute)
 }
 
 /// The executor of most test points: one row in `test_effects`.
 pub fn record_effect(
-  tx: pog.Connection,
+  tx: Tx,
   released: Released(String),
 ) -> Result(Nil, decisions.Stop) {
   pog.query(
@@ -357,7 +360,7 @@ pub fn record_effect(
   |> pog.parameter(pog.text(decisions.occurrence_of(released)))
   |> pog.parameter(pog.text(decisions.key(released)))
   |> pog.parameter(pog.text(point_of_key(released)))
-  |> pog.execute(tx)
+  |> pog.execute(decisions_postgres.connection(tx))
   |> result.replace(Nil)
   |> result.map_error(fn(error) {
     decisions.Refuse(decisions_postgres_describe(error))
@@ -438,33 +441,37 @@ pub fn effects_of(db: pog.Connection, occurrence: String) -> Int {
 }
 
 /// I1 to I8 over these desks, counting each point's effect rows.
-pub fn check(
-  env: Env,
-  desks: List(Desk(String, pog.Connection)),
-) -> testing.Summary {
+pub fn check(env: Env, desks: List(Desk(String, Tx))) -> testing.Summary {
   let audits =
     list.map(desks, fn(desk) {
       let point = decisions.name(decisions.point_of(desk))
-      testing.audit(desk, effects: fn(tx) { Ok(effects(tx, point)) })
+      testing.audit(desk, effects: fn(tx) {
+        Ok(effects(decisions_postgres.connection(tx), point))
+      })
     })
-  case testing.check(env.db, decisions_postgres.inspection(), audits) {
+  let checked =
+    decisions_postgres.transaction_with(env.pool, fn(tx) {
+      testing.check(tx, decisions_postgres.inspection(), audits)
+      |> result.map_error(decisions_postgres.Own)
+    })
+  case checked {
     Ok(summary) -> summary
-    Error(violations) -> panic as string.inspect(violations)
+    Error(failed) -> panic as string.inspect(failed)
   }
 }
 
 /// Run `body` in a transaction on the pool.
 pub fn tx(
   env: Env,
-  body: fn(pog.Connection) -> Result(a, decisions.Refusal),
+  body: fn(Tx) -> Result(a, decisions.Refusal),
 ) -> Result(a, decisions_postgres.Failure) {
-  decisions_postgres.transaction(env.db, body)
+  decisions_postgres.transaction(env.pool, body)
 }
 
 /// Open and decide in one transaction.
 pub fn open_and_decide(
-  desk: Desk(String, pog.Connection),
-  tx: pog.Connection,
+  desk: Desk(String, Tx),
+  tx: Tx,
   id: String,
   validator: Validator,
   verdict: vocabulary.Verdict(String),
@@ -534,7 +541,8 @@ pub fn wait_for_store_clock(env: Env, at: timestamp.Timestamp) -> Nil {
   let port = decisions_postgres.port(env.store)
   let assert True =
     eventually(10_000, fn() {
-      timestamp.compare(port.now(env.db), at) != order.Lt
+      let assert Ok(now) = tx(env, fn(tx) { Ok(port.now(tx)) })
+      timestamp.compare(now, at) != order.Lt
     })
   Nil
 }
@@ -571,4 +579,23 @@ pub fn scalar(
   let assert Ok(pog.Returned(rows: [value], ..)) =
     query |> pog.returning(decode.at([0], decoder)) |> pog.execute(db)
   value
+}
+
+/// Run `body` in a transaction of its own and return what it returned: a
+/// port call or an inspection a test makes outside a verb.
+pub fn within(env: Env, body: fn(Tx) -> a) -> a {
+  let assert Ok(value) =
+    decisions_postgres.transaction(env.pool, fn(tx) { Ok(body(tx)) })
+  value
+}
+
+/// Run `body`, whose error is the test's own, in a transaction on the
+/// pool: commit on `Ok`, roll back on `Error`.
+pub fn own(
+  env: Env,
+  body: fn(Tx) -> Result(a, e),
+) -> Result(a, decisions_postgres.Failed(e)) {
+  decisions_postgres.transaction_with(env.pool, fn(tx) {
+    body(tx) |> result.map_error(decisions_postgres.Own)
+  })
 }

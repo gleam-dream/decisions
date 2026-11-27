@@ -16,11 +16,13 @@
 ////   grind.new(pool_config)
 ////   |> grind.with_worker(decisions_postgres.wake_worker(store, [decisions.waker(refunds)]))
 ////
+//// // The application's pool, by the name its `pog.Config` registers.
+//// let db = decisions_postgres.pool(pool_config.pool_name)
+////
 //// // At deploy time, or at start-up where the role may run DDL.
-//// let assert Ok(Nil) = decisions_postgres.migrate(grind.connection(jobs))
+//// let assert Ok(Nil) = decisions_postgres.migrate(db)
 ////
 //// // A request: the verb runs in a transaction of its own.
-//// let db = grind.connection(jobs)
 //// case decisions_postgres.transaction(db, decisions.recommend(refunds, _, proposal)) {
 ////   Ok(waiting) -> show(waiting)
 ////   Error(decisions_postgres.Refused(refusal)) -> explain(refusal)
@@ -57,6 +59,19 @@
 //// | One settlement notice per occurrence | Unique constraint `decisions_settled_once` |
 //// | A notice reaches what follows, once per database effect | A Grind job admitted in the settling transaction; the follower runs in the transaction that marks the notice delivered |
 //// | A delivery abandoned again and again ends set aside, not pending for ever | Each worker replays an expired lease 10 times, then its declared Grind settlement replays at most `authorized_replay_limit` more times and sets the row aside |
+////
+//// ## Only a transaction runs a verb
+////
+//// The port's transaction value is `Tx`, the connection of a transaction
+//// this package opened. Only the transaction helpers (`transaction`,
+//// `transaction_with`, `refusing`, `decide`) and the workers make one, so
+//// a verb's lock, the gated tool's writes and the entry that records the
+//// release always commit together. The helpers take a `Pool`, which is
+//// made from the pool's name and is never a transaction's connection, so
+//// one helper cannot be called inside another's body. Inside a body,
+//// `connection(tx)` is the transaction's connection for the
+//// application's own statements. Reads outside a verb
+//// (`decisions_postgres/queue`, `sweep`) take the `Pool`.
 ////
 //// The port reports an integrity violation (SQLSTATE class 23) as
 //// `store.Conflict`; a deadlock, a serialization failure or a lock wait
@@ -100,6 +115,7 @@ import decisions_postgres/internal/sql
 import decisions_postgres/telemetry
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/int
 import gleam/json
 import gleam/list
@@ -243,12 +259,47 @@ pub fn following(store: Store, point: String) -> Store {
   Store(..store, followed: [point, ..store.followed])
 }
 
+// -- The pool and the transaction ----------------------------------------------
+
+/// A connection pool of the application's, made with `pool`. Every
+/// transaction of this package starts on one.
+pub type Pool =
+  sql.Pool
+
+/// The pool registered under `name`: the `pool_name` of the `pog.Config`
+/// the application, or its Grind runtime, started the pool with.
+pub fn pool(name: process.Name(pog.Message)) -> Pool {
+  sql.pool(name)
+}
+
+/// The connection of a transaction this package opened: the transaction
+/// value of the port. Only the transaction helpers and the workers make
+/// one.
+pub opaque type Tx {
+  Tx(connection: pog.Connection)
+}
+
+/// The transaction's connection, for the application's own statements in
+/// the same transaction, and for `grind.submit_in`.
+pub fn connection(tx: Tx) -> pog.Connection {
+  tx.connection
+}
+
+/// Run `body` in a transaction of its own on the pool.
+fn in_transaction(
+  pool: Pool,
+  body: fn(Tx) -> Result(a, error),
+) -> Result(a, pog.TransactionError(error)) {
+  pog.transaction(sql.pool_connection(pool), fn(connection) {
+    body(Tx(connection))
+  })
+}
+
 // -- The port --------------------------------------------------------------------
 
-/// The storage port. Every function runs in the connection it is given:
-/// in the caller's open transaction, so a verb, the application's own
-/// writes and the gated tool's commit or roll back together; or on the
-/// pool, where each call commits by itself.
+/// The storage port. Every function runs in the caller's transaction, so
+/// a verb, the application's own writes and the gated tool's commit or
+/// roll back together.
 ///
 /// - `load` is one statement (`decisions_load`): it locks the head row,
 ///   or, when there is none, an advisory lock on the id and then the row
@@ -275,19 +326,27 @@ pub fn following(store: Store, point: String) -> Store {
 /// - `members` reads the heads of a bundle through the partial index
 ///   `decisions_occurrences_bundle`, without a lock, set-aside records
 ///   included.
-pub fn port(store: Store) -> Port(pog.Connection) {
+pub fn port(store: Store) -> Port(Tx) {
   Port(
-    load: fn(tx, id) { load(store, tx, id) },
-    append:,
-    waiting:,
-    schedule: fn(tx, point, occurrence, times) {
-      schedule(store, tx, point, occurrence, times)
+    load: fn(tx: Tx, id) { load(store, tx.connection, id) },
+    append: fn(tx: Tx, id, head, entries) {
+      append(tx.connection, id, head, entries)
     },
-    settled: fn(tx, point, occurrence) { settled(store, tx, point, occurrence) },
-    atomically:,
-    now: fn(tx) { clock(store, tx) },
+    waiting: fn(tx: Tx, point, subject) {
+      waiting(tx.connection, point, subject)
+    },
+    schedule: fn(tx: Tx, point, occurrence, times) {
+      schedule(store, tx.connection, point, occurrence, times)
+    },
+    settled: fn(tx: Tx, point, occurrence) {
+      settled(store, tx.connection, point, occurrence)
+    },
+    atomically: fn(tx: Tx, body) {
+      atomically(tx.connection, fn(connection) { body(Tx(connection)) })
+    },
+    now: fn(tx: Tx) { clock(store, tx.connection) },
     new_id: fn(_) { sql.new_id() },
-    members:,
+    members: fn(tx: Tx, bundle) { members(tx.connection, bundle) },
   )
 }
 
@@ -431,7 +490,6 @@ fn schedule(
   occurrence: String,
   times: List(Timestamp),
 ) -> Result(Nil, StoreError) {
-  use tx <- sql.within(tx)
   // Pending wake-ups whose time is still wanted stay with their job; the
   // others are removed, so their jobs find nothing and do nothing.
   use added <- result.try(
@@ -474,7 +532,6 @@ fn settled(
   point: String,
   occurrence: String,
 ) -> Result(Nil, StoreError) {
-  use tx <- sql.within(tx)
   use ids <- result.try(
     pog.query(
       "INSERT INTO decisions_settled (point, occurrence_id) VALUES ($1, $2)
@@ -561,64 +618,52 @@ fn atomically(
   tx: pog.Connection,
   body: fn(pog.Connection) -> Result(List(Ref), String),
 ) -> Result(Result(List(Ref), String), StoreError) {
-  case sql.is_pool(tx) {
-    // Outside a transaction the body gets one of its own.
-    True ->
-      case pog.transaction(tx, body) {
-        Ok(relied) -> Ok(Ok(relied))
-        Error(pog.TransactionRolledBack(reason)) -> Ok(Error(reason))
-        Error(pog.TransactionQueryError(error)) -> Error(sql.store_error(error))
-      }
-    False -> {
-      // A name of its own, so a savepoint nested inside another (a tool
-      // that drives another point's verb) never rolls back to the wrong
-      // one.
-      let name = "decisions_tool_" <> int.to_string(sql.unique())
-      let statement = fn(text) {
-        pog.query(text) |> sql.run(tx) |> result.replace(Nil)
-      }
-      use Nil <- result.try(statement("SAVEPOINT " <> name))
-      // A body that raises is rolled back to the savepoint before the
-      // raise goes on, so a caller that catches it keeps a usable
-      // transaction without the body's writes.
-      let ran =
-        sql.on_raise(fn() { body(tx) }, fn() {
-          statement("ROLLBACK TO SAVEPOINT " <> name)
-        })
-      case ran {
-        Ok(relied) ->
-          statement("RELEASE SAVEPOINT " <> name) |> result.replace(Ok(relied))
-        Error(reason) ->
-          statement("ROLLBACK TO SAVEPOINT " <> name)
-          |> result.replace(Error(reason))
-      }
-    }
+  // A name of its own, so a savepoint nested inside another (a tool that
+  // drives another point's verb) never rolls back to the wrong one.
+  let name = "decisions_tool_" <> int.to_string(sql.unique())
+  let statement = fn(text) {
+    pog.query(text) |> sql.run(tx) |> result.replace(Nil)
+  }
+  use Nil <- result.try(statement("SAVEPOINT " <> name))
+  // A body that raises is rolled back to the savepoint before the raise
+  // goes on, so a caller that catches it keeps a usable transaction
+  // without the body's writes.
+  let ran =
+    sql.on_raise(fn() { body(tx) }, fn() {
+      statement("ROLLBACK TO SAVEPOINT " <> name)
+    })
+  case ran {
+    Ok(relied) ->
+      statement("RELEASE SAVEPOINT " <> name) |> result.replace(Ok(relied))
+    Error(reason) ->
+      statement("ROLLBACK TO SAVEPOINT " <> name)
+      |> result.replace(Error(reason))
   }
 }
 
 // -- Inspection ------------------------------------------------------------------------
 
-/// What `decisions/conformance` and `decisions/testing` read: every record
-/// of a point, a head, the pending wake-ups and the settlement notices.
-/// The desk never reads through it.
-pub fn inspection() -> Inspection(pog.Connection) {
+/// What `decisions/conformance` and `decisions/testing` read, in a
+/// transaction: every record of a point, a head, the pending wake-ups and
+/// the settlement notices. The desk never reads through it.
+pub fn inspection() -> Inspection(Tx) {
   Inspection(
-    occurrences: fn(tx, point) {
+    occurrences: fn(tx: Tx, point) {
       pog.query("SELECT id FROM decisions_occurrences WHERE point = $1")
       |> pog.parameter(pog.text(point))
       |> pog.returning(decode.at([0], decode.string))
-      |> sql.run(tx)
+      |> sql.run(tx.connection)
     },
-    head: fn(tx, id) {
+    head: fn(tx: Tx, id) {
       pog.query(
         "SELECT " <> head_columns <> " FROM decisions_occurrences WHERE id = $1",
       )
       |> pog.parameter(pog.text(id))
       |> pog.returning(head_decoder())
-      |> sql.run(tx)
+      |> sql.run(tx.connection)
       |> result.map(fn(rows) { list.first(rows) |> option.from_result })
     },
-    wakes: fn(tx) {
+    wakes: fn(tx: Tx) {
       pog.query(
         "SELECT point, occurrence_id, decisions_ms(at) FROM decisions_wakes
          WHERE set_aside_at IS NULL ORDER BY id",
@@ -629,9 +674,9 @@ pub fn inspection() -> Inspection(pog.Connection) {
         use at <- decode.field(2, sql.time())
         decode.success(Wake(point:, occurrence:, at:))
       })
-      |> sql.run(tx)
+      |> sql.run(tx.connection)
     },
-    notices: fn(tx) {
+    notices: fn(tx: Tx) {
       pog.query(
         "SELECT point, occurrence_id FROM decisions_settled ORDER BY id",
       )
@@ -640,7 +685,7 @@ pub fn inspection() -> Inspection(pog.Connection) {
         use occurrence <- decode.field(1, decode.string)
         decode.success(Notice(point:, occurrence:))
       })
-      |> sql.run(tx)
+      |> sql.run(tx.connection)
     },
   )
 }
@@ -724,8 +769,8 @@ pub fn describe_migrate_error(error: MigrateError) -> String {
 /// the application's role may own DDL. The same migrations are in
 /// `priv/migrations/` for an application that applies migrations with its
 /// own tool; choose one migration owner per database.
-pub fn migrate(db: pog.Connection) -> Result(Nil, MigrateError) {
-  pog.transaction(db, fn(tx) {
+pub fn migrate(db: Pool) -> Result(Nil, MigrateError) {
+  pog.transaction(sql.pool_connection(db), fn(tx) {
     let run = fn(text) {
       pog.query(text)
       |> pog.timeout(60_000)
@@ -807,18 +852,16 @@ pub fn describe(failure: Failure) -> String {
   }
 }
 
-/// Run `body` in a transaction of its own on `db` (a pool): commit on `Ok`,
+/// Run `body` in a transaction of its own on the pool: commit on `Ok`,
 /// roll back on `Error` or a crash. `body` is usually one verb, such as
 /// `decisions.recommend(desk, _, proposal)`, with any writes of the
-/// application's own that must commit with it.
-///
-/// It is optional: an application that manages its own transaction calls
-/// the verbs with that transaction's connection directly.
+/// application's own that must commit with it (run them on
+/// `connection(tx)`).
 pub fn transaction(
-  db: pog.Connection,
-  body: fn(pog.Connection) -> Result(a, Refusal),
+  db: Pool,
+  body: fn(Tx) -> Result(a, Refusal),
 ) -> Result(a, Failure) {
-  pog.transaction(db, body) |> result.map_error(failure_of)
+  in_transaction(db, body) |> result.map_error(failure_of)
 }
 
 fn failure_of(error: pog.TransactionError(Refusal)) -> Failure {
@@ -857,7 +900,8 @@ pub type BodyFailure(error) {
 ///   use waiting <- result.try(
 ///     decisions.recommend(desk, tx, proposal) |> decisions_postgres.desk,
 ///   )
-///   use Nil <- result.try(save_request(tx, waiting.id) |> result.map_error(Own))
+///   let own = decisions_postgres.connection(tx)
+///   use Nil <- result.try(save_request(own, waiting.id) |> result.map_error(Own))
 ///   Ok(waiting)
 /// })
 /// ```
@@ -882,10 +926,10 @@ pub type Failed(error) {
 /// `OwnFailed`. The transaction commits on `Ok` and rolls back
 /// otherwise.
 pub fn transaction_with(
-  db: pog.Connection,
-  body: fn(pog.Connection) -> Result(a, BodyFailure(error)),
+  db: Pool,
+  body: fn(Tx) -> Result(a, BodyFailure(error)),
 ) -> Result(a, Failed(error)) {
-  case pog.transaction(db, body) {
+  case in_transaction(db, body) {
     Ok(value) -> Ok(value)
     Error(pog.TransactionRolledBack(Own(error:))) -> Error(OwnFailed(error:))
     Error(pog.TransactionRolledBack(Desk(refusal:))) ->
@@ -906,10 +950,10 @@ pub fn transaction_with(
 /// isolated.recommend_when(desk, in: decisions_postgres.refusing(db, _), ..)
 /// ```
 pub fn refusing(
-  db: pog.Connection,
-  body: fn(pog.Connection) -> Result(a, Refusal),
+  db: Pool,
+  body: fn(Tx) -> Result(a, Refusal),
 ) -> Result(a, Refusal) {
-  case pog.transaction(db, body) {
+  case in_transaction(db, body) {
     Ok(value) -> Ok(value)
     Error(pog.TransactionRolledBack(refusal)) -> Error(refusal)
     Error(pog.TransactionQueryError(error)) ->
@@ -928,13 +972,13 @@ pub fn refusing(
 /// opened in an earlier request: a card opened inside the transaction that
 /// rolled back names a showing the record no longer holds.
 pub fn decide(
-  db: pog.Connection,
-  desk: Desk(o, pog.Connection),
-  card: fn(pog.Connection) -> Result(Card(o), Refusal),
+  db: Pool,
+  desk: Desk(o, Tx),
+  card: fn(Tx) -> Result(Card(o), Refusal),
   verdict: Verdict(o),
 ) -> Result(Occurrence(o), Failure) {
   let ran =
-    pog.transaction(db, fn(tx) {
+    in_transaction(db, fn(tx) {
       use card <- result.try(card(tx))
       decisions.decide(desk, tx, card, verdict)
     })
@@ -962,11 +1006,20 @@ pub fn decide(
 /// this by itself when a delivery finds the record unreadable.
 ///
 /// Returns the occurrence's point, or `None` when no such occurrence
-/// exists or it was set aside already.
+/// exists or it was set aside already. It is one statement, which commits
+/// by itself.
 pub fn set_aside(
-  tx: pog.Connection,
+  db: Pool,
   occurrence id: String,
   because reason: String,
+) -> Result(Option(String), StoreError) {
+  occurrence_aside(sql.pool_connection(db), id, reason)
+}
+
+fn occurrence_aside(
+  connection: pog.Connection,
+  id: String,
+  reason: String,
 ) -> Result(Option(String), StoreError) {
   pog.query(
     "WITH head AS (
@@ -986,7 +1039,7 @@ pub fn set_aside(
   |> pog.parameter(pog.text(id))
   |> pog.parameter(pog.text(reason))
   |> pog.returning(decode.at([0], decode.string))
-  |> sql.run(tx)
+  |> sql.run(connection)
   |> result.map(fn(rows) { list.first(rows) |> option.from_result })
 }
 
@@ -1000,7 +1053,7 @@ pub type WakeJob {
 
 /// One point's wake handler, as `decisions.waker(desk)` returns it.
 pub type Waker =
-  #(String, fn(pog.Connection, String) -> Result(Option(Timestamp), Refusal))
+  #(String, fn(Tx, String) -> Result(Option(Timestamp), Refusal))
 
 /// The Grind worker that delivers wake-ups. Register it with
 /// `grind.with_worker` on every node that should deliver them, with the
@@ -1222,7 +1275,7 @@ fn deliver_one(
           case pending {
             [] -> Ok(NothingPending)
             [at, ..] ->
-              case sql.rescue(fn() { waker(tx, input.occurrence) }) {
+              case sql.rescue(fn() { waker(Tx(tx), input.occurrence) }) {
                 Error(raised) -> Error(WakeRaised(raised))
                 Ok(Ok(None)) -> {
                   use _ <- result.try(
@@ -1349,10 +1402,11 @@ fn counted(
 /// same for settlement notices.
 pub fn deliver_due(
   store: Store,
-  db: pog.Connection,
+  db: Pool,
   wakers: List(Waker),
   limit limit: Int,
 ) -> Result(Int, StoreError) {
+  let db = sql.pool_connection(db)
   use due <- result.try(
     pog.query(
       "SELECT id, point, occurrence_id, decisions_ms(at) FROM decisions_wakes
@@ -1409,7 +1463,8 @@ pub type Swept {
 /// (two queries a row) and lists the queue's uncertain jobs once, so its
 /// cost grows with the pending rows. A storage failure, Grind's included,
 /// is an `Error`, never a row taken for one without a job.
-pub fn sweep(store: Store, db: pog.Connection) -> Result(Swept, StoreError) {
+pub fn sweep(store: Store, db: Pool) -> Result(Swept, StoreError) {
+  let db = sql.pool_connection(db)
   use wakes <- result.try(
     pog.query(
       "SELECT id, point, occurrence_id, decisions_ms(at), job_id
@@ -1708,7 +1763,7 @@ fn set_aside_occurrence(
   id: String,
   reason: String,
 ) -> Nil {
-  case set_aside(db, occurrence: id, because: reason) {
+  case occurrence_aside(db, id, reason) {
     Ok(Some(point)) ->
       emit_set_aside(store, telemetry.Occurrence, point, id, reason)
     _ -> Nil
@@ -1882,7 +1937,7 @@ pub type NoticeJob {
 /// in `decisions.DeskRefused`, and the application's own failure, such as
 /// a call to another system, in `decisions.ApplicationFailed`.
 pub type Follower =
-  #(String, fn(pog.Connection, String) -> Result(Nil, decisions.HandlerFailure))
+  #(String, fn(Tx, String) -> Result(Nil, decisions.HandlerFailure))
 
 /// The Grind worker that delivers settlement notices to what follows them.
 /// Register it with the follower of every point named with `following`.
@@ -2055,7 +2110,7 @@ fn notice_one(
             _ -> {
               // A follower that raises is an application failure.
               let followed = case
-                sql.rescue(fn() { follow(tx, input.occurrence) })
+                sql.rescue(fn() { follow(Tx(tx), input.occurrence) })
               {
                 Ok(followed) -> followed
                 Error(raised) ->
@@ -2133,10 +2188,11 @@ fn notice_one(
 /// follower's transaction.
 pub fn deliver_notices(
   store: Store,
-  db: pog.Connection,
+  db: Pool,
   followers: List(Follower),
   limit limit: Int,
 ) -> Result(Int, StoreError) {
+  let db = sql.pool_connection(db)
   use pending <- result.try(
     pog.query(
       "SELECT id, point, occurrence_id FROM decisions_settled

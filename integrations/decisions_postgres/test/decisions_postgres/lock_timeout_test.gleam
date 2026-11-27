@@ -46,16 +46,16 @@ fn hold(env: kit.Env, id: String, seconds: Int) -> Nil {
 
 fn read_with(
   env: kit.Env,
-  desk: decisions.Desk(String, pog.Connection),
+  desk: decisions.Desk(String, decisions_postgres.Tx),
   id: String,
   caller_timeout: option.Option(String),
 ) {
-  decisions_postgres.refusing(env.db, fn(tx) {
+  decisions_postgres.refusing(env.pool, fn(tx) {
     case caller_timeout {
       Some(value) -> {
         let assert Ok(_) =
           pog.query("SET LOCAL lock_timeout = '" <> value <> "'")
-          |> pog.execute(tx)
+          |> pog.execute(decisions_postgres.connection(tx))
         Nil
       }
       None -> Nil

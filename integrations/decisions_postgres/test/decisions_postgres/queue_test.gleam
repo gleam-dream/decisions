@@ -94,16 +94,16 @@ pub fn a_page_orders_by_due_time_and_leaves_out_what_is_not_mine_test() {
     kit.tx(env, kit.open_and_decide(four_desk, _, four_1, bia, Approve))
   let ids = fn(validator) {
     let assert Ok(page) =
-      queue.page(env.db, for: validator, limit: 50, after: None)
+      queue.page(env.pool, for: validator, limit: 50, after: None)
     list.map(page, fn(card) { card.occurrence })
   }
   assert ids(bia) == [short_1, short_2, long_1, open_1, asked.id]
   assert ids(caio) == [short_1, short_2, long_1, open_1, four_1]
   // Pages follow on from the last card.
   let assert Ok([first, second]) =
-    queue.page(env.db, for: caio, limit: 2, after: None)
+    queue.page(env.pool, for: caio, limit: 2, after: None)
   let assert Ok(rest) =
-    queue.page(env.db, for: caio, limit: 50, after: Some(second))
+    queue.page(env.pool, for: caio, limit: 50, after: Some(second))
   assert [
       first.occurrence,
       second.occurrence,
@@ -111,7 +111,7 @@ pub fn a_page_orders_by_due_time_and_leaves_out_what_is_not_mine_test() {
     ]
     == ids(caio)
   let assert Ok(next) =
-    queue.page(env.db, for: caio, limit: 2, after: Some(second))
+    queue.page(env.pool, for: caio, limit: 2, after: Some(second))
   assert list.map(next, fn(c) { c.occurrence }) == [long_1, open_1]
   // Neither card Caio may not decide is anywhere on his pages.
   assert !list.contains(ids(caio), asked.id)
@@ -163,16 +163,16 @@ pub fn counts_subjects_reviews_and_positions_test() {
       kit.finance("bia"),
       Approve,
     ))
-  let assert Ok(counts) = queue.counts(env.db, waiting.name)
+  let assert Ok(counts) = queue.counts(env.pool, waiting.name)
   assert counts
     == [queue.Count(store.Awaiting, 2), queue.Count(store.Released, 1)]
-  let assert Ok(about) = queue.about(env.db, subject, limit: 10)
+  let assert Ok(about) = queue.about(env.pool, subject, limit: 10)
   assert list.length(about) == 4
   let assert Ok(last) = list.last(about)
   assert last.occurrence == released.id
-  let assert Ok(reviews) = queue.review_queue(env.db, sampled.name, limit: 10)
+  let assert Ok(reviews) = queue.review_queue(env.pool, sampled.name, limit: 10)
   assert reviews == [released.id]
-  let assert Ok(positions) = queue.positions(env.db, [one, kit.tag("absent")])
+  let assert Ok(positions) = queue.positions(env.pool, [one, kit.tag("absent")])
   let assert [#(id, seq)] = positions
   assert id == one
   assert seq >= 4
@@ -210,11 +210,11 @@ pub fn point_pages_reviews_and_exports_test() {
   let _ = list.map(kit.int_range(3), fn(_) { recommend(other_desk, other) })
   let viewer = kit.finance(kit.tag("viewer"))
   let assert Ok(page) =
-    queue.page_at(env.db, point: one.name, for: viewer, limit: 3, after: None)
+    queue.page_at(env.pool, point: one.name, for: viewer, limit: 3, after: None)
   let assert Ok(last) = list.last(page)
   let assert Ok(rest) =
     queue.page_at(
-      env.db,
+      env.pool,
       point: one.name,
       for: viewer,
       limit: 50,
@@ -223,14 +223,14 @@ pub fn point_pages_reviews_and_exports_test() {
   assert list.map(list.append(page, rest), fn(c) { c.occurrence }) == mine
   // Reviews across points.
   let reviewed = recommend(sampled_desk, sampled)
-  let assert Ok(reviews) = queue.review_queue_all(env.db, limit: 1000)
+  let assert Ok(reviews) = queue.review_queue_all(env.pool, limit: 1000)
   assert list.any(reviews, fn(r) { r.occurrence == reviewed })
   // Every record of a point, two at a time.
   let all =
     page_through(
       fn(after) {
         let assert Ok(found) =
-          queue.occurrences_of(env.db, point: one.name, limit: 2, after:)
+          queue.occurrences_of(env.pool, point: one.name, limit: 2, after:)
         list.map(found, fn(r) { r.occurrence })
       },
       None,
@@ -238,7 +238,7 @@ pub fn point_pages_reviews_and_exports_test() {
     )
   assert all == list.sort(mine, string.compare)
   // Settled since a time: decide three, then read them in pages of two.
-  let since = decisions_postgres.port(store).now(env.db)
+  let since = kit.within(env, decisions_postgres.port(store).now)
   let decided =
     list.map(list.take(mine, 3), fn(id) {
       let assert Ok(_) =
@@ -246,11 +246,17 @@ pub fn point_pages_reviews_and_exports_test() {
       id
     })
   let assert Ok(first) =
-    queue.settled_since(env.db, point: one.name, since:, limit: 2, after: None)
+    queue.settled_since(
+      env.pool,
+      point: one.name,
+      since:,
+      limit: 2,
+      after: None,
+    )
   let assert Ok(last_settled) = list.last(first)
   let assert Ok(second) =
     queue.settled_since(
-      env.db,
+      env.pool,
       point: one.name,
       since:,
       limit: 2,
@@ -436,7 +442,7 @@ pub fn every_query_is_served_by_its_index_at_volume_test() {
   // cost is the plan above, and the scale run measures it.
   let assert Ok(page) =
     queue.page(
-      env.db,
+      env.pool,
       for: Validator("bia", ["set1", "set2"]),
       limit: 50,
       after: None,

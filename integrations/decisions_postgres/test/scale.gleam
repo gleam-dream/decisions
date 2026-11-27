@@ -76,9 +76,9 @@ pub fn main() -> Nil {
 
 fn h1(
   env: kit.Env,
-  desk: Desk(String, pog.Connection),
+  desk: Desk(String, decisions_postgres.Tx),
   point: String,
-  no_savepoint: Desk(String, pog.Connection),
+  no_savepoint: Desk(String, decisions_postgres.Tx),
 ) -> Nil {
   list.each([1, 4, 16], fn(processes) {
     let #(wall, latencies) =
@@ -129,7 +129,7 @@ fn h1_decomposed(point: String) -> Nil {
   let base = decisions_postgres.port(store)
   let node_clock = store.Port(..base, now: fn(_) { timestamp.system_time() })
   let bare = store.Port(..node_clock, atomically: fn(tx, body) { Ok(body(tx)) })
-  let run = fn(what: String, port: store.Port(pog.Connection)) {
+  let run = fn(what: String, port: store.Port(decisions_postgres.Tx)) {
     let desk = kit.desk_over(port, spec)
     let #(wall, latencies) =
       spread(3000, 1, fn(_) {
@@ -146,7 +146,7 @@ fn h1_decomposed(point: String) -> Nil {
   let clock_reads =
     list.map(kit.int_range(500), fn(_) {
       let started = kit.monotonic_us()
-      let _ = base.now(env.db)
+      let _ = kit.within(env, base.now)
       kit.monotonic_us() - started
     })
   report_latency(
@@ -174,7 +174,11 @@ fn h1_decomposed(point: String) -> Nil {
 
 // -- H2 -----------------------------------------------------------------------------
 
-fn h2(env: kit.Env, desk: Desk(String, pog.Connection), point: String) -> Nil {
+fn h2(
+  env: kit.Env,
+  desk: Desk(String, decisions_postgres.Tx),
+  point: String,
+) -> Nil {
   let made =
     collect(10_000, 16, fn(_) {
       let assert Ok(made) =
@@ -189,7 +193,7 @@ fn h2(env: kit.Env, desk: Desk(String, pog.Connection), point: String) -> Nil {
     list.map(kit.int_range(200), fn(_) {
       let started = kit.monotonic_us()
       let assert Ok(page) =
-        queue.page(env.db, for: viewer, limit: 50, after: None)
+        queue.page(env.pool, for: viewer, limit: 50, after: None)
       let assert 50 = list.length(page)
       kit.monotonic_us() - started
     })
@@ -219,7 +223,11 @@ fn h2(env: kit.Env, desk: Desk(String, pog.Connection), point: String) -> Nil {
 
 // -- H3 -----------------------------------------------------------------------------
 
-fn h3(env: kit.Env, desk: Desk(String, pog.Connection), point: String) -> Nil {
+fn h3(
+  env: kit.Env,
+  desk: Desk(String, decisions_postgres.Tx),
+  point: String,
+) -> Nil {
   let port = decisions_postgres.port(env.store)
   list.each([10, 100, 1000], fn(size) {
     let assert Ok(made) =
@@ -256,7 +264,7 @@ fn h3(env: kit.Env, desk: Desk(String, pog.Connection), point: String) -> Nil {
     let loads =
       list.map(kit.int_range(40), fn(_) {
         let started = kit.monotonic_us()
-        let assert Ok(rows) = port.load(env.db, made.id)
+        let assert Ok(rows) = kit.within(env, port.load(_, made.id))
         let assert True = list.length(rows) == size
         kit.monotonic_us() - started
       })
@@ -323,7 +331,7 @@ fn h5(env: kit.Env, store: decisions_postgres.Store, held: kit.Spec) -> Nil {
   // Every hold is created with the store's clock frozen at `start`, so all
   // 5 000 end at the same millisecond, `start + 12 s`.
   let port = decisions_postgres.port(store)
-  let start = port.now(env.db)
+  let start = kit.within(env, port.now)
   let frozen = store.Port(..port, now: fn(_) { start })
   let creating =
     kit.desk_over(frozen, kit.Spec(..held, hold: Some(duration.seconds(12))))
@@ -370,10 +378,10 @@ fn wire_ms(at: timestamp.Timestamp) -> Int {
 /// The database's half of a replay: read 10 000 records (load, decode and
 /// fold), with 1 and 16 processes. The candidate itself is pure and runs
 /// in `decisions/learning` and `decisions_otp/replay`.
-fn h6(env: kit.Env, desk: Desk(String, pog.Connection)) -> Nil {
+fn h6(env: kit.Env, desk: Desk(String, decisions_postgres.Tx)) -> Nil {
   let point = decisions.name(decisions.point_of(desk))
   let assert Ok(ids) =
-    decisions_postgres.inspection().occurrences(env.db, point)
+    kit.within(env, decisions_postgres.inspection().occurrences(_, point))
   let ids = list.take(ids, 10_000)
   list.each([1, 16], fn(processes) {
     let shares = chunk(ids, processes)
@@ -382,7 +390,8 @@ fn h6(env: kit.Env, desk: Desk(String, pog.Connection)) -> Nil {
       kit.race(processes, 600_000, fn(n) {
         let assert Ok(share) = list.drop(shares, n) |> list.first
         list.each(share, fn(id) {
-          let assert Ok(_) = decisions.read(desk, env.db, occurrence: id)
+          let assert Ok(_) =
+            kit.tx(env, decisions.read(desk, _, occurrence: id))
         })
       })
     let wall = kit.monotonic_us() - started
@@ -404,7 +413,7 @@ fn h6(env: kit.Env, desk: Desk(String, pog.Connection)) -> Nil {
 
 fn notify_latency(
   env: kit.Env,
-  desk: Desk(String, pog.Connection),
+  desk: Desk(String, decisions_postgres.Tx),
   point: String,
 ) -> Nil {
   let assert Ok(started) = live.start(env.config)
