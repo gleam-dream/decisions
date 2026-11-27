@@ -22,7 +22,7 @@ The application owns the pool and the Grind runtime. In this order:
 1. Run `migrate(db)` at deploy time with a role that may own DDL, or apply the
    SQL in `priv/migrations` with the application's tool, before any worker
    polls. Choose one migration owner per schema. Grind's own schema is
-   Grind's to migrate, and must be at version 14 or later (Grind 0.2):
+   Grind's to migrate, and must be at version 15 or later (Grind 0.3):
    `grind.migrate`, `grind.with_startup_migration`, or Grind's migration
    files in the application's tool.
 2. Build a store with `decisions_postgres.new(grind.named(name))`; the handle
