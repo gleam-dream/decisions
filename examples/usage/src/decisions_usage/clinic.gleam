@@ -5,7 +5,7 @@
 // snips-start: refund-point
 import decisions.{type Gated, type Point, Gated}
 import decisions/fact
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{type Policy}
 import decisions/vocabulary.{ApproveRejectOrCorrect, Subject, Validator}
 import decisions/wire
@@ -43,7 +43,7 @@ pub fn refund_point() -> Point(Refund) {
 
 /// The gated tool. Its executor accepts nothing but a released refund, so
 /// no other code path can refund a fee.
-pub fn refund_fee() -> Gated(Refund, Memory) {
+pub fn refund_fee() -> Gated(Refund, Tx) {
   Gated(
     name: "refund_fee",
     guard: fn(_tx, _subject) { Ok([]) },
@@ -71,7 +71,7 @@ pub const dora = Validator(subject: "dora", holds: ["finance", "managers"])
 
 /// What the refund tool wrote for a fee, if anything.
 pub fn refunded(store: Memory, fee: String) -> Result(Int, Nil) {
-  case memory.get(store, "refunded:" <> fee) {
+  case memory.transaction(store, memory.get(_, "refunded:" <> fee)) {
     Ok(cents) -> int.parse(cents)
     Error(Nil) -> Error(Nil)
   }

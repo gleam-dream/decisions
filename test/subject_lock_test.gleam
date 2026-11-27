@@ -2,7 +2,7 @@
 //// lock before it reads `waiting` and before any record's lock.
 
 import decisions.{Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/policy.{AnyoneHolding}
 import decisions/store
 import decisions/vocabulary.{
@@ -17,20 +17,20 @@ import support/world
 
 const subject = Subject("contact", "c-1")
 
-fn log(tx: Memory, call: String) -> Nil {
+fn log(tx: Tx, call: String) -> Nil {
   let before = memory.get(tx, "calls") |> result.unwrap("")
   memory.put(tx, "calls", before <> call <> "\n")
 }
 
 fn calls(db: Memory) -> List(String) {
-  memory.get(db, "calls")
+  world.commit(db, memory.get(_, "calls"))
   |> result.unwrap("")
   |> string.split("\n")
   |> list.filter(fn(line) { line != "" })
 }
 
 /// The memory port, writing down each `load` and `waiting` it serves.
-fn watched() -> store.Port(Memory) {
+fn watched() -> store.Port(Tx) {
   let p = memory.port()
   store.Port(
     ..p,
@@ -92,7 +92,7 @@ fn seeded() -> Memory {
       trigger: Trigger("message", "m2"),
       about: subject,
     ))
-  memory.put(db, "calls", "")
+  world.commit(db, memory.put(_, "calls", ""))
   db
 }
 
@@ -190,7 +190,7 @@ pub fn happened_loads_each_record_once_test() {
       trigger: Trigger("message", "e"),
       about: subject,
     ))
-  memory.put(db, "calls", "")
+  world.commit(db, memory.put(_, "calls", ""))
   let assert Ok(decisions.Supersession(expired:, not_begun: ["reply:e"], ..)) =
     memory.transaction(db, decisions.happened(
       d,

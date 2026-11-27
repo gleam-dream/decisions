@@ -6,7 +6,7 @@
 //// the release's key and reports what became of it.
 
 import decisions.{type Desk, type Gated, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding}
@@ -28,24 +28,24 @@ import support/world.{type World}
 
 /// The provider keeps one payout per key, whatever it is sent.
 fn provider_pay(w: World, key: String, payout: Payout) -> String {
-  case memory.get(w.outside, "paid:" <> key) {
+  case world.commit(w.outside, memory.get(_, "paid:" <> key)) {
     Ok(receipt) -> receipt
     Error(Nil) -> {
-      world.push(w.outside, "provider_payouts", payout.to)
+      world.commit(w.outside, world.push(_, "provider_payouts", payout.to))
       let receipt = "rcpt-" <> key
-      memory.put(w.outside, "paid:" <> key, receipt)
+      world.commit(w.outside, memory.put(_, "paid:" <> key, receipt))
       receipt
     }
   }
 }
 
 fn provider_lookup(w: World, key: String) -> Result(String, Nil) {
-  memory.get(w.outside, "paid:" <> key)
+  world.commit(w.outside, memory.get(_, "paid:" <> key))
 }
 
 /// "Is the account open?" Only the provider knows, and it may be down.
 fn provider_account(w: World) -> Result(String, String) {
-  memory.get(w.outside, "account")
+  world.commit(w.outside, memory.get(_, "account"))
   |> result.replace_error("the provider did not answer")
 }
 
@@ -69,7 +69,7 @@ fn check_account(w: World) -> Result(Ref, String) {
       json.to_string(
         json.object([
           #("evidence", wire.ref(captured.ref)),
-          #("at", wire.time(memory.now(tx))),
+          #("at", wire.time(world.clock(tx))),
         ]),
       ),
     )
@@ -77,7 +77,7 @@ fn check_account(w: World) -> Result(Ref, String) {
   })
 }
 
-fn pay_at_provider() -> Gated(Payout, Memory) {
+fn pay_at_provider() -> Gated(Payout, Tx) {
   Gated(
     name: "pay_at_provider",
     // D2. The guard reads the captured answer, not the network, and says
@@ -101,7 +101,7 @@ fn pay_at_provider() -> Gated(Payout, Memory) {
         Ok(#(evidence, at)) -> {
           let fresh =
             timestamp.compare(
-              memory.now(tx),
+              world.clock(tx),
               timestamp.add(at, duration.minutes(5)),
             )
             == order.Lt
@@ -135,7 +135,7 @@ fn pay_at_provider() -> Gated(Payout, Memory) {
   )
 }
 
-fn desk() -> Desk(Payout, Memory) {
+fn desk() -> Desk(Payout, Tx) {
   decisions.desk(
     payout.point(),
     drives: fn(_) { pay_at_provider() },
@@ -173,7 +173,7 @@ fn approved(w: World, key: String) -> String {
 
 pub fn the_release_names_the_evidence_its_guard_relied_on_test() {
   let w = world.new()
-  memory.put(w.outside, "account", "open")
+  world.commit(w.outside, memory.put(_, "account", "open"))
   let assert Ok(evidence) = check_account(w)
   let _ = approved(w, "payout-20")
   assert occurrence.relied(world.read(w, desk(), "payout-20")) == [evidence]
@@ -206,7 +206,7 @@ pub fn a_provider_that_is_down_refuses_the_release_and_says_so_test() {
   assert memory.queue(w.db, "finance") == ["payout-21"]
 
   // The provider returns. Stale evidence is refused too.
-  memory.put(w.outside, "account", "open")
+  world.commit(w.outside, memory.put(_, "account", "open"))
   let assert Ok(_) = check_account(w)
   world.at(w, duration.minutes(6))
   assert result.map_error(decide(), decisions.describe)
@@ -220,10 +220,10 @@ pub fn a_provider_that_is_down_refuses_the_release_and_says_so_test() {
 /// the answer. The instruction is still there, so it is delivered again.
 pub fn a_worker_lost_after_the_provider_accepted_pays_once_test() {
   let w = world.new()
-  memory.put(w.outside, "account", "open")
+  world.commit(w.outside, memory.put(_, "account", "open"))
   let assert Ok(_) = check_account(w)
   let key = approved(w, "payout-22")
-  let assert Ok(_) = memory.get(w.db, "instruction:" <> key)
+  let assert Ok(_) = world.commit(w.db, memory.get(_, "instruction:" <> key))
 
   // First delivery: the call succeeds and the worker is lost.
   let _ = provider_pay(w, key, Payout("clinica-x", 50_000))
@@ -246,7 +246,7 @@ pub fn a_worker_lost_after_the_provider_accepted_pays_once_test() {
 /// (b) The call times out. Nobody knows whether the provider paid.
 pub fn an_unknown_outcome_is_recorded_and_settled_by_looking_test() {
   let w = world.new()
-  memory.put(w.outside, "account", "open")
+  world.commit(w.outside, memory.put(_, "account", "open"))
   let assert Ok(_) = check_account(w)
   let key = approved(w, "payout-23")
 

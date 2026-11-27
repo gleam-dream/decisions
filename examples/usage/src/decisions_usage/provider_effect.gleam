@@ -5,7 +5,7 @@
 
 // snips-start: provider-effect
 import decisions.{type Gated, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/vocabulary.{
   type Effect, Agent, Approve, Manifest, NotPerformed, Performed, Recommendation,
@@ -19,7 +19,7 @@ import gleam/result
 
 /// The tool writes the instruction; the release's key is the idempotency
 /// key the provider will be sent.
-pub fn instruct() -> Gated(Refund, Memory) {
+pub fn instruct() -> Gated(Refund, Tx) {
   Gated(
     name: "refund_at_provider",
     guard: fn(_, _) { Ok([]) },
@@ -35,7 +35,7 @@ pub fn instruct() -> Gated(Refund, Memory) {
   )
 }
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_) { instruct() },
@@ -91,7 +91,8 @@ pub fn run() -> List(String) {
       decisions.decide(desk(), tx, card, Approve)
     })
   let assert occurrence.Released(key:, ..) = released.status
-  let assert Ok(_) = memory.get(store, "instruction:" <> key)
+  let assert Ok(_) =
+    memory.transaction(store, memory.get(_, "instruction:" <> key))
   let assert Ok(_) = record(store, waiting.id, key, NoAnswer)
   let assert Ok(_) = record(store, waiting.id, key, Paid("rcpt-881"))
   let assert Ok(known) =

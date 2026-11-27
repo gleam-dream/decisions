@@ -8,11 +8,11 @@ package exposes types of those libraries (`json_blueprint`'s `Codec` in
 modules, Grind's `Grind` in `decisions_postgres.new`), so an application must
 move to the same majors.
 
-| Package              | From  | To    | What changes for the application                                                                                                 |
-| -------------------- | ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person                          |
-| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; a verb runs only in a transaction; ids are UUIDs; accepts core 0.2 |
-| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; a verb runs only in a transaction; accepts core 0.2                     |
+| Package              | From  | To    | What changes for the application                                                                                                                                 |
+| -------------------- | ----- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decisions`          | 0.1.1 | 0.2.0 | json_blueprint 3; card documents encode outputs of any depth and size; a policy's default asks a person; a verb on `decisions/memory` runs only in a transaction |
+| `decisions_otp`      | 0.1.1 | 0.2.0 | Sinal 0.2: a handler belongs to the process that attached it; a verb runs only in a transaction; ids are UUIDs; accepts core 0.2                                 |
+| `decisions_postgres` | 0.2.1 | 0.3.0 | Sinal 0.2 as above; Grind 0.3 and its schema version 15; a verb runs only in a transaction; accepts core 0.2                                                     |
 
 ## Install
 
@@ -281,6 +281,42 @@ conformance.Adapter(port:, inspect:, handle: store,
 conformance.Adapter(port:, inspect:,
   transaction: fn(body) { memory.transaction(store, body) }, cleanup:)
 ```
+
+### A verb on the in-memory store runs only in a transaction
+
+`decisions/memory` has a transaction type, `memory.Tx`, which only
+`memory.transaction` makes. In 0.1 the `Memory` was also the port's
+transaction value, so a verb called on it outside `transaction` kept whatever
+it wrote before it failed: a release that ran the tool and appended its
+entries, then failed on the settlement notice, left the record and the effect
+behind. Now `memory.port()`, `memory.inspection()` and `memory.evidence()` are
+over `Tx`, and so are a desk, a gated tool and an audit built on them.
+
+```gleam
+// Before (0.1)
+let desk: Desk(Refund, Memory) = decisions.desk(point, .., over: memory.port())
+decisions.read(desk, store, occurrence: id)
+memory.put(store, "account", "open")
+memory.get(store, "account")
+testing.check(store, memory.inspection(), audits)
+
+// After (0.2)
+let desk: Desk(Refund, Tx) = decisions.desk(point, .., over: memory.port())
+memory.transaction(store, decisions.read(desk, _, occurrence: id))
+memory.transaction(store, fn(tx) { Ok(memory.put(tx, "account", "open")) })
+memory.transaction(store, memory.get(_, "account"))
+memory.transaction(store, testing.check(_, memory.inspection(), audits))
+```
+
+- The reads a test makes outside a verb take the `Memory`: `queue`,
+  `queue_for`, `review_queue`, `entries`, `heads`, `wakes`, `notices` and the
+  clock's `now`. The test controls `set_clock`, `advance`, `take_due`,
+  `snooze`, `tamper` and `restart` take it too.
+- Application rows (`get`, `put`) stay on `Tx`, as in `decisions_otp`: a gated
+  tool reads and writes them in the transaction that releases it. Inside a
+  tool, read the clock through the port, `memory.port().now(tx)`.
+- `model.capture(memory.evidence(), ..)` takes a `Tx`: capture a read in a
+  transaction of its own, `memory.transaction(store, model.capture(memory.evidence(), _, ..))`.
 
 ### The store's clock can fail, and a lock timeout is a `LockTimeout`
 

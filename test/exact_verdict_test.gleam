@@ -15,6 +15,7 @@ import gleam/result
 import gleam/string
 import json/blueprint/codec
 import json/blueprint/number.{type Number}
+import support/world
 
 const exact = "12345678901234567.89"
 
@@ -115,7 +116,8 @@ pub fn an_exact_correction_reaches_the_tool_unchanged_test() {
     memory.transaction(db, decisions.read(desk, _, occurrence: made.id))
   let assert occurrence.Released(final:, ..) = read_back.status
   assert number.compare(final, amount(exact)) == order.Eq
-  assert memory.get(db, "paid") == Ok(number.to_string(amount(exact)))
+  assert world.commit(db, memory.get(_, "paid"))
+    == Ok(number.to_string(amount(exact)))
 }
 
 /// A recommendation may carry an exact number beyond a float's precision

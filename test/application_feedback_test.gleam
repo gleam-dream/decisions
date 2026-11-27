@@ -4,7 +4,7 @@
 import decisions.{type Desk, Gated}
 import decisions/fact
 import decisions/learning
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Either, Never, Proceed, Several, When}
@@ -40,7 +40,7 @@ fn tool() {
   })
 }
 
-fn desk(point, p) -> Desk(String, Memory) {
+fn desk(point, p) -> Desk(String, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { tool() },
@@ -108,7 +108,10 @@ pub fn a_one_finance_approval_is_not_enough_two_are_test() {
   let assert occurrence.Released(..) = after_two.status
   assert world.all(db, "paid") == ["12000"]
   let assert Ok(_) =
-    testing.check(db, memory.inspection(), [testing.audit_record(d)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(d)]),
+    )
 }
 
 pub fn a_one_head_approval_is_enough_test() {
@@ -724,12 +727,15 @@ pub fn n_a_model_as_a_stage_and_a_revision_now_test() {
   // The revision a capture gives is what `digest` gives the same content.
   let db = world.new().db
   let assert Ok(captured) =
-    model.capture(
-      memory.evidence(),
+    world.commit(
       db,
-      source: "balance",
-      request: "x",
-      fetch: fn() { Ok("80.00") },
+      model.capture(
+        memory.evidence(),
+        _,
+        source: "balance",
+        request: "x",
+        fetch: fn() { Ok("80.00") },
+      ),
     )
   assert captured.ref.revision == model.digest("80.00")
 }

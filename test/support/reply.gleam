@@ -2,7 +2,7 @@
 //// `send_message`.
 
 import decisions.{type Desk, type Gated, type Point, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
 import decisions/vocabulary.{
@@ -30,7 +30,7 @@ pub fn point() -> Point(String) {
 
 /// The guard is the service window: 24 hours from the customer's latest
 /// message. It reads the subject and the world, and nothing of the text.
-pub fn send_message() -> Gated(String, Memory) {
+pub fn send_message() -> Gated(String, Tx) {
   Gated(
     name: "send_message",
     guard: fn(tx, subject) {
@@ -40,7 +40,7 @@ pub fn send_message() -> Gated(String, Memory) {
         |> result.unwrap(0)
       let closes =
         timestamp.add(wire.from_milliseconds(latest), duration.hours(24))
-      case timestamp.compare(memory.now(tx), closes) {
+      case timestamp.compare(world.clock(tx), closes) {
         order.Lt -> Ok([])
         _ -> Error(vocabulary.Refuse("the service window is closed"))
       }
@@ -53,7 +53,7 @@ pub fn send_message() -> Gated(String, Memory) {
 
 /// The first policy of every decision point: a person's own act proceeds,
 /// anything else asks a person.
-pub fn desk() -> Desk(String, Memory) {
+pub fn desk() -> Desk(String, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) { send_message() },
@@ -80,7 +80,7 @@ pub fn draft(
       memory.put(
         tx,
         "latest_inbound:ana",
-        int.to_string(wire.milliseconds(memory.now(tx))),
+        int.to_string(wire.milliseconds(world.clock(tx))),
       )
       decisions.recommend(
         desk(),

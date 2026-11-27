@@ -2,7 +2,7 @@
 //// policy alone.
 
 import decisions.{type Desk, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{
   type Policy, AnyoneHolding, Never, OwnAct, Proceed, SomeoneElseHolding, When,
@@ -19,7 +19,7 @@ import support/world.{type World}
 
 /// The desk reads its policy from the database in the caller's
 /// transaction. Publishing a version is a write.
-fn desk() -> Desk(String, Memory) {
+fn desk() -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("registry.back_override", wire.text()),
     drives: fn(_) {
@@ -44,11 +44,11 @@ fn desk() -> Desk(String, Memory) {
 }
 
 fn publish(w: World, version: Policy) -> Nil {
-  memory.put(
-    w.db,
+  world.commit(w.db, memory.put(
+    _,
     "policy:registry.back_override",
     json.to_string(policy.to_json(version)),
-  )
+  ))
 }
 
 /// The one code path for an override. Nothing in it knows the policy.

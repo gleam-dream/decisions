@@ -4,7 +4,7 @@
 
 import decisions
 import decisions/entry
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Never, OwnAct, Proceed, When}
@@ -86,7 +86,7 @@ pub fn defect_2_entries_are_stored_in_time_order_test() {
   let waiting = request(plain, w, "fee-2")
   let base = memory.port()
   let interleaving =
-    store.Port(..base, load: fn(tx: Memory, id) {
+    store.Port(..base, load: fn(tx: Tx, id) {
       case memory.get(tx, "interleave") {
         Ok("yes") -> {
           memory.put(tx, "interleave", "")
@@ -113,7 +113,7 @@ pub fn defect_2_entries_are_stored_in_time_order_test() {
       under: fn(_) { Ok(ask()) },
       over: interleaving,
     )
-  memory.put(w.db, "interleave", "yes")
+  world.commit(w.db, memory.put(_, "interleave", "yes"))
   let assert Ok(_) =
     world.in_tx(w, fn(tx) {
       decisions.open(
@@ -202,11 +202,11 @@ pub fn defect_5_admission_loads_and_locks_the_key_first_test() {
   let logged =
     store.Port(
       ..base,
-      load: fn(tx: Memory, id) {
+      load: fn(tx: Tx, id) {
         world.push(tx, "calls", "load " <> id)
         base.load(tx, id)
       },
-      append: fn(tx: Memory, id, head, entries) {
+      append: fn(tx: Tx, id, head, entries) {
         world.push(tx, "calls", "append " <> id)
         base.append(tx, id, head, entries)
       },

@@ -3,7 +3,7 @@
 
 import decisions.{type Desk, type Point, Gated}
 import decisions/fact.{type Key}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding, Never, Proceed, When}
 import decisions/vocabulary.{
@@ -63,7 +63,7 @@ fn policy() {
   )
 }
 
-fn desk() -> Desk(Promotion, Memory) {
+fn desk() -> Desk(Promotion, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) {
@@ -155,7 +155,7 @@ pub fn production_asks_and_an_incident_during_the_canary_stops_it_test() {
   // An incident opens during the canary. The guard is checked again at
   // release, against the world as it is then.
   world.at(w, duration.minutes(4))
-  memory.put(w.db, "incident:api", "INC-9")
+  world.commit(w.db, memory.put(_, "incident:api", "INC-9"))
   world.at(w, duration.minutes(10))
   assert world.deliver_due(w, [decisions.waker(desk())]) == 1
   assert world.read(w, desk(), production.id).status

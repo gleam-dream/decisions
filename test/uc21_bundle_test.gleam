@@ -6,7 +6,7 @@
 //// the bundle has settled.
 
 import decisions.{type Desk, Gated}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Never, Proceed}
 import decisions/store
@@ -25,7 +25,7 @@ import gleam/time/timestamp
 import support/policies
 import support/world.{type World}
 
-fn line_desk() -> Desk(String, Memory) {
+fn line_desk() -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.line", wire.text()),
     drives: fn(_) { tool("lines_paid") },
@@ -42,7 +42,7 @@ fn line_desk() -> Desk(String, Memory) {
 
 /// A second point in the same bundle: the receipt is filed without a
 /// person.
-fn receipt_desk() -> Desk(String, Memory) {
+fn receipt_desk() -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.receipt", wire.text()),
     drives: fn(_) { tool("receipts_filed") },
@@ -57,7 +57,7 @@ fn receipt_desk() -> Desk(String, Memory) {
   )
 }
 
-fn payout_desk() -> Desk(String, Memory) {
+fn payout_desk() -> Desk(String, Tx) {
   decisions.desk(
     decisions.point("expense.payout", wire.text()),
     drives: fn(_) { tool("payouts") },
@@ -77,7 +77,7 @@ fn bundle(key: String, size: Int) -> Bundle {
   made
 }
 
-fn tool(table: String) -> decisions.Gated(String, Memory) {
+fn tool(table: String) -> decisions.Gated(String, Tx) {
   Gated(name: table, guard: fn(_, _) { Ok([]) }, execute: fn(tx, released) {
     Ok(world.push(tx, table, decisions.output(released)))
   })
@@ -115,7 +115,7 @@ fn admit_lines(w: World) -> List(String) {
 /// What the line point's follower does with each settlement notice: when
 /// the bundle is complete, recommend the payout under a key derived from
 /// the bundle, so a second follower that sees it complete adds nothing.
-fn follow(tx: Memory, bundle: String) -> Result(Nil, decisions.Refusal) {
+fn follow(tx: Tx, bundle: String) -> Result(Nil, decisions.Refusal) {
   use members <- result.try(decisions.members(line_desk(), tx, bundle:))
   case decisions.is_complete(members) {
     False -> Ok(Nil)
@@ -372,9 +372,12 @@ pub fn the_invariant_checker_catches_a_bundle_that_disagrees_test() {
   admit("a", 2)
   admit("b", 3)
   let assert Error(violations) =
-    testing.check(w.db, memory.inspection(), [
-      testing.audit(receipt_desk(), effects: world.effects("receipts_filed")),
-    ])
+    memory.transaction(
+      w.db,
+      testing.check(_, memory.inspection(), [
+        testing.audit(receipt_desk(), effects: world.effects("receipts_filed")),
+      ]),
+    )
   assert list.map(violations, fn(v) { v.invariant }) == ["I9"]
 }
 
@@ -487,9 +490,12 @@ pub fn i9_reports_a_head_it_cannot_read_test() {
       }
     })
   let assert Error(violations) =
-    testing.check(w.db, failing, [
-      testing.audit(line_desk(), effects: world.effects("lines_paid")),
-    ])
+    memory.transaction(
+      w.db,
+      testing.check(_, failing, [
+        testing.audit(line_desk(), effects: world.effects("lines_paid")),
+      ]),
+    )
   assert list.any(violations, fn(v) {
     v.invariant == "I9" && v.occurrence == "report-7/l2"
   })

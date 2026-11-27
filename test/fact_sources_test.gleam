@@ -41,7 +41,7 @@ fn score() -> fact.Key(Float) {
 
 /// "Consult compliance until it has cleared the payment; proceed once it
 /// has."
-fn compliance_desk() -> decisions.Desk(String, memory.Memory) {
+fn compliance_desk() -> decisions.Desk(String, memory.Tx) {
   let assert Ok(p) =
     policy.new(
       version: 1,

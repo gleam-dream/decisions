@@ -4,7 +4,7 @@
 
 // snips-start: first-point
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{AnyoneHolding}
 import decisions/vocabulary.{
@@ -24,7 +24,7 @@ pub fn always_ask() -> policy.Policy {
 
 /// The desk binds the point to its gated tool, its policy and a store. It
 /// is a plain value; build it wherever it is needed.
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_refund) { clinic.refund_fee() },

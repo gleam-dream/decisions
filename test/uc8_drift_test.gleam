@@ -1,7 +1,7 @@
 //// Use case 8: drift while waiting, a restart, the guard checked again.
 
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/store.{Notice}
 import decisions/vocabulary.{type Manifest, type Ref, Approve, Manifest, Ref}
@@ -22,12 +22,13 @@ fn build_context(db: Memory, message: String) -> Manifest {
 }
 
 fn current_revision(db: Memory, kind: String, id: String) -> String {
-  memory.get(db, kind <> ":" <> id) |> result.unwrap("1")
+  world.commit(db, memory.get(_, kind <> ":" <> id)) |> result.unwrap("1")
 }
 
-fn latest(db: Memory) -> fn(Ref) -> String {
+fn latest(tx: Tx) -> fn(Ref) -> String {
   fn(ref: Ref) {
-    memory.get(db, ref.kind <> ":" <> ref.id) |> result.unwrap(ref.revision)
+    memory.get(tx, ref.kind <> ":" <> ref.id)
+    |> result.unwrap(ref.revision)
   }
 }
 
@@ -44,7 +45,7 @@ pub fn a_stale_draft_is_refused_and_the_follow_on_reads_the_current_world_test()
     world.read(w, reply.desk(), drafted.id).status
 
   // Ana's profile is revised.
-  memory.put(w.db, "profile:ana", "2")
+  world.commit(w.db, memory.put(_, "profile:ana", "2"))
 
   // Two seconds before the window closes, Felipe opens the card.
   world.at(w, duration.seconds(24 * 3600 - 2))

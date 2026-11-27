@@ -462,7 +462,10 @@ pub fn a_dropped_wake_up_of_a_record_not_begun_is_reported_test() {
   let assert [_] = memory.take_due(w.db)
   memory.set_clock(w.db, world.t0())
   let assert Error([testing.Violation(invariant: "I5", ..)]) =
-    testing.check(w.db, memory.inspection(), [testing.audit_record(desk())])
+    memory.transaction(
+      w.db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk())]),
+    )
 }
 
 pub fn the_lapsed_record_is_counted_in_coverage_test() {

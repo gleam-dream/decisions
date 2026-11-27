@@ -6,7 +6,7 @@ import decisions.{type Desk, Gated}
 import decisions/entry
 import decisions/fact
 import decisions/learning
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/model
 import decisions/occurrence
 import decisions/policy.{
@@ -53,7 +53,7 @@ fn tool() {
   )
 }
 
-fn desk_with(point, p) -> Desk(String, Memory) {
+fn desk_with(point, p) -> Desk(String, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { tool() },
@@ -427,7 +427,7 @@ pub fn c8_the_clock_is_read_after_the_lock_test() {
     fn(tx) { decisions.read(desk, tx, w.id) |> result.replace(Nil) },
   ]
   list.each(verbs, fn(verb) {
-    memory.put(db, "calls", "[]")
+    world.commit(db, memory.put(_, "calls", "[]"))
     let assert Ok(Nil) = memory.transaction(db, verb)
     let assert ["load", "now", ..] = first()
   })
@@ -447,11 +447,17 @@ pub fn c10_the_checker_sees_missing_wake_ups_and_a_wrong_head_test() {
   let assert Ok(_) =
     memory.transaction(db, decisions.recommend(desk, _, proposal("100")))
   let assert Ok(_) =
-    testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk)]),
+    )
   memory.set_clock(db, timestamp.add(world.t0(), duration.hours(2)))
   let _ = memory.take_due(db)
   let assert Error([testing.Violation(invariant: "I5", ..)]) =
-    testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk)]),
+    )
 
   let db = fresh()
   let base = memory.port()
@@ -469,7 +475,10 @@ pub fn c10_the_checker_sees_missing_wake_ups_and_a_wrong_head_test() {
   let assert Ok(_) =
     memory.transaction(db, decisions.recommend(skewed, _, proposal("100")))
   let assert Error([testing.Violation(invariant: "I8", ..)]) =
-    testing.check(db, memory.inspection(), [testing.audit_record(desk)])
+    memory.transaction(
+      db,
+      testing.check(_, memory.inspection(), [testing.audit_record(desk)]),
+    )
 }
 
 /// C11. Each judged occurrence counts once toward agreement, against what

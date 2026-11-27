@@ -2,7 +2,7 @@
 
 import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/fact.{type Key}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/model.{type Model, type Sources, type Stage, Sources}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{type Policy, AnyoneHolding, PerCent, Proceed, When}
@@ -30,7 +30,7 @@ pub fn point() -> Point(String) {
 }
 
 /// Storing a class is this point's gated tool: no other code path writes one.
-pub fn store_class() -> Gated(String, Memory) {
+pub fn store_class() -> Gated(String, Tx) {
   Gated(
     name: "store_class",
     guard: fn(_, _) { Ok([]) },
@@ -57,7 +57,7 @@ pub fn always_ask() -> Policy {
   policies.checked(version: 0, rules: [], otherwise: AnyoneHolding("finance"))
 }
 
-pub fn desk(policy: Policy) -> Desk(String, Memory) {
+pub fn desk(policy: Policy) -> Desk(String, Tx) {
   decisions.desk(
     point(),
     drives: fn(_) { store_class() },

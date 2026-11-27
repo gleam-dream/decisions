@@ -4,7 +4,7 @@
 
 // snips-start: either-several
 import decisions
-import decisions/memory.{type Memory}
+import decisions/memory.{type Memory, type Tx}
 import decisions/occurrence
 import decisions/policy.{AnyoneHolding, Either, Several}
 import decisions/vocabulary.{
@@ -16,7 +16,7 @@ import gleam/result
 
 pub const head_of_finance = Validator(subject: "lia", holds: ["head_of_finance"])
 
-pub fn desk() -> decisions.Desk(Refund, Memory) {
+pub fn desk() -> decisions.Desk(Refund, Tx) {
   decisions.desk(
     clinic.refund_point(),
     drives: fn(_) { clinic.refund_fee() },

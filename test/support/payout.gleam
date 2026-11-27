@@ -2,7 +2,7 @@
 
 import decisions.{type Desk, type Gated, type Point, Gated}
 import decisions/fact.{type Key}
-import decisions/memory.{type Memory}
+import decisions/memory.{type Tx}
 import decisions/occurrence.{type Occurrence}
 import decisions/policy.{type Policy}
 import decisions/vocabulary.{
@@ -40,7 +40,7 @@ pub fn point() -> Point(Payout) {
   })
 }
 
-pub fn pay() -> Gated(Payout, Memory) {
+pub fn pay() -> Gated(Payout, Tx) {
   Gated(name: "pay", guard: fn(_, _) { Ok([]) }, execute: fn(tx, released) {
     let payout: Payout = decisions.output(released)
     Ok(world.push(
@@ -51,7 +51,7 @@ pub fn pay() -> Gated(Payout, Memory) {
   })
 }
 
-pub fn desk_of(point: Point(Payout), policy: Policy) -> Desk(Payout, Memory) {
+pub fn desk_of(point: Point(Payout), policy: Policy) -> Desk(Payout, Tx) {
   decisions.desk(
     point,
     drives: fn(_) { pay() },
@@ -60,7 +60,7 @@ pub fn desk_of(point: Point(Payout), policy: Policy) -> Desk(Payout, Memory) {
   )
 }
 
-pub fn desk(policy: Policy) -> Desk(Payout, Memory) {
+pub fn desk(policy: Policy) -> Desk(Payout, Tx) {
   desk_of(point(), policy)
 }
 

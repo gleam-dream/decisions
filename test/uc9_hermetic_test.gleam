@@ -26,8 +26,8 @@ const standing = "REGULAR desde 2024"
 /// The government portal. It counts every call, and can be taken down.
 fn portal(w: World) -> fn(String, String) -> Result(String, String) {
   fn(name, argument) {
-    world.bump(w.outside, "portal.calls")
-    case name, argument, memory.get(w.outside, "portal.down") {
+    world.commit(w.outside, world.bump(_, "portal.calls"))
+    case name, argument, world.commit(w.outside, memory.get(_, "portal.down")) {
       _, _, Ok(_) -> Error("no network")
       "tax_standing", number, _ if number == cnpj -> Ok(standing)
       _, _, _ -> Error("the portal has no " <> name <> " for " <> argument)
@@ -40,7 +40,7 @@ fn platform(w: World) -> fn(Ref) -> Result(String, String) {
   fn(ref: Ref) {
     case ref.kind {
       "message" -> Ok("Emite a nota de 800 para a Clínica X.")
-      _ -> memory.evidence().get(w.db, ref)
+      _ -> world.commit(w.db, memory.evidence().get(_, ref))
     }
   }
 }
@@ -117,7 +117,7 @@ pub fn every_input_is_recorded_and_the_occurrence_replays_without_a_network_test
     world.reads(w)(recommended.recommendation.explanation)
   assert argument == cnpj
   assert recommended.recommendation.reads == [evidence]
-  assert memory.evidence().get(w.db, evidence) == Ok(standing)
+  assert world.commit(w.db, memory.evidence().get(_, evidence)) == Ok(standing)
   assert world.count(w.outside, "portal.calls") == 1
 
   // Felipe opens the card and expands the company's representations.
@@ -206,7 +206,7 @@ pub fn every_input_is_recorded_and_the_occurrence_replays_without_a_network_test
     == Error(learning.NotYetRecommended)
 
   // Replay with no network: the portal now fails on any call.
-  memory.put(w.outside, "portal.down", "yes")
+  world.commit(w.outside, memory.put(_, "portal.down", "yes"))
   let same = fn(a: Invoice, b: Invoice) { a == b }
   let answered = learning.replay([late], accounting(cnpj), same:)
   assert answered.unanswered == []
