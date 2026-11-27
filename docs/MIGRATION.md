@@ -100,7 +100,7 @@ let limits = value.default_limits() |> value.with_max_depth(512)
 codec.decode_json_with_limits(view.codec(output), text, limits)
 ```
 
-`view.verdict` and `wire.parse` decode with `gleam/json` and are unchanged.
+`view.verdict` and `wire.parse` now read through json_blueprint too; see below.
 
 ### A policy's default asks a person, and an unknown condition asks it
 
@@ -172,6 +172,39 @@ decisions.point("billing.payment", codec)
 - `decisions.facts_of(point, output)` is replaced by
   `decisions.policy_facts(point, recommendation, informed:)`, which reads each
   fact from its declared source only.
+
+### A client's verdict is read strictly, and outputs stay exact
+
+`view.verdict` and `wire.parse` read a client's text through json_blueprint
+within `value.default_limits()`: more than 1 MiB or 128 levels is refused, a
+key given twice is refused, and numbers are exact. In 0.1 they used
+`gleam/json`, which kept one of two repeated keys and rounded a correction such
+as `12345678901234567.89` to a float.
+
+An output is also stored exactly. A recommendation, a verdict or an assessment
+is written as a json_blueprint `Value`, so a point whose codec uses exact
+numbers keeps them through the store and the release.
+
+```gleam
+// Before (0.1)
+let assert Ok(verdict) = view.verdict(text, codec)   // Error: json.DecodeError
+let assert Ok(body) = view.verdict_to_json(verdict, codec)
+json.to_string(body)
+
+// After (0.2)
+let assert Ok(verdict) = view.verdict(text, codec)   // Error: codec.DecodeError
+let assert Ok(text) = view.verdict_to_json(verdict, codec)
+```
+
+- `view.verdict` and `wire.parse` return json_blueprint's `codec.DecodeError`.
+- `view.verdict_to_json` and `learning.example_to_json` return JSON text.
+- `wire.encode`, `wire.recommendation`, `wire.verdict` and `wire.assessment`
+  return a json_blueprint `Value`; write it with `value.to_string`.
+- `wire.decoder`, `wire.verdict_decoder`, `wire.recommendation_decoder` and
+  `wire.assessment_decoder` are removed. Read a `Value` with `wire.decode`,
+  `wire.decode_verdict`, `wire.decode_recommendation` and
+  `wire.decode_assessment`, or use `wire.verdict_codec` with json_blueprint.
+- Records stored by 0.1 decode unchanged.
 
 ## decisions_otp 0.2.0
 

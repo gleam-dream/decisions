@@ -10,7 +10,6 @@ import decisions/vocabulary.{
   type Manifest, type Ref, Agent, Assessment, Correct, Manifest, ParentRun,
   Reason, Recommendation, Ref, RunAction, Trigger, Wrong,
 }
-import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -199,7 +198,6 @@ pub fn every_input_is_recorded_and_the_occurrence_replays_without_a_network_test
   assert occurrence.assessments(early.known) == []
   assert list.length(occurrence.assessments(late.known)) == 1
   let assert Ok(document) = learning.example_to_json(late, invoice.codec())
-  let document = json.to_string(document)
   assert string.contains(document, "decision-example.v1")
   assert string.contains(document, standing)
 
