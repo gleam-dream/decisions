@@ -3,11 +3,10 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-> **Breaking:** decisions_postgres 0.3.0 requires decisions 0.2, Sinal 0.2 and
-> Grind 0.3, whose schema version 15 must be applied first. A verb runs only in a
-> transaction the package opens on a `Pool` and its `Tx` is opaque, a lock
-> timeout is a `LockTimeout`, and the port's clock can fail. See the
-> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#decisions_postgres-030).
+> **Breaking:** decisions_postgres 0.4.0 requires decisions 0.3, whose bundle
+> items, tool answers and showing rule changed. It adds `head` and
+> `with_settlement`, and no migration. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#migrating-to-decisions-03).
 
 The PostgreSQL store for [`decisions`](https://github.com/gleam-dream/decisions/blob/main/README.md): the storage port over
 the application's own transactions, the migrations that create its tables, the
@@ -24,8 +23,8 @@ The `pog` and `pgo` ranges must equal Grind's.
 
 ```toml
 [dependencies]
-decisions = ">= 0.2.0 and < 0.3.0"
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.3.0", path = "integrations/decisions_postgres" }
+decisions = ">= 0.3.0 and < 0.4.0"
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.4.0", path = "integrations/decisions_postgres" }
 grind = ">= 0.3.0 and < 0.4.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
@@ -216,6 +215,14 @@ An application's own worker settles its abandoned jobs the same way with
 Its `settle` receives Grind's settlement transaction as a `Tx`, so a verb
 such as `decisions.report`, the application's own writes, a follow-up
 `grind.submit_in` and Grind's decision commit together, or none of them does.
+
+## Upgrading to 0.4.0
+
+- Take decisions 0.3 (`decisions = ">= 0.3.0 and < 0.4.0"`) and follow its
+  part of the migration guide.
+- No migration: a database at this package's migration 2 is current.
+- Read a head outside a verb with `head(db, occurrence:)`, not the test-only
+  `inspection().head`.
 
 ## Upgrading to 0.3.0
 

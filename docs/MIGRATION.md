@@ -1,7 +1,25 @@
-# Migrating to the next release
+# Migrating to decisions 0.3
 
-These changes are on `main` and not released yet. They break the API of the
-released `decisions` 0.2.0, so the next core release is 0.3.0.
+decisions 0.3.0, decisions_otp 0.3.0 and decisions_postgres 0.4.0 are
+breaking releases. The core's API changes as the sections below describe. The
+integrations expose the core's types, so each accepts only core 0.3, and each
+adds a committed `head` read; decisions_postgres adds `with_settlement`.
+
+| Package              | From  | To    | What changes for the application                                                                       |
+| -------------------- | ----- | ----- | ------------------------------------------------------------------------------------------------------ |
+| `decisions`          | 0.2.0 | 0.3.0 | a bundle item is a `vocabulary.Item`; a tool can answer `Contended`; `decisions.showing` is public     |
+| `decisions_otp`      | 0.2.0 | 0.3.0 | accepts core 0.3; `store.head` reads a committed head without a lock                                   |
+| `decisions_postgres` | 0.3.0 | 0.4.0 | accepts core 0.3; `head` reads a committed head without a lock; `with_settlement` runs verbs in Grind's settlement transaction |
+
+```toml
+[dependencies]
+decisions = ">= 0.3.0 and < 0.4.0"
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.3.0", path = "integrations/decisions_otp" }
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.4.0", path = "integrations/decisions_postgres" }
+```
+
+decisions_postgres 0.4.0 adds no migration: a database at this package's
+migration 2 is current.
 
 ## decisions
 
