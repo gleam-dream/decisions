@@ -143,7 +143,10 @@ verdict completes the acceptance and one of them refuses, the verb fails with
 `ToolRefused`, your transaction rolls back, and the occurrence still waits;
 `record_refusal` keeps the refused verdict on the record in a second
 transaction. `Unsure` records nothing as refused: the verb fails with
-`ToolUnsure`, and you try again.
+`ToolUnsure`, and you try again. `Contended` says a lock the tool took waited
+too long, or a verb it ran was contended: nothing was written, and the verb
+fails with `StoreFailed(Contended)`, safe to send again at once. A tool that
+runs a verb of another desk answers its refusal with `decisions.stop_for`.
 
 Every verb loads and locks the occurrence, reads the store clock, checks, and
 appends. A verb that returns an error has written nothing you may keep: roll

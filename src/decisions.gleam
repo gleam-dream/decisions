@@ -820,6 +820,24 @@ pub fn disposition(refusal: Refusal) -> Disposition {
   }
 }
 
+/// What a guard, a release check or an executor answers when a verb it
+/// ran refused, or a store call of its own failed (pass
+/// `StoreFailed(error)`), so the refusal keeps its meaning through the
+/// verb that runs the tool:
+///
+/// | Refusal | Stop |
+/// | --- | --- |
+/// | `StoreFailed(Contended)` | `Contended`: nothing was written; the outer verb fails as contention |
+/// | any other `Transient` or `Retry` refusal | `Unsure`: the outer verb fails with `ToolUnsure` |
+/// | a `Poisoned` or `Final` refusal | `Refuse` |
+pub fn stop_for(refusal: Refusal) -> Stop {
+  case refusal, disposition(refusal) {
+    StoreFailed(store.Contended(detail:)), _ -> vocabulary.Contended(detail:)
+    _, Transient | _, Retry -> Unsure(describe(refusal))
+    _, Poisoned | _, Final -> Refuse(describe(refusal))
+  }
+}
+
 /// The reason category that requires a note: the validator knows
 /// something the card does not show and must say what.
 pub const missing_context = "missing_context"
@@ -2958,6 +2976,8 @@ fn release(
         Ok(relied), _ ->
           Ok(add(draft, entry.Released(key:, tool: tool.name, relied:)))
         Error(Unsure(reason:)), _ -> Error(ToolUnsure(reason:))
+        Error(vocabulary.Contended(detail:)), _ ->
+          Error(StoreFailed(store.Contended(detail:)))
         Error(Refuse(reason:)), Some(#(validator, seen, verdict)) -> {
           use encoded <- result.try(
             wire.verdict(verdict, desk.point.output)

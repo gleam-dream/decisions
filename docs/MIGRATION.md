@@ -34,6 +34,44 @@ Where item names come from data, build the `Item` where the data enters and
 refuse a name `item` refuses there. An application that escaped slashes in its
 item names no longer needs to.
 
+### A tool can say it was contended
+
+`vocabulary.Stop` has a third case, `Contended(detail)`: the guard, the release
+check or the executor wrote nothing and may be sent again at once, because a
+lock of its own waited too long or a verb it ran was contended. The verb fails
+with `StoreFailed(store.Contended(detail))`, which a runtime delivers again
+uncounted and `decisions_postgres` reports as `Contended`. In 0.2 a tool could
+only answer `Unsure`, so the verb failed with `ToolUnsure`, counted toward
+setting the job aside, and was described as a tool that could not tell.
+
+`decisions.stop_for(refusal)` maps a nested verb's refusal, or a store error of
+the tool's own (`StoreFailed(error)`), to a `Stop`: contention stays
+`Contended`, another `Transient` or `Retry` refusal is `Unsure`, and a
+`Poisoned` or `Final` one is `Refuse`.
+
+```gleam
+// Before (0.2)
+decisions.inform(payouts, tx, occurrence: id, from: "risk", facts:)
+|> result.map_error(fn(refusal) {
+  case decisions.disposition(refusal) {
+    decisions.Transient | decisions.Retry ->
+      vocabulary.Unsure(decisions.describe(refusal))
+    decisions.Poisoned | decisions.Final ->
+      vocabulary.Refuse(decisions.describe(refusal))
+  }
+})
+store.lock(tx, "party:" <> id)
+|> result.map_error(fn(error) { vocabulary.Unsure(store.describe(error)) })
+
+// After
+decisions.inform(payouts, tx, occurrence: id, from: "risk", facts:)
+|> result.map_error(decisions.stop_for)
+store.lock(tx, "party:" <> id)
+|> result.map_error(fn(error) { decisions.stop_for(decisions.StoreFailed(error)) })
+```
+
+A `case` over `Stop` adds the `Contended` branch.
+
 # Migrating to decisions 0.2
 
 decisions 0.2.0, decisions_otp 0.2.0 and decisions_postgres 0.3.0 are breaking
