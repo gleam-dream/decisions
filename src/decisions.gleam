@@ -1695,8 +1695,11 @@ pub fn ticket(card: Card(o)) -> Ticket {
 /// A verdict is not a showing. Once a validator decides a card, the
 /// verdict follows their showing, so `showing` returns `None` for them,
 /// and `open` then refuses the card: `AlreadyDecided(by:)` when their
-/// verdict settled the occurrence, `NotEligible` when it still awaits
-/// other approvers. `None` alone does not mean that `open` would succeed.
+/// verdict settled the occurrence, `NotEligible` while they approve the
+/// output that stands and it awaits other approvers. After another
+/// validator corrects the output, they decide again on the new output,
+/// and `open` records a new showing for them. `None` alone does not mean
+/// that `open` would succeed or fail.
 pub fn showing(
   occurrence current: Occurrence(o),
   by validator: Validator,
