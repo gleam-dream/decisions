@@ -268,6 +268,28 @@ policy.new(
 ```
 
 - A policy that would consult the same point twice now asks `otherwise`.
+- A rule over a fact that is only sometimes present, such as a consulted
+  point's answer, which exists only after the consult, stops the reading when
+  the fact is absent. Guard it with `known` inside an `All`: a condition in
+  `All` that fails makes the whole `All` fail rather than unknown, so the rule
+  is skipped and the policy reads on.
+
+  ```gleam
+  // Before (0.1): an absent risk answer did not match, and later rules applied.
+  When(policy.is(risk_level, "high"), Ask(AnyoneHolding("head")))
+
+  // After (0.2): without the guard, an absent risk answer asks `otherwise`.
+  When(
+    All([policy.known(risk_level), policy.is(risk_level, "high")]),
+    Ask(AnyoneHolding("head")),
+  )
+  ```
+
+- `policy.waited(minutes)` reads `fact.waited_minutes`, which only
+  `policy.timeline` supplies. `policy.evaluate` has no waited time, so a
+  condition over it is unknown there and the policy asks `otherwise`. A test or
+  a tool that reads a policy with an escalation step reads it through
+  `policy.timeline(policy, by, facts, waited: minutes)`, as the desk does.
 - `policy.Fault` keeps `UndeclaredFact` and `WrongKind`, which `publishable`
   and `inform` report. `TooFewApprovals`, `SampleOutOfRange`, `NestedSeveral`,
   `EmptyEither` and `NonPositiveHold` move to `policy.Malformed`, described by
@@ -370,6 +392,37 @@ decisions.recommend_bundle(desk, tx, bundle: "report-7",
   `vocabulary.MalformedBundle` (carried by `Malformed` from
   `recommend_bundle`), and `RepeatedItem` names the item.
 - `bundle_lock_prefix` is reserved, as `subject_lock_prefix` is.
+
+A member's id changes form. In 0.1 the application chose each member's key, in
+any form (`report-8:summary`); in 0.2 it is `member_key(bundle, item)`, the
+bundle's key, a slash and the item (`report-8/summary`). The library derives
+it, so the application stores the bundle and the item, not the id.
+
+- A member recorded by 0.1 keeps its old id. A trigger admitted under 0.1 and
+  delivered again under 0.2 is admitted under the new key, as a second
+  occurrence of the same item: `recommend_member` looks for the member under
+  `member_key(bundle, item)`, and in PostgreSQL a head written before the
+  package's migration 2 carries no bundle, so `members` does not count the old
+  member either. Let every bundle that 0.1 admitted settle, and its triggers
+  stop being redelivered, before 0.2 admits members.
+- Code that parsed a member's id, or built it by hand, calls
+  `decisions.member_key` instead.
+
+### What an application may read
+
+An occurrence id is opaque, except that a bundle member's id is
+`member_key(bundle, item)`. The inspection (`decisions/memory.inspection`,
+`decisions_otp/store.inspection`, `decisions_postgres.inspection`) is for
+`decisions/conformance` and `decisions/testing`: an application does not route
+cards, list occurrences or check whether one still waits through it, and its
+shape may change with the conformance suite. Read through a verb
+(`decisions.read`, `read_record`), or through the reads each store offers
+outside a verb: `decisions_otp/store`'s queues, pages, `entries` and `heads`,
+and `decisions_postgres/queue`. To list every record of a point for an export,
+page through `decisions_postgres/queue.occurrences_of` (or
+`decisions_otp/store.occurrences_of`) and read each record in a short
+transaction of its own, rather than reading every record in one transaction,
+which holds each record's lock until the export ends.
 
 ### A tool answers `vocabulary.Stop`, and the port passes it back typed
 
