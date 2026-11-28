@@ -3,7 +3,7 @@
 
 import decisions
 import decisions/memory.{type Tx}
-import decisions/vocabulary.{type Manifest, type Ref, Manifest, Ref}
+import decisions/vocabulary.{type Manifest, type Ref, Approve, Manifest, Ref}
 import gleam/option.{None, Some}
 import gleam/result
 import support/reply
@@ -80,4 +80,18 @@ pub fn a_note_ends_the_showing_test() {
   assert showing(w, drafted.id, world.felipe) == None
   let assert Ok(new) = open(w, drafted.id, world.felipe)
   assert decisions.ticket(new) != decisions.ticket(card)
+}
+
+/// A verdict is not a showing: once the validator decides the card, there
+/// is no showing to return to them, and `open` refuses the card.
+pub fn a_verdict_ends_the_showing_test() {
+  let w = world.new()
+  let drafted = reply.draft(w, "m4", "run-4", context("m4"))
+  let assert Ok(card) = open(w, drafted.id, world.felipe)
+  let assert Ok(_) =
+    world.in_tx(w, decisions.decide(reply.desk(), _, card, Approve))
+  assert showing(w, drafted.id, world.felipe) == None
+  assert open(w, drafted.id, world.felipe)
+    |> result.replace(Nil)
+    == Error(decisions.AlreadyDecided(world.felipe.subject))
 }
