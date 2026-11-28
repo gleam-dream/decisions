@@ -105,6 +105,30 @@ back and tried again. Nothing changes for code that does not use it.
 })
 ```
 
+## decisions_otp and decisions_postgres
+
+### An application reads a committed head with `head`
+
+`decisions_otp/store.head(store, id)` and
+`decisions_postgres.head(pool, occurrence: id)` return the committed head of one
+record without a lock: where it stands, the sets it waits for, who may not
+decide it. The inspection (`store.inspection()`, `decisions_postgres.inspection()`)
+is for `decisions/conformance` and `decisions/testing`; do not route cards or
+check whether an occurrence waits through it.
+
+```gleam
+// Before: the test-only inspection, in a transaction.
+store.transaction(s, store.inspection().head(_, id))
+
+// After
+store.head(s, id)
+decisions_postgres.head(pool, occurrence: id)
+```
+
+A head may be out of date a moment after it is read. No verb takes one: a verb
+loads and locks the record itself, so a card opened on a stale head is refused
+(`NotAwaiting`, `AlreadyDecided`) rather than decided.
+
 # Migrating to decisions 0.2
 
 decisions 0.2.0, decisions_otp 0.2.0 and decisions_postgres 0.3.0 are breaking
