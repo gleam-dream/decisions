@@ -26,7 +26,9 @@
 ////
 //// `Inspection` is not part of the port. It is what an adapter supplies so
 //// that `decisions/conformance` and `decisions/testing` can look at what it
-//// stored.
+//// stored. An application reads where an occurrence stands through its
+//// adapter's committed reads instead: `decisions_otp/store.head` and
+//// `heads`, `decisions_postgres.head` and `decisions_postgres/queue`.
 ////
 //// Target-independent: builds for Erlang and JavaScript.
 

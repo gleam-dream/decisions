@@ -652,6 +652,34 @@ fn atomically(
   }
 }
 
+// -- Reading a head --------------------------------------------------------------------
+
+/// The committed head of a record, `None` when there is none: where it
+/// stands, the sets whose queues it waits in, who may not decide it. One
+/// statement on the pool that takes no lock, so a transaction holding the
+/// occurrence does not delay it, and what it returns may be out of date a
+/// moment later. A verb reads the record again under its lock, and no verb
+/// takes a head, so a decision is never made on what this returned.
+pub fn head(
+  db: Pool,
+  occurrence id: String,
+) -> Result(Option(Head), StoreError) {
+  head_in(sql.pool_connection(db), id)
+}
+
+fn head_in(
+  connection: pog.Connection,
+  id: String,
+) -> Result(Option(Head), StoreError) {
+  pog.query(
+    "SELECT " <> head_columns <> " FROM decisions_occurrences WHERE id = $1",
+  )
+  |> pog.parameter(pog.text(id))
+  |> pog.returning(head_decoder())
+  |> sql.run(connection)
+  |> result.map(fn(rows) { list.first(rows) |> option.from_result })
+}
+
 // -- Inspection ------------------------------------------------------------------------
 
 /// What `decisions/conformance` and `decisions/testing` read, in a
@@ -665,15 +693,7 @@ pub fn inspection() -> Inspection(Tx) {
       |> pog.returning(decode.at([0], decode.string))
       |> sql.run(tx.connection)
     },
-    head: fn(tx: Tx, id) {
-      pog.query(
-        "SELECT " <> head_columns <> " FROM decisions_occurrences WHERE id = $1",
-      )
-      |> pog.parameter(pog.text(id))
-      |> pog.returning(head_decoder())
-      |> sql.run(tx.connection)
-      |> result.map(fn(rows) { list.first(rows) |> option.from_result })
-    },
+    head: fn(tx: Tx, id) { head_in(tx.connection, id) },
     wakes: fn(tx: Tx) {
       pog.query(
         "SELECT point, occurrence_id, decisions_ms(at) FROM decisions_wakes

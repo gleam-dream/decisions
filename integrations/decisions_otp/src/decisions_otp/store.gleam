@@ -956,6 +956,21 @@ pub fn entries(store: Store, id: String) -> List(Stored) {
   reading(store, fn(store, open) { entries_in(store, open, id) })
 }
 
+/// The committed head of a record, `None` when there is none: where it
+/// stands, the sets whose queues it waits in, who may not decide it. It
+/// takes no lock and waits for none, so a transaction holding the
+/// occurrence does not delay it, and what it returns may be out of date a
+/// moment later. A verb reads the record again under its lock, and no verb
+/// takes a head, so a decision is never made on what this returned.
+pub fn head(store: Store, id: String) -> Option(Head) {
+  reading(store, fn(store, open) {
+    case rows.read(store.tables.rows, open.buffer, HeadKey(id, 0)) {
+      Ok(HeadRow(head:, ..)) -> Some(head)
+      _ -> None
+    }
+  })
+}
+
 /// Every committed record's head, by id.
 pub fn heads(store: Store) -> List(#(String, Head)) {
   reading(store, heads_in)
