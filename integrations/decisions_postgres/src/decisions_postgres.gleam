@@ -281,9 +281,10 @@ pub fn pool(name: process.Name(pog.Message)) -> Pool {
   sql.pool(name)
 }
 
-/// The connection of a transaction this package opened: the transaction
-/// value of the port. Only the transaction helpers and the workers make
-/// one.
+/// The connection of a transaction this package opened, or Grind's
+/// settlement transaction (`with_settlement`): the transaction value of
+/// the port. Only the transaction helpers, the workers and
+/// `with_settlement` make one.
 pub opaque type Tx {
   Tx(connection: pog.Connection)
 }
@@ -2057,6 +2058,44 @@ fn given_up(job: Abandoned(input)) -> String {
 /// point and its occurrence.
 pub type NoticeJob {
   NoticeJob(notice: Int, point: String, occurrence: String)
+}
+
+/// `worker.with_settlement` for a worker of the application's whose
+/// settlement runs verbs. Grind settles a job that an abandoned attempt
+/// left `uncertain` in a transaction of its own; `settle` receives that
+/// transaction as a `Tx`, so a verb (`decisions.report`, say), the
+/// application's own writes on `connection(tx)`, a `grind.submit_in` and
+/// Grind's decision commit together, or none of them does:
+///
+/// ```gleam
+/// worker.new("payout.pay", input:, output:, perform: pay)
+/// |> worker.with_abandonment(worker.ReplayAfterLeaseExpiry(max_replays: 3))
+/// |> decisions_postgres.with_settlement(fn(tx, job) {
+///   decisions.report(desk, tx, occurrence: abandoned.input(job),
+///     effect: Uncertain("the pay attempt was abandoned"))
+///   |> result.map_error(decisions.describe)
+///   |> result.replace(worker.ConfirmFailure("abandoned"))
+/// })
+/// ```
+///
+/// Grind's rules for `settle` hold: short writes only, never a commit or a
+/// rollback, and it may run again after it returned, keeping none of its
+/// earlier writes. An `Error` rolls everything back and Grind tries again
+/// later; return a verb's refusal as its description. The transaction
+/// already holds the job's row when `settle` starts, and a verb then
+/// locks the occurrence, so do not resolve the same job
+/// (`admin.resolve_uncertain_in`) from a transaction that locked the
+/// occurrence first; the database would end one of the two as a deadlock.
+/// The verb sets the transaction's lock timeout, as in every transaction
+/// of this package.
+pub fn with_settlement(
+  worker: worker.Worker(input, output, error),
+  settle: fn(Tx, Abandoned(input)) ->
+    Result(worker.Settlement(output, error), String),
+) -> worker.Worker(input, output, error) {
+  worker.with_settlement(worker, fn(transaction, job) {
+    settle(Tx(transaction), job)
+  })
 }
 
 /// What follows a point's settlements: given the transaction and the
