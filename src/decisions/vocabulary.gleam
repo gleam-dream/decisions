@@ -250,4 +250,11 @@ pub type Stop {
   /// the verb fails with `ToolUnsure`, so the caller or the runtime tries
   /// again later (counted toward setting the job aside).
   Unsure(reason: String)
+  /// It wrote nothing and may be sent again at once: a lock of its own
+  /// waited too long or deadlocked, or a verb it ran was contended
+  /// (`decisions.stop_for` says so of a verb's refusal). Its savepoint
+  /// rolls back, nothing is recorded, and the verb fails with
+  /// `StoreFailed(store.Contended(detail))`: delivered again soon, not
+  /// counted.
+  Contended(detail: String)
 }
