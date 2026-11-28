@@ -1674,7 +1674,7 @@ fn killed_in_savepoint(target: Target(tx), _load: Load) -> Result(Nil, String) {
     })
     |> store_text
     |> result.try(fn(inner) {
-      result.replace(inner, Nil) |> result.map_error(fn(stop) { stop.reason })
+      result.replace(inner, Nil) |> result.map_error(stop_text)
     })
   })
 }
@@ -3271,7 +3271,7 @@ fn bundles(target: Target(tx), load: Load) -> Result(Nil, String) {
         bundle:,
         items: list.map(numbers(1, size), fn(n) {
           #(
-            int.to_string(n),
+            item(int.to_string(n)),
             stress_proposal(member(bundle, n), "line " <> int.to_string(n)),
           )
         }),
@@ -3420,4 +3420,17 @@ fn well_formed(
 ) -> Policy {
   let assert Ok(made) = policy.new(version:, rules:, otherwise:)
   made
+}
+
+/// A bundle item from a name the test knows holds no slash.
+fn item(name: String) -> vocabulary.Item {
+  let assert Ok(item) = vocabulary.item(name:)
+  item
+}
+
+fn stop_text(stop: vocabulary.Stop) -> String {
+  case stop {
+    vocabulary.Refuse(reason:) | vocabulary.Unsure(reason:) -> reason
+    vocabulary.Contended(detail:) -> detail
+  }
 }

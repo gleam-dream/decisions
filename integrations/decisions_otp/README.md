@@ -3,11 +3,9 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-> **Breaking:** decisions_otp 0.2.0 requires decisions 0.2 and Sinal 0.2, which
-> detaches a handler when the process that attached it exits. A verb on the store
-> runs only in `store.transaction` and its `Tx` is opaque, occurrence ids are
-> UUIDs, a lock timeout is a `LockTimeout`, and `isolated.model` takes a heap
-> limit. See the [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#decisions_otp-020).
+> **Breaking:** decisions_otp 0.3.0 requires decisions 0.3, whose bundle items,
+> tool answers and showing rule changed, and adds `store.head`. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#migrating-to-decisions-03).
 
 The BEAM around [`decisions`](https://github.com/gleam-dream/decisions/blob/main/README.md): everything that needs
 processes, and nothing that keeps the truth. The record stays in the store.
@@ -20,8 +18,8 @@ killed at any instant and its replacement carries on.
 
 ```toml
 [dependencies]
-decisions = ">= 0.2.0 and < 0.3.0"
-decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.2.0", path = "integrations/decisions_otp" }
+decisions = ">= 0.3.0 and < 0.4.0"
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.3.0", path = "integrations/decisions_otp" }
 ```
 
 | Module                    | What it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |

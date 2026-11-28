@@ -103,7 +103,7 @@ pub fn each_bundle_starts_exactly_one_payout_test() {
           _,
           bundle:,
           items: list.map(kit.int_range(size), fn(n) {
-            #("l" <> int.to_string(n), kit.proposal(items.name, kit.ana))
+            #(item("l" <> int.to_string(n)), kit.proposal(items.name, kit.ana))
           }),
         ))
       list.map(admitted, fn(known) { known.id })
@@ -271,4 +271,10 @@ pub fn members_reads_a_bundle_in_id_order_across_points_test() {
 fn bundle_of(key: String, size: Int) -> vocabulary.Bundle {
   let assert Ok(made) = vocabulary.bundle(key:, size:)
   made
+}
+
+/// A bundle item from a name the test knows holds no slash.
+fn item(name: String) -> vocabulary.Item {
+  let assert Ok(item) = vocabulary.item(name:)
+  item
 }

@@ -45,7 +45,7 @@ pub fn concurrent_admissions_never_exceed_the_size_test() {
           desk,
           tx,
           of: report(),
-          item: "a",
+          item: item("a"),
           proposal: member("a"),
         ))
         process.send(holding, gate)
@@ -64,14 +64,14 @@ pub fn concurrent_admissions_never_exceed_the_size_test() {
           desk,
           tx,
           of: report(),
-          item: "b",
+          item: item("b"),
           proposal: member("b"),
         ))
         use _ <- result.try(decisions.recommend_member(
           desk,
           tx,
           of: report(),
-          item: "c",
+          item: item("c"),
           proposal: member("c"),
         ))
         Ok(Nil)
@@ -96,4 +96,10 @@ fn list_length(items: List(a)) -> Int {
     [] -> 0
     [_, ..rest] -> 1 + list_length(rest)
   }
+}
+
+/// A bundle item from a name the test knows holds no slash.
+fn item(name: String) -> vocabulary.Item {
+  let assert Ok(item) = vocabulary.item(name:)
+  item
 }

@@ -3,9 +3,10 @@
 [![CI](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/decisions/actions/workflows/ci.yml)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-> **Breaking:** decisions 0.2.0 requires json_blueprint 3, decisions_otp 0.2.0
-> requires Sinal 0.2, and decisions_postgres 0.3.0 requires Sinal 0.2 and Grind 0.3. See the
-> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md).
+> **Breaking:** decisions 0.3.0 makes a bundle item a `vocabulary.Item`, lets a
+> tool answer `Contended`, and makes `decisions.showing` public. decisions_otp
+> 0.3.0 and decisions_postgres 0.4.0 accept only core 0.3. See the
+> [migration guide](https://github.com/gleam-dream/decisions/blob/main/docs/MIGRATION.md#migrating-to-decisions-03).
 
 Decisions keeps the record of a **decision point** in Gleam: a place in your
 system where a model recommends an output, a policy either proceeds or asks a
@@ -77,19 +78,19 @@ application code.
 
 `decisions` is published on Hex. The two integrations are not: take them from
 this repository by Git tag, one tag per package and version
-(`decisions_otp-v0.2.0`, `decisions_postgres-v0.3.0`). They may be published on
+(`decisions_otp-v0.3.0`, `decisions_postgres-v0.4.0`). They may be published on
 Hex later.
 
 ```toml
 [dependencies]
-decisions = ">= 0.2.0 and < 0.3.0"
+decisions = ">= 0.3.0 and < 0.4.0"
 
 # Processes: the in-memory store, the supervised runtime, isolated model calls.
-decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.2.0", path = "integrations/decisions_otp" }
+decisions_otp = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_otp-v0.3.0", path = "integrations/decisions_otp" }
 
 # PostgreSQL: the storage port, migrations, Grind workers and queue queries.
 # pog and pgo must match Grind's ranges exactly.
-decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.3.0", path = "integrations/decisions_postgres" }
+decisions_postgres = { git = "https://github.com/gleam-dream/decisions.git", ref = "decisions_postgres-v0.4.0", path = "integrations/decisions_postgres" }
 grind = ">= 0.3.0 and < 0.4.0"
 pog = ">= 4.1.0 and < 4.2.0"
 pgo = ">= 0.20.0 and < 0.21.0"
