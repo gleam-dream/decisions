@@ -72,6 +72,26 @@ store.lock(tx, "party:" <> id)
 
 A `case` over `Stop` adds the `Contended` branch.
 
+### The "same showing again" rule is a function
+
+`decisions.showing(occurrence, by: validator, latest:)` returns the ticket of
+the validator's latest showing while `open` would return that showing again,
+and `None` when `open` would record a new one: when another entry than a
+showing was recorded after it, or an input drifted to another revision. `open`
+applies this function, so the answer is the one `open` gives. It is new, so no
+call changes; an application that restated the rule to decide whether a card it
+would present is the showing already recorded calls it instead.
+
+```gleam
+// Before: the application's own copy of the rule
+let unchanged = my_unchanged_showing(current, validator, latest)
+
+// After
+let unchanged = decisions.showing(current, by: validator, latest:)
+// Some(ticket): `open` returns that showing again and records nothing.
+// None: `open` records a new showing.
+```
+
 ## decisions_postgres
 
 ### A worker's settlement can run verbs in Grind's transaction
