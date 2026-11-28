@@ -211,6 +211,12 @@ new job to a row whose job is held uncertain with no settlement to come (left
 for a person). `Swept.left_uncertain` lists those Grind jobs; resolve each in
 Grind with any decision, since a replay finds its row taken.
 
+An application's own worker settles its abandoned jobs the same way with
+`decisions_postgres.with_settlement`, in place of `worker.with_settlement`.
+Its `settle` receives Grind's settlement transaction as a `Tx`, so a verb
+such as `decisions.report`, the application's own writes, a follow-up
+`grind.submit_in` and Grind's decision commit together, or none of them does.
+
 ## Upgrading to 0.3.0
 
 - Take decisions 0.2 (`decisions = ">= 0.2.0 and < 0.3.0"`).

@@ -72,6 +72,39 @@ store.lock(tx, "party:" <> id)
 
 A `case` over `Stop` adds the `Contended` branch.
 
+## decisions_postgres
+
+### A worker's settlement can run verbs in Grind's transaction
+
+`decisions_postgres.with_settlement(worker, settle)` is
+`worker.with_settlement` for an application's worker whose settlement runs
+verbs: `settle` receives Grind's settlement transaction as a `Tx`. In 0.3 a
+`Tx` could only be opened on the pool, so such a settlement ran its verbs in a
+second transaction, which committed even when Grind rolled its own decision
+back and tried again. Nothing changes for code that does not use it.
+
+```gleam
+// Before (0.3): two transactions.
+|> worker.with_settlement(fn(_transaction, job) {
+  use _ <- result.try(
+    decisions_postgres.transaction(pool, decisions.report(desk, _,
+      occurrence: abandoned.input(job), effect: Uncertain("abandoned")))
+    |> result.map_error(decisions_postgres.describe),
+  )
+  Ok(worker.ConfirmFailure("abandoned"))
+})
+
+// After: one.
+|> decisions_postgres.with_settlement(fn(tx, job) {
+  use _ <- result.try(
+    decisions.report(desk, tx,
+      occurrence: abandoned.input(job), effect: Uncertain("abandoned"))
+    |> result.map_error(decisions.describe),
+  )
+  Ok(worker.ConfirmFailure("abandoned"))
+})
+```
+
 # Migrating to decisions 0.2
 
 decisions 0.2.0, decisions_otp 0.2.0 and decisions_postgres 0.3.0 are breaking

@@ -148,6 +148,30 @@ pub fn run(
   ensure(fn() { body(env) }, fn() { stop(env) })
 }
 
+/// `run` with workers of the test's own: `configure` adds them to the
+/// Grind configuration before the runtime starts.
+pub fn run_configured(
+  name: process.Name(grind.Message),
+  store: Store,
+  options: Options,
+  configure: fn(grind.Config) -> grind.Config,
+  body: fn(Env) -> a,
+) -> a {
+  let env =
+    start_in(
+      name,
+      store,
+      pool_config(options.pool_size),
+      options,
+      [],
+      [],
+      None,
+      None,
+      configure,
+    )
+  ensure(fn() { body(env) }, fn() { stop(env) })
+}
+
 /// `run` without the cleanup, in a Grind schema that may be reused, for a
 /// restart.
 pub fn start(
@@ -167,6 +191,7 @@ pub fn start(
     followers,
     schema,
     None,
+    fn(config) { config },
   )
 }
 
@@ -183,7 +208,17 @@ pub fn start_with(
   let config =
     pool_config(options.pool_size)
     |> pog.connection_parameter("search_path", tables)
-  start_in(name, store, config, options, wakers, followers, None, Some(tables))
+  start_in(
+    name,
+    store,
+    config,
+    options,
+    wakers,
+    followers,
+    None,
+    Some(tables),
+    fn(config) { config },
+  )
 }
 
 fn start_in(
@@ -195,6 +230,7 @@ fn start_in(
   followers: List(Follower),
   schema: Option(String),
   tables: Option(String),
+  configure: fn(grind.Config) -> grind.Config,
 ) -> Env {
   quiet_pool_shutdown()
   let schema = option.unwrap(schema, "grind_" <> int.to_string(unique()))
@@ -226,6 +262,7 @@ fn start_in(
     )
     |> grind.with_startup_migration
     |> grind.without_pruner
+    |> configure
   let configured = case options.consumers {
     True -> configured
     False -> grind.without_consumers(configured)
