@@ -1076,10 +1076,9 @@ fn desk_bundle(adapter: Adapter(tx)) -> Result(Nil, String) {
   let #(desk, name) = conformance_desk(adapter, ask(), None, None)
   let bia = Validator("bia", ["finance"])
   let key = fresh_id(adapter, "bundle")
-  let items = [
-    #("1", proposal(name)),
-    #("2", proposal(name)),
-  ]
+  let assert Ok(one) = vocabulary.item(name: "1")
+  let assert Ok(two) = vocabulary.item(name: "2")
+  let items = [#(one, proposal(name)), #(two, proposal(name))]
   let admit = fn() {
     within(adapter, fn(tx) {
       decisions.recommend_bundle(desk, tx, bundle: key, items:)

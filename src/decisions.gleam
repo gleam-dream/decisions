@@ -84,7 +84,7 @@ import decisions/occurrence.{type Attempt, type Decider, type Occurrence}
 import decisions/policy.{type Eligible, type Fault, type Policy, type Sample}
 import decisions/store.{type Port, type StoreError}
 import decisions/vocabulary.{
-  type Assessment, type Bundle, type Effect, type Fact, type Facts,
+  type Assessment, type Bundle, type Effect, type Fact, type Facts, type Item,
   type Manifest, type Parent, type Recommendation, type Ref, type Stop,
   type Subject, type Trigger, type Validator, type Verdict, type Verdicts,
   Approve, ApproveOrReject, Correct, Person, Ref, Refuse, Reject, Superseded,
@@ -983,8 +983,9 @@ fn admit_once(
 /// every occurrence it already made and writes nothing. The occurrences
 /// come back in the order of `items`.
 ///
-/// Each item names its member, and the member's key is
-/// `member_key(bundle, item)`. An empty key or empty `items` is refused
+/// Each item names its member (`vocabulary.item`, which refuses an empty
+/// name or a slash), and the member's key is `member_key(bundle, item)`.
+/// An empty key or empty `items` is refused
 /// with `BadBundle(Malformed(..))`, and an item given twice with
 /// `BadBundle(RepeatedItem(item))`, before anything is written. For a
 /// bundle that spans several points, call `recommend_member` at each
@@ -993,9 +994,9 @@ pub fn recommend_bundle(
   desk: Desk(o, tx),
   tx: tx,
   bundle key: String,
-  items items: List(#(String, Proposal(o))),
+  items items: List(#(Item, Proposal(o))),
 ) -> Result(List(Occurrence(o)), Refusal) {
-  let names = list.map(items, fn(item) { item.0 })
+  let names = list.map(items, fn(item) { vocabulary.item_name(item.0) })
   let repeated =
     list.find(names, fn(item) { list.count(names, fn(n) { n == item }) > 1 })
   case vocabulary.bundle(key:, size: list.length(items)), repeated {
@@ -1032,7 +1033,7 @@ pub fn recommend_member(
   desk: Desk(o, tx),
   tx: tx,
   of bundle: Bundle,
-  item item: String,
+  item item: Item,
   proposal proposal: Proposal(o),
 ) -> Result(Occurrence(o), Refusal) {
   use Nil <- result.try(lock_bundle(desk, tx, bundle))
@@ -1041,8 +1042,10 @@ pub fn recommend_member(
 
 /// The key of the member `item` of `bundle`: the bundle's key, a slash and
 /// the item, such as `"report-7/l1"`. It is the member's occurrence id.
-pub fn member_key(bundle: Bundle, item: String) -> String {
-  vocabulary.bundle_key(bundle) <> "/" <> item
+/// An item holds no slash, so two members of different bundles never
+/// share a key: the key's last slash ends the bundle's key.
+pub fn member_key(bundle: Bundle, item: Item) -> String {
+  vocabulary.bundle_key(bundle) <> "/" <> vocabulary.item_name(item)
 }
 
 /// The prefix of every bundle lock id (`bundle_lock`). It is reserved: do

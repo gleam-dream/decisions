@@ -1,3 +1,39 @@
+# Migrating to the next release
+
+These changes are on `main` and not released yet. They break the API of the
+released `decisions` 0.2.0, so the next core release is 0.3.0.
+
+## decisions
+
+### A bundle item holds no slash
+
+A bundle member's item is a `vocabulary.Item`, built with
+`vocabulary.item(name:)`, which refuses an empty name (`NoItemName`) and a name
+with a slash (`SlashInItem`). In 0.2 an item was free text, so bundle `a` with
+item `b/c` and bundle `a/b` with item `c` named the same key, `a/b/c`, and the
+second was refused as `BadBundle(KeyOutsideBundle)`, `Poisoned`. Member ids keep
+their form: the bundle's key, a slash and the item.
+
+```gleam
+// Before (0.2)
+decisions.recommend_member(desk, tx, of: bundle, item: "l1", proposal:)
+decisions.recommend_bundle(desk, tx, bundle: "report-7",
+  items: [#("l1", line_1), #("l2", line_2)])
+decisions.member_key(bundle, "l1")
+
+// After
+let assert Ok(l1) = vocabulary.item(name: "l1")
+let assert Ok(l2) = vocabulary.item(name: "l2")
+decisions.recommend_member(desk, tx, of: bundle, item: l1, proposal:)
+decisions.recommend_bundle(desk, tx, bundle: "report-7",
+  items: [#(l1, line_1), #(l2, line_2)])
+decisions.member_key(bundle, l1)
+```
+
+Where item names come from data, build the `Item` where the data enters and
+refuse a name `item` refuses there. An application that escaped slashes in its
+item names no longer needs to.
+
 # Migrating to decisions 0.2
 
 decisions 0.2.0, decisions_otp 0.2.0 and decisions_postgres 0.3.0 are breaking
