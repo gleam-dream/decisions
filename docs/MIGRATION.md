@@ -427,6 +427,10 @@ it, so the application stores the bundle and the item, not the id.
   stop being redelivered, before 0.2 admits members.
 - Code that parsed a member's id, or built it by hand, calls
   `decisions.member_key` instead.
+- A member's id holds a slash and every character of the bundle's key, so it
+  is not safe as one segment of a URL path. An application that puts an
+  occurrence id in a path encodes it (`uri.percent_encode` from `gleam/uri`)
+  and decodes it before it looks the occurrence up.
 
 ### What an application may read
 

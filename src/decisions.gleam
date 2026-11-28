@@ -1062,6 +1062,11 @@ pub fn recommend_member(
 /// the item, such as `"report-7/l1"`. It is the member's occurrence id.
 /// An item holds no slash, so two members of different bundles never
 /// share a key: the key's last slash ends the bundle's key.
+///
+/// The key keeps that slash and every character of the bundle's key, so
+/// it is not safe as one segment of a URL path. Encode it there, for one
+/// with `uri.percent_encode` from `gleam/uri`, and decode it before you
+/// look the occurrence up.
 pub fn member_key(bundle: Bundle, item: Item) -> String {
   vocabulary.bundle_key(bundle) <> "/" <> vocabulary.item_name(item)
 }
@@ -1686,6 +1691,12 @@ pub fn ticket(card: Card(o)) -> Ticket {
 /// a lock can be out of date. A ticket from it is checked under the lock
 /// by `resume` (`NeverShown`, `OutputChanged`, `NotAwaiting`). It says
 /// nothing about whether `open` would admit the validator.
+///
+/// A verdict is not a showing. Once a validator decides a card, the
+/// verdict follows their showing, so `showing` returns `None` for them,
+/// and `open` then refuses the card: `AlreadyDecided(by:)` when their
+/// verdict settled the occurrence, `NotEligible` when it still awaits
+/// other approvers. `None` alone does not mean that `open` would succeed.
 pub fn showing(
   occurrence current: Occurrence(o),
   by validator: Validator,
