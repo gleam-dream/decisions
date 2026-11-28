@@ -798,7 +798,8 @@ its own. Name the bundle they belong to and how many it holds:
 `decisions.recommend_bundle` does that for the items of one point, and
 `decisions.recommend_member` admits one member of a bundle that spans
 points. A member's key is the bundle's key, a slash and its item, so a
-member delivered again is found. Admission holds the bundle's lock, so
+member delivered again is found. An item (`vocabulary.item`) holds no slash,
+so members of two bundles never share a key. Admission holds the bundle's lock, so
 members admitted by concurrent transactions never exceed its size.
 
 What follows the bundle, such as one payout of the approved lines, belongs
@@ -908,7 +909,10 @@ pub fn admit(
     _,
     bundle: report,
     items: list.index_map(amounts, fn(amount, n) {
-      #("line-" <> int.to_string(n + 1), proposal(report, amount))
+      // An item names a member within its bundle and holds no slash.
+      let assert Ok(line) =
+        vocabulary.item(name: "line-" <> int.to_string(n + 1))
+      #(line, proposal(report, amount))
     }),
   ))
   |> result.map(list.map(_, fn(line) { line.id }))

@@ -16,6 +16,7 @@
 //// Target-independent: builds for Erlang and JavaScript.
 
 import gleam/option.{type Option}
+import gleam/string
 import gleam/time/timestamp.{type Timestamp}
 
 /// A reference to immutable data. `id` names the thing and `revision`
@@ -91,6 +92,38 @@ pub fn bundle_key(bundle: Bundle) -> String {
 /// How many occurrences the bundle holds.
 pub fn bundle_size(bundle: Bundle) -> Int {
   bundle.size
+}
+
+/// The name of one member of a bundle, such as `"l1"`. A member's key is
+/// its bundle's key, a slash and the item (`decisions.member_key`), so an
+/// item never holds a slash: bundle `a` with item `b/c` and bundle `a/b`
+/// with item `c` would otherwise name one key. Build it with `item`.
+pub opaque type Item {
+  Item(name: String)
+}
+
+/// Why `item` refuses a name.
+pub type MalformedItem {
+  /// The item's name is empty.
+  NoItemName
+  /// The item's name holds a slash, which separates it from its bundle's
+  /// key.
+  SlashInItem
+}
+
+/// The item named `name`; refused when the name is empty or holds a
+/// slash.
+pub fn item(name name: String) -> Result(Item, MalformedItem) {
+  case name, string.contains(name, "/") {
+    "", _ -> Error(NoItemName)
+    _, True -> Error(SlashInItem)
+    _, False -> Ok(Item(name:))
+  }
+}
+
+/// The item's name.
+pub fn item_name(item: Item) -> String {
+  item.name
 }
 
 /// What recommended. Agreement and accuracy are counted per value of this

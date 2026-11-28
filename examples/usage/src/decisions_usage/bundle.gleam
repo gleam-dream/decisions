@@ -91,7 +91,10 @@ pub fn admit(
     _,
     bundle: report,
     items: list.index_map(amounts, fn(amount, n) {
-      #("line-" <> int.to_string(n + 1), proposal(report, amount))
+      // An item names a member within its bundle and holds no slash.
+      let assert Ok(line) =
+        vocabulary.item(name: "line-" <> int.to_string(n + 1))
+      #(line, proposal(report, amount))
     }),
   ))
   |> result.map(list.map(_, fn(line) { line.id }))

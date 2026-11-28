@@ -77,6 +77,11 @@ fn bundle(key: String, size: Int) -> Bundle {
   made
 }
 
+fn named(name: String) -> vocabulary.Item {
+  let assert Ok(item) = vocabulary.item(name:)
+  item
+}
+
 fn tool(table: String) -> decisions.Gated(String, Tx) {
   Gated(name: table, guard: fn(_, _) { Ok([]) }, execute: fn(tx, released) {
     Ok(world.push(tx, table, decisions.output(released)))
@@ -104,9 +109,9 @@ fn admit_lines(w: World) -> List(String) {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "report-7", items: [
-        #("l1", proposal("l1: 30.00")),
-        #("l2", proposal("l2: 1200.00")),
-        #("l3", proposal("l3: 80.00")),
+        #(named("l1"), proposal("l1: 30.00")),
+        #(named("l2"), proposal("l2: 1200.00")),
+        #(named("l3"), proposal("l3: 80.00")),
       ]),
     )
   list.map(lines, fn(line) { line.id })
@@ -209,14 +214,14 @@ pub fn a_bundle_may_span_points_test() {
         line_desk(),
         tx,
         of: report,
-        item: "l1",
+        item: named("l1"),
         proposal: proposal("l1: 10.00"),
       ))
       decisions.recommend_member(
         receipt_desk(),
         tx,
         of: report,
-        item: "receipt",
+        item: named("receipt"),
         proposal: proposal("receipt"),
       )
     })
@@ -248,7 +253,7 @@ pub fn a_bundle_admitted_in_pieces_is_not_complete_until_all_arrive_test() {
         receipt_desk(),
         _,
         of: report,
-        item:,
+        item: named(item),
         proposal: proposal(item),
       ))
     Nil
@@ -273,7 +278,7 @@ pub fn a_bundle_that_contradicts_itself_is_refused_test() {
       receipt_desk(),
       _,
       of: bundle("r10", size),
-      item:,
+      item: named(item),
       proposal: proposal(item),
     ))
     |> result.map(fn(known) { known.id })
@@ -298,13 +303,13 @@ pub fn a_bundle_that_contradicts_itself_is_refused_test() {
 pub fn a_member_key_is_scoped_by_its_bundle_test() {
   let w = world.new()
   let report = bundle("r15", 2)
-  assert decisions.member_key(report, "a") == "r15/a"
+  assert decisions.member_key(report, named("a")) == "r15/a"
   let admit = fn() {
     world.in_tx(w, decisions.recommend_member(
       receipt_desk(),
       _,
       of: report,
-      item: "a",
+      item: named("a"),
       proposal: proposal("a"),
     ))
     |> result.map(fn(known) { known.id })
@@ -364,7 +369,7 @@ pub fn the_invariant_checker_catches_a_bundle_that_disagrees_test() {
         desk,
         _,
         of: bundle("r11", size),
-        item:,
+        item: named(item),
         proposal: proposal(item),
       ))
     Nil
@@ -390,8 +395,8 @@ pub fn an_item_key_given_twice_is_refused_test() {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "r12", items: [
-        #("a", proposal("a")),
-        #("a", proposal("a again")),
+        #(named("a"), proposal("a")),
+        #(named("a"), proposal("a again")),
       ]),
     )
   assert admitted
@@ -415,8 +420,8 @@ pub fn a_key_outside_the_bundle_is_refused_test() {
     world.in_tx(
       w,
       decisions.recommend_bundle(line_desk(), _, bundle: "r13", items: [
-        #("a", proposal("a")),
-        #("b", proposal("b")),
+        #(named("a"), proposal("a")),
+        #(named("b"), proposal("b")),
       ]),
     )
   assert admitted
@@ -430,7 +435,7 @@ pub fn a_key_outside_the_bundle_is_refused_test() {
       line_desk(),
       _,
       of: bundle("report-7", 4),
-      item: "l1",
+      item: named("l1"),
       proposal: proposal("l1"),
     ))
   assert again
@@ -461,7 +466,7 @@ pub fn a_key_that_ended_before_it_was_recommended_is_refused_test() {
       receipt_desk(),
       _,
       of: bundle("r14", 1),
-      item: "a",
+      item: named("a"),
       proposal: proposal("late"),
     ))
   assert late
@@ -499,4 +504,25 @@ pub fn i9_reports_a_head_it_cannot_read_test() {
   assert list.any(violations, fn(v) {
     v.invariant == "I9" && v.occurrence == "report-7/l2"
   })
+}
+
+/// Two members of two different bundles never share a key: an item holds
+/// no slash, so bundle `a` with item `b/c`, which would name the key of
+/// bundle `a/b` with item `c`, cannot be built.
+pub fn members_of_different_bundles_never_share_a_key_test() {
+  let w = world.new()
+  assert vocabulary.item(name: "b/c") == Error(vocabulary.SlashInItem)
+  assert vocabulary.item(name: "") == Error(vocabulary.NoItemName)
+  let admit = fn(key, item) {
+    world.in_tx(w, decisions.recommend_member(
+      receipt_desk(),
+      _,
+      of: bundle(key, 1),
+      item: named(item),
+      proposal: proposal(item),
+    ))
+    |> result.map(fn(known) { known.id })
+  }
+  assert admit("a/b", "c") == Ok("a/b/c")
+  assert admit("a", "b") == Ok("a/b")
 }
