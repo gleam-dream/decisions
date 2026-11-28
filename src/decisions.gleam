@@ -1651,14 +1651,13 @@ pub fn open(
   use Nil <- result.try(live(draft))
   use Nil <- result.try(may_look(desk, current, validator))
   let allowed = desk.point.verdicts
-  let drift = drifted(current, latest)
-  case is_showing(current), unchanged_showing(current, validator, drift) {
-    False, _ -> Error(nothing_to_do(current))
-    // Shown before, and nothing but other showings recorded since: the
-    // same showing, so the record does not grow with every view.
-    True, Some(seen) ->
+  use Nil <- result.try(check(is_showing(current), nothing_to_do(current)))
+  case showing(current, by: validator, latest:) {
+    // The same showing, so the record does not grow with every view.
+    Some(Ticket(seen:, ..)) ->
       Ok(Card(occurrence: current, validator:, seen:, allowed:))
-    True, None -> {
+    None -> {
+      let drift = drifted(current, latest)
       let draft =
         add(draft, entry.Opened(by: validator.subject, drifted: drift))
       let seen = list.length(draft.occurrence.entries)
@@ -1671,6 +1670,52 @@ pub fn open(
 /// The card's ticket.
 pub fn ticket(card: Card(o)) -> Ticket {
   Ticket(occurrence: card.occurrence.id, seen: card.seen)
+}
+
+/// The validator's showing that `open` returns again instead of recording
+/// a new one, or `None` when `open` would record a new showing.
+///
+/// The rule: the validator's latest showing is the same showing while
+/// nothing but showings (to anyone) was recorded after it, and every
+/// input (a context reference or one of the model's reads) drifted to the
+/// same `latest` revision it drifted to then. Any other entry after it, or
+/// a change in drift, makes the next `open` a new showing. `open` applies
+/// this function, so the answer is the one it gives.
+///
+/// It reads only the occurrence it is given, so an occurrence read without
+/// a lock can be out of date. A ticket from it is checked under the lock
+/// by `resume` (`NeverShown`, `OutputChanged`, `NotAwaiting`). It says
+/// nothing about whether `open` would admit the validator.
+pub fn showing(
+  occurrence current: Occurrence(o),
+  by validator: Validator,
+  latest latest: fn(Ref) -> String,
+) -> Option(Ticket) {
+  let drift = drifted(current, latest)
+  let shown =
+    list.filter_map(current.entries, fn(entry) {
+      case entry.event {
+        entry.Opened(by:, drifted:) if by == validator.subject ->
+          Ok(#(entry.seq, drifted))
+        _ -> Error(Nil)
+      }
+    })
+    |> list.last
+  case shown {
+    Ok(#(seen, recorded)) if recorded == drift ->
+      case
+        list.all(current.entries, fn(entry) {
+          case entry.event {
+            entry.Opened(..) -> True
+            _ -> entry.seq <= seen
+          }
+        })
+      {
+        True -> Some(Ticket(occurrence: current.id, seen:))
+        False -> None
+      }
+    _ -> None
+  }
 }
 
 /// The card again, in a later request, from its ticket. It is the same
@@ -1862,39 +1907,6 @@ fn may_look(
 /// occurrence has passed, whether or not its wake-up was delivered.
 fn live(draft: Draft(o)) -> Result(Nil, Refusal) {
   check(!occurrence.has_lapsed(draft.occurrence, draft.now), NotAwaiting)
-}
-
-/// The validator's latest showing, when it showed the same drift and
-/// nothing but showings was recorded after it.
-fn unchanged_showing(
-  current: Occurrence(o),
-  validator: Validator,
-  drift: List(Ref),
-) -> Option(Int) {
-  let shown =
-    list.filter_map(current.entries, fn(entry) {
-      case entry.event {
-        entry.Opened(by:, drifted:) if by == validator.subject ->
-          Ok(#(entry.seq, drifted))
-        _ -> Error(Nil)
-      }
-    })
-    |> list.last
-  case shown {
-    Ok(#(seen, recorded)) if recorded == drift ->
-      case
-        list.all(current.entries, fn(entry) {
-          case entry.event {
-            entry.Opened(..) -> True
-            _ -> entry.seq <= seen
-          }
-        })
-      {
-        True -> Some(seen)
-        False -> None
-      }
-    _ -> None
-  }
 }
 
 /// A showing of the occurrence to this validator is recorded at `seen`.
